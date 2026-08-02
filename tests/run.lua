@@ -290,6 +290,10 @@ local function run()
   })
   assert(contains(collapsed.lines, "▸ Touches  2"), "collapsed sections should remain visible")
   assert(not contains(collapsed.lines, "  → Read"), "collapsed section rows should be hidden")
+  assert(
+    not contains(collapsed.lines, "… 2 more"),
+    "collapsed sections should not expose a misleading expansion row"
+  )
 
   local ast_grep = require("archlens.ast_grep")
   local decoded, omitted = ast_grep._decode_matches(vim.json.encode({
@@ -349,6 +353,36 @@ local function run()
   assert_equal(vim.bo[session.buffer].buftype, "nofile", "the view should use a scratch buffer")
   assert_equal(vim.bo[session.buffer].modifiable, false, "the rendered view should be read-only")
   assert(session.window ~= source_window, "the view should open in a separate window")
+  local expand_line
+  for line, target in pairs(session.rendered.targets) do
+    if target.action == "expand" then
+      expand_line = line
+      break
+    end
+  end
+  assert(expand_line, "a bounded section should render an expansion action")
+  vim.api.nvim_win_set_cursor(session.window, { expand_line, 0 })
+  local space_mapping
+  for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(session.buffer, "n")) do
+    if mapping.lhs == " " then
+      space_mapping = mapping
+      break
+    end
+  end
+  assert(space_mapping and space_mapping.callback, "the section mapping should be callable")
+  space_mapping.callback()
+  assert_equal(session.expanded.outgoing, true, "activating the more row should expand its section")
+  assert_equal(
+    session.collapsed.outgoing,
+    false,
+    "activating the more row should not collapse its section"
+  )
+  assert(
+    not contains(session.rendered.lines, "… 1 more"),
+    "an expanded section should render all remaining rows"
+  )
+  session.expanded.outgoing = nil
+  view.render(session, mapped, { width = 56, max_items = 1 })
   local selected_line
   for line, target in pairs(session.rendered.targets) do
     if target.row and target.row.id == mapped.sections[1].rows[1].id then

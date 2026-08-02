@@ -77,14 +77,19 @@ local function configure_buffer(session, actions)
   vim.bo[buffer].modifiable = false
   vim.bo[buffer].filetype = "archlens"
 
+  local function expand_section(section_id)
+    session.expanded[section_id] = true
+    session.collapsed[section_id] = false
+    M.render(session, session.model, session.options)
+  end
+
   map(buffer, "<CR>", function()
     local target = target_at_cursor(session)
     if not target then
       return
     end
     if target.action == "expand" then
-      session.expanded[target.section_id] = true
-      M.render(session, session.model, session.options)
+      expand_section(target.section_id)
     elseif target.action == "toggle" then
       session.collapsed[target.section_id] = not session.collapsed[target.section_id]
       M.render(session, session.model, session.options)
@@ -105,7 +110,9 @@ local function configure_buffer(session, actions)
   map(buffer, "q", actions.close, "ArchLens close")
   local function toggle_section()
     local target = target_at_cursor(session)
-    if target and target.section_id then
+    if target and target.action == "expand" then
+      expand_section(target.section_id)
+    elseif target and target.action == "toggle" then
       session.collapsed[target.section_id] = not session.collapsed[target.section_id]
       M.render(session, session.model, session.options)
     end

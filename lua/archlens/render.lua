@@ -134,7 +134,7 @@ function M.build(model, opts)
         add(string.format("    %s", badge), nil, "Comment")
       end
     end
-    if limit < #section.rows then
+    if not is_collapsed and limit < #section.rows then
       add(
         string.format("  … %d more", #section.rows - limit),
         { action = "expand", section_id = section.id },

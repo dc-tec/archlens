@@ -63,7 +63,7 @@ local function run()
         {
           id = 3,
           name = "example-lsp",
-          methods = { "document symbols", "project references" },
+          methods = { "document symbols", "implementations", "project references" },
           errors = {},
         },
       },
@@ -71,6 +71,7 @@ local function run()
     ast_grep = {
       command = "ast-grep",
       path = "/tools/ast-grep",
+      supported = true,
       available = true,
       version = "ast-grep 0.40.0",
     },
@@ -78,7 +79,11 @@ local function run()
   diagnostic(section(healthy, "ArchLens runtime"), "ok", "Neovim 0.12.4")
   diagnostic(section(healthy, "ArchLens context"), "ok", "Project root: /workspace")
   diagnostic(section(healthy, "ArchLens Tree-sitter"), "ok", "parser is available")
-  diagnostic(section(healthy, "ArchLens LSP"), "ok", "document symbols, project references")
+  diagnostic(
+    section(healthy, "ArchLens LSP"),
+    "ok",
+    "document symbols, implementations, project references"
+  )
   diagnostic(section(healthy, "ArchLens ast-grep"), "ok", "ast-grep 0.40.0")
 
   local degraded = health._diagnose({
@@ -114,6 +119,27 @@ local function run()
     "info",
     "disabled by the ArchLens configuration"
   )
+
+  local unsupported = health._diagnose({
+    version = { major = 0, minor = 12, patch = 4 },
+    buffer = {
+      valid = true,
+      bufnr = 4,
+      name = "/workspace/main.ml",
+      filetype = "ocaml",
+      root = "/workspace",
+      marker_root = true,
+    },
+    treesitter = { parser = true, adapter = true },
+    lsp = { clients = {} },
+    ast_grep = {
+      command = "ast-grep",
+      enabled = true,
+      supported = false,
+      note = "ast-grep has no OCaml parser; semantic references remain available.",
+    },
+  })
+  diagnostic(section(unsupported, "ArchLens ast-grep"), "info", "no OCaml parser")
 
   local invalid = health._diagnose({
     version = { major = 0, minor = 12, patch = 4 },

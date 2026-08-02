@@ -1,24 +1,16 @@
+local adapters = require("archlens.adapters")
 local treesitter = require("archlens.treesitter")
 
 local M = {}
 
 local minimum_version = { major = 0, minor = 12 }
 
-local project_markers = {
-  ".git",
-  "flake.nix",
-  "go.mod",
-  "Cargo.toml",
-  "dune-project",
-  "package.json",
-  "pyproject.toml",
-}
-
 local lsp_methods = {
   { method = "textDocument/documentSymbol", label = "document symbols" },
   { method = "textDocument/prepareCallHierarchy", label = "call hierarchy preparation" },
   { method = "callHierarchy/incomingCalls", label = "incoming calls" },
   { method = "callHierarchy/outgoingCalls", label = "outgoing calls" },
+  { method = "textDocument/implementation", label = "implementations" },
   { method = "textDocument/references", label = "project references" },
 }
 
@@ -72,7 +64,7 @@ local function inspect_buffer(bufnr)
   local marker_root
   local root
   if name ~= "" then
-    marker_root = vim.fs.root(name, project_markers)
+    marker_root = vim.fs.root(name, adapters.root_markers(filetype))
     root = marker_root or vim.fs.dirname(name)
   end
 
@@ -144,13 +136,23 @@ local function first_line(text)
   return text ~= "" and text:match("[^\r\n]+") or nil
 end
 
-local function inspect_ast_grep(command, enabled)
+local function inspect_ast_grep(command, enabled, filetype)
   command = command or "ast-grep"
   if enabled == false then
     return { command = command, enabled = false }
   end
+  local adapter = filetype and adapters.for_filetype(filetype) or nil
+  local provider = adapter and adapter.ast_grep or nil
+  if not provider or not provider.language then
+    return {
+      command = command,
+      enabled = true,
+      supported = false,
+      note = provider and provider.unsupported_note or nil,
+    }
+  end
   if vim.fn.executable(command) ~= 1 then
-    return { command = command, enabled = true, available = false }
+    return { command = command, enabled = true, supported = true, available = false }
   end
 
   local path = vim.fn.exepath(command)
@@ -207,7 +209,7 @@ local function inspect()
     buffer = buffer,
     treesitter = inspect_treesitter(bufnr, buffer),
     lsp = inspect_lsp(bufnr, buffer),
-    ast_grep = inspect_ast_grep(ast_grep.command, ast_grep.enabled),
+    ast_grep = inspect_ast_grep(ast_grep.command, ast_grep.enabled, buffer.filetype),
   }
 end
 
@@ -337,6 +339,11 @@ function M._diagnose(state)
   local ast_state = state.ast_grep or { command = "ast-grep", available = false }
   if ast_state.enabled == false then
     ast.items[#ast.items + 1] = item("info", "ast-grep is disabled by the ArchLens configuration.")
+  elseif ast_state.supported == false then
+    ast.items[#ast.items + 1] = item(
+      ast_state.note and "info" or "warn",
+      ast_state.note or "No ArchLens ast-grep adapter is available for the source buffer."
+    )
   elseif not ast_state.available then
     ast.items[#ast.items + 1] = item(
       "warn",

@@ -1,25 +1,11 @@
+local adapters = require("archlens.adapters")
+
 local M = {}
 
 M.default_globs = {
   "!vendor/**",
   "!node_modules/**",
   "!target/**",
-}
-
-local language_map = {
-  go = "go",
-  javascript = "javascript",
-  lua = "lua",
-  nix = "nix",
-  python = "python",
-  rust = "rust",
-  tsx = "tsx",
-  typescript = "typescript",
-}
-
-local unsupported_notes = {
-  ocaml = "ast-grep has no OCaml parser; semantic references and Tree-sitter context remain available.",
-  ocaml_interface = "ast-grep has no OCaml parser; semantic references and Tree-sitter context remain available.",
 }
 
 local function empty(note)
@@ -80,13 +66,7 @@ local function decode_matches(stdout, root, maximum)
 end
 
 local function query_for(context, language)
-  if language ~= "go" then
-    return context.name, nil
-  end
-  if context.syntax_node_type == "method_declaration" then
-    return "var _ = $RECEIVER." .. context.name, "selector_expression"
-  end
-  return "func _() { " .. context.name .. "($$$ARGS) }", "call_expression"
+  return adapters.ast_grep_query(context, context.language or language)
 end
 
 local function command_args(command, context, language, root, options)
@@ -118,9 +98,11 @@ end
 
 function M.relationships(context, options, callback)
   options = options or {}
-  local language = language_map[context.language]
+  local adapter = adapters.get(context.language)
+  local provider = adapter and adapter.ast_grep
+  local language = provider and provider.language
   if not language then
-    callback(empty(unsupported_notes[context.language]))
+    callback(empty(provider and provider.unsupported_note))
     return function() end
   end
   if not usable_name(context.name, options.min_name_length) then

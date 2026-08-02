@@ -7,3 +7,5 @@ func helper() int {
 func Run() int {
 	return helper()
 }
+
+type Manager struct{}

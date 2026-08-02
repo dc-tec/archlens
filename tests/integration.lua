@@ -40,6 +40,15 @@ local cases = {
     sibling = "helper",
   },
   {
+    file = "main.go",
+    filetype = "go",
+    position = { line = 10, character = 0 },
+    name = "Manager",
+    selection_character = 5,
+    absent_child = "Manager",
+    file_fallback = true,
+  },
+  {
     file = "main.rs",
     filetype = "rust",
     position = { line = 3, character = 12 },
@@ -61,9 +70,33 @@ local contexts = {}
 for _, case in ipairs(cases) do
   vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/" .. case.file))
   vim.bo.filetype = case.filetype
-  local context = treesitter.resolve(0, case.position, nil)
+  local base_context
+  if case.file_fallback then
+    base_context = require("archlens.model").context_from_item({
+      name = case.file,
+      kind = vim.lsp.protocol.SymbolKind.File,
+      uri = vim.uri_from_bufnr(0),
+      range = { start = case.position, ["end"] = case.position },
+      selectionRange = { start = case.position, ["end"] = case.position },
+    }, {
+      id = 1,
+      name = "fixture-lsp",
+      offset_encoding = "utf-8",
+      root_dir = fixture_root,
+      supports_calls = false,
+    })
+    base_context.file_fallback = true
+  end
+  local context = treesitter.resolve(0, case.position, base_context)
   assert(context, case.file .. " did not resolve through Tree-sitter")
   assert_equal(context.name, case.name, case.file .. " resolved the wrong symbol")
+  if case.selection_character then
+    assert_equal(
+      context.location.range.start.character,
+      case.selection_character,
+      case.file .. " selected the declaration keyword instead of its identifier"
+    )
+  end
   if case.child then
     assert(contains(names(context.syntax.children), case.child), case.file .. " child is missing")
   end
@@ -77,6 +110,12 @@ for _, case in ipairs(cases) do
     assert(
       contains(names(context.syntax.ancestors), case.ancestor),
       case.file .. " ancestor is missing"
+    )
+  end
+  if case.absent_child then
+    assert(
+      not contains(names(context.syntax.children), case.absent_child),
+      case.file .. " contains the focused symbol as its own child"
     )
   end
   contexts[case.file] = context

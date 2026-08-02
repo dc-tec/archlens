@@ -88,6 +88,27 @@ pane reports omissions.
 still evolving; current options and defaults live in
 [`lua/archlens/init.lua`](lua/archlens/init.lua).
 
+## Language adapters
+
+[`lua/archlens/adapters.lua`](lua/archlens/adapters.lua) is the source of truth
+for language behavior. An adapter maps Neovim filetypes to a canonical language
+and can define Tree-sitter symbols and project markers, an ast-grep parser and
+query, or both.
+
+Additional adapters can be registered before ArchLens is used:
+
+```lua
+require("archlens.adapters").register("zig", {
+  treesitter = {
+    root_markers = { "build.zig", ".git" },
+    symbol_types = {
+      function_declaration = "Function",
+    },
+  },
+  ast_grep = { language = "zig" },
+})
+```
+
 ## Development
 
 Run the source tests with Neovim:

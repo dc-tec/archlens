@@ -83,6 +83,12 @@
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
                 -l ${./tests/run.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/progressive.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/health.lua}
               touch "$out"
             '';
 

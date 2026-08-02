@@ -17,6 +17,10 @@ structure, LSP adds semantic relationships, and ast-grep searches the project
 for related patterns. Results are assembled on demand without a separate
 project index.
 
+Local Tree-sitter structure is rendered immediately. LSP and ast-grep results
+are merged into the open pane as they arrive, while the pane identifies any
+providers that are still pending.
+
 Each source is optional. ArchLens shows the relationships it can find, labels
 their source, and reports missing or truncated results. It provides navigable
 context around the current symbol rather than an exhaustive project graph.
@@ -61,6 +65,9 @@ Commands:
 - `:ArchLensClose` closes it.
 
 ArchLens does not install a global key mapping.
+
+Run `:checkhealth archlens` from a source buffer to inspect the project root
+and available analysis providers.
 
 Inside the pane:
 

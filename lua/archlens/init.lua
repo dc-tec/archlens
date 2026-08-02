@@ -578,4 +578,8 @@ function M.setup(options)
   })
 end
 
+function M.get_config()
+  return vim.deepcopy(config)
+end
+
 return M

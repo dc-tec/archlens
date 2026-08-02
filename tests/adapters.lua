@@ -26,7 +26,88 @@ equal(adapters.get("go").treesitter.symbol_types, {
   type_declaration = "Type",
   type_spec = "Type",
 })
+local configuration_buffer = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(configuration_buffer, 0, -1, false, {
+  '    Enabled bool `json:"enabled"`',
+})
+local go_configuration = adapters.get("go").configuration
+local configuration_context = {
+  kind = vim.lsp.protocol.SymbolKind.Field,
+  name = "Enabled",
+  location = {
+    range = {
+      start = { line = 0, character = 4 },
+      ["end"] = { line = 0, character = 11 },
+    },
+  },
+}
+equal(go_configuration(configuration_buffer, configuration_context, { name = "TLSConfig" }), {
+  key = "Enabled",
+  container = "TLSConfig",
+  source = "field",
+})
+equal(
+  go_configuration(configuration_buffer, configuration_context, { name = "APIResponse" }),
+  nil,
+  "serialized fields outside configuration containers should stay ordinary symbols"
+)
+vim.api.nvim_buf_delete(configuration_buffer, { force = true })
+local rust_configuration_buffer = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(rust_configuration_buffer, "/workspace/src/config.rs")
+vim.api.nvim_buf_set_lines(rust_configuration_buffer, 0, -1, false, {
+  "#[derive(Deserialize)]",
+  "pub struct Config {",
+  "    pub token: String,",
+  "}",
+})
+local rust_configuration = adapters.get("rust").configuration
+local rust_field = {
+  kind = vim.lsp.protocol.SymbolKind.Field,
+  name = "token",
+  location = {
+    range = {
+      start = { line = 2, character = 8 },
+      ["end"] = { line = 2, character = 13 },
+    },
+  },
+}
+equal(
+  rust_configuration(rust_configuration_buffer, rust_field, {
+    name = "Config",
+    location = {
+      full_range = {
+        start = { line = 1, character = 0 },
+        ["end"] = { line = 3, character = 1 },
+      },
+    },
+  }),
+  {
+    key = "token",
+    container = "Config",
+    source = "field",
+  }
+)
+equal(
+  rust_configuration(rust_configuration_buffer, rust_field, { name = "Response" }),
+  nil,
+  "deserializable Rust fields still require a configuration container"
+)
+vim.api.nvim_buf_delete(rust_configuration_buffer, { force = true })
+local go_imports = adapters.imports_for_filetype("go")
+equal(go_imports.capture, "import")
+equal(go_imports.normalize(nil, '"internal/storage"'), {
+  name = "internal/storage",
+  position_offset = 1,
+})
+go_imports.capture = "mutated"
+equal(
+  adapters.imports_for_filetype("go").capture,
+  "import",
+  "import adapter reads should be defensive copies"
+)
+equal(adapters.imports_for_filetype("unknown"), nil)
 equal(adapters.get("rust").treesitter.symbol_types.impl_item, "Implementation")
+equal(adapters.get("rust").treesitter.symbol_types.field_declaration, "Field")
 equal(adapters.get("ocaml_interface").treesitter.symbol_types.value_specification, "Value")
 equal(adapters.get("nix").treesitter.root_markers, {
   ".git",

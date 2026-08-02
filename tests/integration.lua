@@ -1,6 +1,7 @@
 local fixture_root = assert(vim.env.ARCHLENS_FIXTURE_ROOT, "ARCHLENS_FIXTURE_ROOT is required")
 local ast_grep_command = assert(vim.env.ARCHLENS_AST_GREP, "ARCHLENS_AST_GREP is required")
 
+local test_paths = require("archlens.test_paths")
 local treesitter = require("archlens.treesitter")
 
 local function assert_equal(actual, expected, message)
@@ -119,6 +120,194 @@ for _, case in ipairs(cases) do
     )
   end
   contexts[case.file] = context
+end
+
+vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/main.go"))
+vim.bo.filetype = "go"
+local type_context = vim.deepcopy(contexts["main.go"])
+type_context.client_id = 7
+type_context.client_name = "gopls"
+type_context.supports_calls = false
+type_context.wire_type_item = { data = { opaque = "type-hierarchy-state" } }
+local merged_type_context = treesitter.resolve(0, { line = 10, character = 5 }, type_context)
+assert(
+  vim.deep_equal(merged_type_context.wire_type_item, type_context.wire_type_item),
+  "Tree-sitter enrichment should preserve opaque type hierarchy state"
+)
+local module_context = vim.deepcopy(type_context)
+module_context.module_context = true
+local merged_module_context = treesitter.resolve(0, { line = 10, character = 5 }, module_context)
+assert(
+  merged_module_context.module_context == true,
+  "Tree-sitter enrichment should preserve file-level module focus"
+)
+
+vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/configuration.go"))
+vim.bo.filetype = "go"
+local function field_context(line, container)
+  local range = {
+    start = { line = line, character = 4 },
+    ["end"] = { line = line, character = 11 },
+  }
+  return require("archlens.model").context_from_item({
+    name = "Enabled",
+    kind = vim.lsp.protocol.SymbolKind.Field,
+    uri = vim.uri_from_bufnr(0),
+    range = range,
+    selectionRange = range,
+  }, {
+    id = 8,
+    name = "gopls",
+    offset_encoding = "utf-8",
+    root_dir = fixture_root,
+    supports_calls = false,
+  }),
+    container
+end
+local configuration_context = treesitter.resolve(0, { line = 3, character = 5 }, field_context(3))
+assert(
+  vim.deep_equal(configuration_context.configuration, {
+    key = "Enabled",
+    container = "TLSConfig",
+    source = "field",
+  }),
+  "tagged fields in Go configuration containers should be classified"
+)
+local ordinary_field = treesitter.resolve(0, { line = 7, character = 5 }, field_context(7))
+assert(
+  ordinary_field.configuration == nil,
+  "serialized fields in ordinary response types should not be called configuration"
+)
+
+vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/configuration.rs"))
+vim.bo.filetype = "rust"
+local function rust_field_context(line)
+  local range = {
+    start = { line = line, character = 8 },
+    ["end"] = { line = line, character = 13 },
+  }
+  return require("archlens.model").context_from_item({
+    name = "token",
+    kind = vim.lsp.protocol.SymbolKind.Field,
+    uri = vim.uri_from_bufnr(0),
+    range = range,
+    selectionRange = range,
+  }, {
+    id = 9,
+    name = "rust-analyzer",
+    offset_encoding = "utf-8",
+    root_dir = fixture_root,
+    supports_calls = false,
+  })
+end
+local rust_configuration_context =
+  treesitter.resolve(0, { line = 4, character = 9 }, rust_field_context(4))
+assert(
+  vim.deep_equal(rust_configuration_context.configuration, {
+    key = "token",
+    container = "Config",
+    source = "field",
+  }),
+  "deserializable Rust configuration fields should be classified"
+)
+local rust_syntax_configuration = treesitter.resolve(0, { line = 4, character = 9 })
+assert(
+  rust_syntax_configuration.name == "token"
+    and rust_syntax_configuration.kind == vim.lsp.protocol.SymbolKind.Field
+    and vim.deep_equal(rust_syntax_configuration.configuration, {
+      key = "token",
+      container = "Config",
+      source = "field",
+    }),
+  "Tree-sitter should classify Rust configuration fields without LSP document symbols: "
+    .. vim.inspect(rust_syntax_configuration)
+)
+local rust_ordinary_field =
+  treesitter.resolve(0, { line = 9, character = 9 }, rust_field_context(9))
+assert(
+  rust_ordinary_field.configuration == nil,
+  "deserializable fields outside Rust configuration containers should remain ordinary"
+)
+
+local inline_tests_path = fixture_root .. "/inline_tests.rs"
+assert(
+  test_paths.is_test("rust", inline_tests_path, fixture_root, 6),
+  "references inside #[cfg(test)] modules should be classified as test relationships"
+)
+assert(
+  not test_paths.is_test("rust", inline_tests_path, fixture_root, 0),
+  "production lines in a file containing inline tests must remain production relationships"
+)
+
+for _, case in ipairs({
+  {
+    file = "imports.go",
+    filetype = "go",
+    expected = { "example.com/project/internal/service", "example.com/project/internal/generated" },
+  },
+  {
+    file = "imports.rs",
+    filetype = "rust",
+    expected = { "crate::worker" },
+    target = "worker.rs",
+  },
+  {
+    file = "imports.nix",
+    filetype = "nix",
+    expected = { "./module.nix", "./module2.nix" },
+    target = "module.nix",
+  },
+  {
+    file = "imports.ml",
+    filetype = "ocaml",
+    expected = { "Helper", "Shared" },
+    targets = { "helper.ml", "shared.ml" },
+  },
+  {
+    file = "nested_imports.rs",
+    filetype = "rust",
+    expected = { "crate::outer::child", "crate::renamed" },
+    targets = { "child.rs", "custom_module.rs" },
+  },
+  {
+    file = "lib/application/wrapped_import.ml",
+    filetype = "ocaml",
+    expected = { "Camlet_domain" },
+    target = "dune",
+    provider = "Tree-sitter+Dune",
+  },
+}) do
+  vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/" .. case.file))
+  vim.bo.filetype = case.filetype
+  local sites, err = treesitter.import_sites(0)
+  assert(not err, case.file .. " import extraction failed: " .. tostring(err))
+  assert(
+    vim.deep_equal(names(sites), case.expected),
+    case.file .. " returned unexpected imports: " .. vim.inspect(names(sites))
+  )
+  if case.target then
+    assert_equal(
+      vim.fs.basename(vim.uri_to_fname(sites[1].target_locations[1].uri)),
+      case.target,
+      case.file .. " did not resolve its static module target"
+    )
+  end
+  if case.targets then
+    local targets = vim.tbl_map(function(site)
+      return vim.fs.basename(vim.uri_to_fname(site.target_locations[1].uri))
+    end, sites)
+    assert(
+      vim.deep_equal(targets, case.targets),
+      case.file .. " did not resolve its static module targets: " .. vim.inspect(targets)
+    )
+  end
+  if case.provider then
+    assert_equal(
+      sites[1].resolution_provider,
+      case.provider,
+      case.file .. " returned the wrong static resolution evidence"
+    )
+  end
 end
 
 local completed = false

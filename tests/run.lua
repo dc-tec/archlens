@@ -123,17 +123,21 @@ local function run()
 
   local function add_location(snapshot, kind, location, fields, provider, edge_fields)
     local related = graph.node_from_location(location, fields)
-    local reverse = kind == "references" or kind == "structural"
+    local reverse = kind == "references"
+      or kind == "structural"
+      or kind == "test_references"
+      or kind == "test_structural"
+    local structural = kind == "structural" or kind == "test_structural"
     local source = reverse and related or snapshot.focus
     local target = reverse and snapshot.focus or related
     graph.add_edge(
       snapshot,
       graph.edge(kind, source, target, {
-        provider = provider or (kind == "structural" and "ast-grep" or "gopls"),
+        provider = provider or (structural and "ast-grep" or "gopls"),
         method = kind == "implementations" and "textDocument/implementation"
-          or kind == "references" and "textDocument/references"
+          or (kind == "references" or kind == "test_references") and "textDocument/references"
           or "structural",
-        class = kind == "structural" and "structural" or "semantic",
+        class = structural and "structural" or "semantic",
       }, edge_fields)
     )
   end
@@ -155,10 +159,122 @@ local function run()
     "hidden external calls should be explicit"
   )
 
+  local scoped_graph = graph.new(context)
+  add_outgoing(scoped_graph, "Vendored", "file:///workspace/vendor/example/client.go", 2)
+  add_outgoing(scoped_graph, "Generated", "file:///workspace/internal/zz_generated.client.go", 3)
+  add_outgoing(scoped_graph, "Excluded", "file:///workspace/internal/legacy/client.go", 4)
+  add_outgoing(scoped_graph, "Project", "file:///workspace/internal/client.go", 5)
+  local scoped = model.build(context, scoped_graph, {
+    filters = { exclude = { "internal/legacy" } },
+  })
+  assert_equal(#scoped.sections[1].rows, 1, "default scope filters should retain project source")
+  assert_equal(scoped.sections[1].rows[1].name, "Project")
+  assert(contains(scoped.notes, "1 vendored relationship hidden."))
+  assert(contains(scoped.notes, "1 generated relationship hidden."))
+  assert(contains(scoped.notes, "1 excluded relationship hidden."))
+
+  local included_scope = model.build(context, scoped_graph, {
+    filters = {
+      include_generated = true,
+      include_vendored = true,
+      exclude = { "internal/legacy" },
+    },
+  })
+  assert_equal(
+    #included_scope.sections[1].rows,
+    3,
+    "vendored and generated relationships should be recoverable through configuration"
+  )
+  assert(contains(included_scope.notes, "1 excluded relationship hidden."))
+
   local empty = model.build(context, graph.new(context), { include_external = false })
   assert(
     contains(empty.notes, "No local or project relationships were returned."),
     "an empty map should be explained"
+  )
+
+  local function type_node(name, line)
+    local item = {
+      name = name,
+      kind = vim.lsp.protocol.SymbolKind.Interface,
+      uri = context.location.uri,
+      range = {
+        start = { line = line, character = 0 },
+        ["end"] = { line = line + 1, character = 0 },
+      },
+      selectionRange = {
+        start = { line = line, character = 5 },
+        ["end"] = { line = line, character = 5 + #name },
+      },
+    }
+    local related_context = model.context_from_item(item, {
+      id = context.client_id,
+      name = context.client_name,
+      offset_encoding = "utf-8",
+      root_dir = context.root_dir,
+      supports_calls = false,
+    })
+    related_context.wire_type_item = item
+    return graph.node_from_context(related_context)
+  end
+
+  local hierarchy_graph = graph.new(context)
+  graph.add_edge(
+    hierarchy_graph,
+    graph.edge("supertypes", hierarchy_graph.focus, type_node("Base", 2), {
+      provider = "gopls",
+      method = "typeHierarchy/supertypes",
+      class = "semantic",
+    })
+  )
+  local derived_type = type_node("Derived", 24)
+  graph.add_edge(
+    hierarchy_graph,
+    graph.edge("subtypes", derived_type, hierarchy_graph.focus, {
+      provider = "gopls",
+      method = "typeHierarchy/subtypes",
+      class = "semantic",
+    })
+  )
+  add_location(hierarchy_graph, "implementations", vim.deepcopy(derived_type.location))
+  graph.add_edge(
+    hierarchy_graph,
+    graph.edge("supertypes", hierarchy_graph.focus, hierarchy_graph.focus, {
+      provider = "gopls",
+      method = "typeHierarchy/supertypes",
+      class = "semantic",
+    })
+  )
+  add_location(hierarchy_graph, "implementations", {
+    uri = context.location.uri,
+    range = {
+      start = { line = 28, character = 5 },
+      ["end"] = { line = 28, character = 12 },
+    },
+  })
+  local hierarchy_map = model.build(context, hierarchy_graph, { include_external = false })
+  assert_equal(
+    vim.tbl_map(function(section)
+      return section.id
+    end, hierarchy_map.sections),
+    { "supertypes", "subtypes", "implementations" },
+    "type hierarchy sections should stay adjacent ahead of implementations"
+  )
+  assert_equal(#hierarchy_map.sections[1].rows, 1, "self-referential supertypes should be hidden")
+  assert_equal(hierarchy_map.sections[1].rows[1].name, "Base")
+  assert_equal(hierarchy_map.sections[2].rows[1].name, "Derived")
+  assert_equal(
+    #hierarchy_map.sections[3].rows,
+    1,
+    "exact subtype duplicates should be removed from implementations"
+  )
+  local hierarchy_render = render.build(hierarchy_map, { width = 80 })
+  assert(contains(hierarchy_render.lines, "▾ Supertypes  1"), "supertypes should render")
+  assert(contains(hierarchy_render.lines, "  ↑ Base"), "supertypes should use the upward marker")
+  assert(contains(hierarchy_render.lines, "▾ Subtypes  1"), "subtypes should render")
+  assert(
+    contains(hierarchy_render.lines, "  ↓ Derived"),
+    "subtypes should use the downward marker"
   )
 
   local implementation_context = vim.deepcopy(context)
@@ -293,6 +409,19 @@ local function run()
   add_location(project_graph, "structural", structural_location, {
     name = "Reconcile(job)",
   })
+  local test_reference = {
+    uri = "file:///workspace/internal/controller/reconcile_test.go",
+    range = {
+      start = { line = 12, character = 4 },
+      ["end"] = { line = 12, character = 13 },
+    },
+  }
+  local test_structural = vim.deepcopy(test_reference)
+  test_structural.range.start.character = 0
+  add_location(project_graph, "test_references", test_reference)
+  add_location(project_graph, "test_structural", test_structural, {
+    name = "Reconcile(testCase)",
+  })
   local external_reference = {
     uri = "file:///usr/local/go/src/example/external.go",
     range = {
@@ -310,11 +439,17 @@ local function run()
   local project_map = model.build(context, project_graph, { include_external = false })
   local reference_section
   local structural_section
+  local test_reference_section
+  local test_structural_section
   for _, section in ipairs(project_map.sections) do
     if section.id == "references" then
       reference_section = section
     elseif section.id == "structural" then
       structural_section = section
+    elseif section.id == "test_references" then
+      test_reference_section = section
+    elseif section.id == "test_structural" then
+      test_structural_section = section
     end
   end
   assert_equal(#reference_section.rows, 1, "semantic project references should render")
@@ -328,9 +463,34 @@ local function run()
     1,
     "only additional structural matches should get a section"
   )
+  assert_equal(#test_reference_section.rows, 1, "test references should get a distinct section")
+  assert_equal(
+    test_reference_section.rows[1].evidence.provider,
+    "gopls+ast-grep",
+    "test structural evidence should corroborate semantic test references"
+  )
+  assert_equal(
+    test_structural_section,
+    nil,
+    "corroborated test matches should not render a duplicate structural section"
+  )
   assert(
     contains(project_map.notes, "1 external relationship hidden."),
     "corroborating external evidence should count as one hidden relationship"
+  )
+
+  local syntax_configuration = vim.deepcopy(context)
+  syntax_configuration.client_id = nil
+  syntax_configuration.client_name = "Tree-sitter"
+  syntax_configuration.configuration = { key = "Enabled", container = "TLSConfig" }
+  local syntax_configuration_map =
+    model.build(syntax_configuration, graph.new(syntax_configuration), {})
+  assert(
+    contains(
+      syntax_configuration_map.notes,
+      "Configuration uses require an active language server with project reference support."
+    ),
+    "syntax-only configuration focus should explain the semantic provider requirement"
   )
 
   local relations = require("archlens.relations")
@@ -398,6 +558,31 @@ local function run()
   assert_equal(#decoded, 1, "ast-grep stream output should decode")
   assert_equal(decoded[1].uri, "file:///workspace/main.nix", "ast-grep paths should be rooted")
   assert_equal(omitted, 0, "decoded structural matches should track omissions")
+  local filtered_stream = table.concat({
+    vim.json.encode({
+      file = "vendor/example/generated.go",
+      lines = "target()",
+      range = {
+        start = { line = 0, column = 0 },
+        ["end"] = { line = 0, column = 6 },
+      },
+    }),
+    vim.json.encode({
+      file = "internal/main.go",
+      lines = "target()",
+      range = {
+        start = { line = 1, column = 0 },
+        ["end"] = { line = 1, column = 6 },
+      },
+    }),
+  }, "\n")
+  local filtered, filtered_omitted = ast_grep._decode_matches(filtered_stream, "/workspace", 1, {})
+  assert_equal(
+    filtered[1].uri,
+    "file:///workspace/internal/main.go",
+    "hidden paths must not consume ast-grep's visible result budget"
+  )
+  assert_equal(filtered_omitted, 0)
   local go_pattern, go_selector = ast_grep._query_for({
     name = "Reconcile",
     syntax_node_type = "method_declaration",
@@ -424,6 +609,11 @@ local function run()
   assert(contains(args, "2"), "ast-grep command should include the configured thread count")
   assert(contains(args, "!vendor/**"), "ast-grep command should include exclusion globs")
   assert(contains(args, "pkg/**"), "ast-grep command should include inclusion globs")
+  assert(contains(args, "!**/target/**"), "ast-grep should derive generated-path globs")
+  assert(contains(args, "!**/zz_generated.*"), "ast-grep should skip generated filenames")
+  assert(contains(args, "!**/*_generated_*"), "ast-grep should skip generated variants")
+  assert(contains(args, "!**/*.generated_*"), "ast-grep should skip dot-generated variants")
+  assert(contains(args, "!**/*.pb.go"), "ast-grep should skip generated protobuf files")
   assert_equal(args[#args], "/workspace", "ast-grep command should end with the project root")
 
   local source_window = vim.api.nvim_get_current_win()

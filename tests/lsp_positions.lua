@@ -139,6 +139,75 @@ local function run()
     "UTF-8 ranges remain safe without source text because their units are bytes"
   )
 
+  local original_get_client_by_id = vim.lsp.get_client_by_id
+  local definition_params
+  local definition_client = {
+    id = 98,
+    name = "definition-lsp",
+    offset_encoding = "utf-16",
+    requests = {},
+    is_stopped = function()
+      return false
+    end,
+    supports_method = function(_, method)
+      return method == "textDocument/definition"
+    end,
+    request = function(_, _, params, handler)
+      definition_params = params
+      vim.schedule(function()
+        handler(nil, {
+          {
+            targetUri = position_uri,
+            targetRange = {
+              start = { line = 0, character = 0 },
+              ["end"] = { line = 0, character = 9 },
+            },
+            targetSelectionRange = {
+              start = { line = 0, character = 3 },
+              ["end"] = { line = 0, character = 9 },
+            },
+          },
+        })
+      end)
+      return true, 1
+    end,
+  }
+  vim.lsp.get_client_by_id = function(client_id)
+    return client_id == definition_client.id and definition_client
+      or original_get_client_by_id(client_id)
+  end
+  local definition_result
+  lsp.definition_at(
+    { client_id = definition_client.id },
+    position_buffer,
+    {
+      uri = position_uri,
+    },
+    byte_position,
+    function(locations, err, skipped)
+      definition_result = { locations = locations, err = err, skipped = skipped }
+    end
+  )
+  assert(
+    vim.wait(1000, function()
+      return definition_result ~= nil
+    end),
+    "definition requests should complete"
+  )
+  assert_equal(
+    definition_params.position.character,
+    3,
+    "definition requests should convert import positions to the client encoding"
+  )
+  assert_equal(
+    definition_result.locations[1].range.start.character,
+    5,
+    "definition targets should normalize back to byte columns"
+  )
+  assert_equal(definition_result.err, nil)
+  assert_equal(definition_result.skipped, 0)
+  vim.lsp.get_client_by_id = original_get_client_by_id
+
   local symbols = lsp._normalize_document_symbols({
     {
       name = "target",
@@ -189,6 +258,7 @@ local function run()
       start = { line = 0, character = 3 },
       ["end"] = { line = 0, character = 9 },
     },
+    data = { targetUri = "opaque-call-state" },
   }
   local normalized_call_item = lsp._normalize_call_item(raw_call_item, "utf-16", position_buffer)
   assert_equal(
@@ -200,6 +270,11 @@ local function run()
     normalized_call_item._archlens_lsp_item,
     nil,
     "normalized public items should not contain transport-only LSP payloads"
+  )
+  assert_equal(
+    normalized_call_item.data,
+    nil,
+    "normalized hierarchy items should keep opaque server data outside the graph"
   )
   assert_equal(
     lsp._normalize_call_item(
@@ -246,7 +321,6 @@ local function run()
     "relationship contexts should own the original item needed by follow-up call requests"
   )
 
-  local original_get_client_by_id = vim.lsp.get_client_by_id
   local relationship_context = {
     supports_calls = false,
     name = "Contract",
@@ -282,6 +356,38 @@ local function run()
 
   local captured_params = {}
   local next_request_id = 0
+  local prepared_type_item = {
+    name = "Contract",
+    kind = vim.lsp.protocol.SymbolKind.Interface,
+    uri = position_uri,
+    range = {
+      start = { line = 0, character = 0 },
+      ["end"] = { line = 0, character = 9 },
+    },
+    selectionRange = {
+      start = { line = 0, character = 3 },
+      ["end"] = { line = 0, character = 9 },
+    },
+    data = { opaque = "prepared-type" },
+  }
+  local function related_type_item(name)
+    return {
+      name = name,
+      kind = vim.lsp.protocol.SymbolKind.Interface,
+      uri = position_uri,
+      range = {
+        start = { line = 1, character = 0 },
+        ["end"] = { line = 1, character = 9 },
+      },
+      selectionRange = {
+        start = { line = 1, character = 3 },
+        ["end"] = { line = 1, character = 9 },
+      },
+      data = { opaque = name },
+    }
+  end
+  local supertype_item = related_type_item("Base")
+  local subtype_item = related_type_item("Derived")
   local supported_client = {
     id = 99,
     name = "gopls",
@@ -291,7 +397,9 @@ local function run()
       return false
     end,
     supports_method = function(_, method)
-      return method == "textDocument/implementation" or method == "textDocument/references"
+      return method == "textDocument/implementation"
+        or method == "textDocument/references"
+        or method == "textDocument/prepareTypeHierarchy"
     end,
     request = function(_, method, params, handler)
       captured_params[method] = params
@@ -315,7 +423,7 @@ local function run()
               },
             },
           })
-        else
+        elseif method == "textDocument/references" then
           handler(nil, {
             {
               uri = position_uri,
@@ -325,6 +433,12 @@ local function run()
               },
             },
           })
+        elseif method == "textDocument/prepareTypeHierarchy" then
+          handler(nil, { prepared_type_item })
+        elseif method == "typeHierarchy/supertypes" then
+          handler(nil, { supertype_item })
+        elseif method == "typeHierarchy/subtypes" then
+          handler(nil, { subtype_item })
         end
       end)
       return true, next_request_id
@@ -333,6 +447,8 @@ local function run()
   local supported_result = run_relationships(supported_client)
   local supported_references = edges_for(supported_result, "references")
   local supported_implementations = edges_for(supported_result, "implementations")
+  local supported_supertypes = edges_for(supported_result, "supertypes")
+  local supported_subtypes = edges_for(supported_result, "subtypes")
   assert_equal(
     captured_params["textDocument/references"].position.character,
     3,
@@ -342,6 +458,19 @@ local function run()
     captured_params["textDocument/implementation"].position.character,
     3,
     "implementation requests should use the same client-position boundary"
+  )
+  assert_equal(
+    captured_params["textDocument/prepareTypeHierarchy"].position.character,
+    3,
+    "type hierarchy preparation should use the client position encoding"
+  )
+  assert(
+    captured_params["typeHierarchy/supertypes"].item == prepared_type_item,
+    "supertype requests should retain the raw prepared item"
+  )
+  assert(
+    captured_params["typeHierarchy/subtypes"].item == prepared_type_item,
+    "subtype requests should retain the raw prepared item"
   )
   assert_equal(
     supported_references[1].source.location.range.start.character,
@@ -363,6 +492,36 @@ local function run()
     5,
     "LocationLink origin ranges should remain normalized edge occurrences"
   )
+  assert_equal(supported_supertypes[1].target.name, "Base", "supertypes should point upward")
+  assert_equal(supported_subtypes[1].source.name, "Derived", "subtypes should point downward")
+  assert_equal(
+    supported_supertypes[1].target.location.range.start.character,
+    5,
+    "supertype ranges should normalize to byte columns"
+  )
+  assert_equal(
+    supported_subtypes[1].source.location.range.start.character,
+    5,
+    "subtype ranges should normalize to byte columns"
+  )
+  assert(
+    supported_supertypes[1].target.context.wire_type_item == supertype_item,
+    "supertype contexts should retain opaque server data"
+  )
+  assert(
+    supported_subtypes[1].source.context.wire_type_item == subtype_item,
+    "subtype contexts should retain opaque server data"
+  )
+  assert_equal(
+    supported_supertypes[1].evidence.method,
+    "typeHierarchy/supertypes",
+    "supertype edges should retain request evidence"
+  )
+  assert_equal(
+    supported_subtypes[1].evidence.method,
+    "typeHierarchy/subtypes",
+    "subtype edges should retain request evidence"
+  )
   for _, edge in ipairs(supported_result.edges) do
     for _, raw_key in ipairs({
       "from",
@@ -371,6 +530,7 @@ local function run()
       "targetUri",
       "targetRange",
       "targetSelectionRange",
+      "originSelectionRange",
     }) do
       assert_equal(edge[raw_key], nil, "canonical edges must not expose LSP key " .. raw_key)
       assert_equal(
@@ -386,6 +546,145 @@ local function run()
     end
     assert_equal(edge.position_encoding, "utf-8", "canonical edges must declare byte columns")
   end
+
+  local function_methods = {}
+  local function_client = {
+    id = 110,
+    name = "function-lsp",
+    offset_encoding = "utf-16",
+    requests = {},
+    is_stopped = function()
+      return false
+    end,
+    supports_method = function(_, method)
+      return method == "textDocument/implementation"
+        or method == "textDocument/references"
+        or method == "textDocument/prepareTypeHierarchy"
+    end,
+    request = function(_, method, _, handler)
+      function_methods[#function_methods + 1] = method
+      vim.schedule(function()
+        handler(nil, {})
+      end)
+      return true, #function_methods
+    end,
+  }
+  run_relationships(function_client, {
+    kind = vim.lsp.protocol.SymbolKind.Function,
+  })
+  assert_equal(
+    function_methods,
+    { "textDocument/references" },
+    "ordinary functions should skip inapplicable implementation and type hierarchy requests"
+  )
+
+  local direct_type_methods = {}
+  local direct_type_client = {
+    id = 107,
+    name = "type-lsp",
+    offset_encoding = "utf-16",
+    requests = {},
+    is_stopped = function()
+      return false
+    end,
+    supports_method = function()
+      return false
+    end,
+    request = function(_, method, params, handler)
+      direct_type_methods[#direct_type_methods + 1] = method
+      assert(params.item == prepared_type_item, "focused types should reuse their opaque item")
+      vim.schedule(function()
+        if method == "typeHierarchy/supertypes" then
+          handler(nil, { supertype_item })
+        else
+          handler({ message = "subtypes unavailable" }, nil)
+        end
+      end)
+      return true, #direct_type_methods
+    end,
+  }
+  local direct_type_result = run_relationships(direct_type_client, {
+    wire_type_item = prepared_type_item,
+  })
+  assert_equal(direct_type_methods, {
+    "typeHierarchy/supertypes",
+    "typeHierarchy/subtypes",
+  }, "focusing a hierarchy row should bypass preparation and query both directions")
+  assert_equal(
+    #edges_for(direct_type_result, "supertypes"),
+    1,
+    "one failed hierarchy direction should retain the successful direction"
+  )
+  assert_equal(edges_for(direct_type_result, "subtypes"), {}, "failed subtype results stay empty")
+  assert_equal(
+    direct_type_result.errors,
+    { "Subtypes failed: subtypes unavailable" },
+    "hierarchy direction errors should be reported independently"
+  )
+
+  local empty_type_client = {
+    id = 108,
+    name = "empty-type-lsp",
+    offset_encoding = "utf-16",
+    requests = {},
+    is_stopped = function()
+      return false
+    end,
+    supports_method = function(_, method)
+      return method == "textDocument/prepareTypeHierarchy"
+    end,
+    request = function(_, _, _, handler)
+      vim.schedule(function()
+        handler(nil, nil)
+      end)
+      return true, 1
+    end,
+  }
+  local empty_type_result = run_relationships(empty_type_client)
+  assert_equal(
+    empty_type_result.edges,
+    {},
+    "a non-type symbol should not synthesize hierarchy rows"
+  )
+  assert_equal(empty_type_result.errors, {}, "an empty prepare result should remain silent")
+
+  local selected_type_item
+  local ambiguous_type_client = {
+    id = 109,
+    name = "ambiguous-type-lsp",
+    offset_encoding = "utf-16",
+    requests = {},
+    is_stopped = function()
+      return false
+    end,
+    supports_method = function(_, method)
+      return method == "textDocument/prepareTypeHierarchy"
+    end,
+    request = function(_, method, params, handler)
+      vim.schedule(function()
+        if method == "textDocument/prepareTypeHierarchy" then
+          local other = vim.deepcopy(prepared_type_item)
+          other.name = "Other"
+          handler(nil, { other, prepared_type_item })
+        else
+          selected_type_item = params.item
+          handler(nil, {})
+        end
+      end)
+      return true, method
+    end,
+  }
+  local ambiguous_type_result = run_relationships(ambiguous_type_client)
+  assert(
+    selected_type_item == prepared_type_item,
+    "multiple prepare results should prefer the item matching the focused symbol"
+  )
+  assert(
+    table
+      .concat(ambiguous_type_result.notes, "\n")
+      :find("Type hierarchy preparation returned 2 candidates; using Contract.", 1, true),
+    "ambiguous type preparation should be visible without blocking the pane"
+  )
 
   local incoming_wire = vim.deepcopy(raw_call_item)
   incoming_wire.name = "caller"
@@ -561,6 +860,103 @@ local function run()
     {},
     "unsupported implementation capability should remain an empty relationship"
   )
+  local empty_configuration_result = run_relationships(unsupported_client, {
+    language = "rust",
+    kind = vim.lsp.protocol.SymbolKind.Field,
+    configuration = { key = "token", container = "Config", source = "field" },
+  })
+  assert(
+    table
+      .concat(empty_configuration_result.notes, "\n")
+      :find("references-only returned no configuration uses for this field.", 1, true),
+    "an empty semantic configuration result should be visible instead of silently blank"
+  )
+  local no_reference_client = {
+    id = 112,
+    name = "symbols-only",
+    offset_encoding = "utf-8",
+    requests = {},
+    is_stopped = function()
+      return false
+    end,
+    supports_method = function()
+      return false
+    end,
+    request = function()
+      error("an unsupported reference request must not be sent")
+    end,
+  }
+  local unavailable_configuration_result = run_relationships(no_reference_client, {
+    language = "rust",
+    kind = vim.lsp.protocol.SymbolKind.Field,
+    configuration = { key = "token", container = "Config", source = "field" },
+  })
+  assert(
+    table
+      .concat(unavailable_configuration_result.notes, "\n")
+      :find("symbols-only does not support project references for configuration fields.", 1, true),
+    "configuration focus should explain when references are unsupported"
+  )
+
+  local test_reference_client = {
+    id = 111,
+    name = "test-reference-lsp",
+    offset_encoding = "utf-8",
+    requests = {},
+    is_stopped = function()
+      return false
+    end,
+    supports_method = function(_, method)
+      return method == "textDocument/references"
+    end,
+    request = function(_, _, _, handler)
+      vim.schedule(function()
+        handler(nil, {
+          {
+            uri = "file:///tmp/service_test.go",
+            range = {
+              start = { line = 4, character = 2 },
+              ["end"] = { line = 4, character = 8 },
+            },
+          },
+        })
+      end)
+      return true, 1
+    end,
+  }
+  local test_reference_result = run_relationships(test_reference_client, {
+    language = "go",
+  })
+  assert_equal(
+    #edges_for(test_reference_result, "test_references"),
+    1,
+    "Go references in _test.go files should become explicit test relationships"
+  )
+  assert_equal(
+    graph.focus_node(edges_for(test_reference_result, "test_references")[1]).name,
+    relationship_context.name,
+    "test reference edges should point back to the focused symbol"
+  )
+  assert_equal(
+    edges_for(test_reference_result, "references"),
+    {},
+    "classified test references should not remain duplicated as generic references"
+  )
+  local configuration_result = run_relationships(test_reference_client, {
+    language = "go",
+    kind = vim.lsp.protocol.SymbolKind.Field,
+    configuration = { key = "Enabled", container = "TLSConfig", source = "field" },
+  })
+  assert_equal(
+    #edges_for(configuration_result, "configuration_consumers"),
+    1,
+    "configuration references should become explicit use relationships"
+  )
+  assert_equal(
+    edges_for(configuration_result, "test_references"),
+    {},
+    "configuration use should take precedence over the test-file presentation"
+  )
 
   local file_fallback_requests = 0
   local file_fallback_client = {
@@ -651,6 +1047,81 @@ local function run()
     "rejected implementation requests should not synthesize structural fallback rows"
   )
 
+  local cancelled_type_requests = {}
+  local hanging_type_handlers = {}
+  local hanging_type_client = {
+    id = 110,
+    name = "hanging-type-lsp",
+    offset_encoding = "utf-16",
+    requests = {},
+    is_stopped = function()
+      return false
+    end,
+    supports_method = function(_, method)
+      return method == "textDocument/prepareTypeHierarchy"
+    end,
+    request = function(self, method, _, handler)
+      local request_id = #hanging_type_handlers + 1
+      if method == "textDocument/prepareTypeHierarchy" then
+        request_id = 1
+        self.requests[request_id] = {}
+        vim.schedule(function()
+          self.requests[request_id] = nil
+          handler(nil, { prepared_type_item })
+        end)
+      else
+        request_id = method == "typeHierarchy/supertypes" and 2 or 3
+        self.requests[request_id] = {}
+        hanging_type_handlers[#hanging_type_handlers + 1] = handler
+      end
+      return true, request_id
+    end,
+    cancel_request = function(self, request_id)
+      cancelled_type_requests[#cancelled_type_requests + 1] = request_id
+      self.requests[request_id] = nil
+      return true
+    end,
+  }
+  vim.lsp.get_client_by_id = function(client_id)
+    return client_id == hanging_type_client.id and hanging_type_client
+      or original_get_client_by_id(client_id)
+  end
+  local hanging_context = vim.tbl_extend("force", vim.deepcopy(relationship_context), {
+    client_id = hanging_type_client.id,
+    client_name = hanging_type_client.name,
+    position_encoding = "utf-8",
+    root_dir = "/tmp",
+  })
+  local timeout_result
+  local timeout_callbacks = 0
+  local cancel_hanging = lsp.relationships(hanging_context, position_buffer, function(value)
+    timeout_callbacks = timeout_callbacks + 1
+    timeout_result = value
+  end, { timeout_ms = 20 })
+  assert(
+    vim.wait(1000, function()
+      return timeout_result ~= nil
+    end),
+    "a hanging type hierarchy fan-out should obey the shared timeout"
+  )
+  table.sort(cancelled_type_requests)
+  assert_equal(
+    cancelled_type_requests,
+    { 2, 3 },
+    "the hierarchy timeout should cancel both outstanding follow-up requests"
+  )
+  assert(
+    timeout_result.errors[1]:find("exceeded 20 ms", 1, true),
+    "the hierarchy timeout should explain the bounded request deadline"
+  )
+  for _, handler in ipairs(hanging_type_handlers) do
+    handler(nil, {})
+  end
+  vim.wait(20)
+  assert_equal(timeout_callbacks, 1, "late hierarchy responses must not complete the batch twice")
+  cancel_hanging()
+  vim.lsp.get_client_by_id = original_get_client_by_id
+
   local navigation_context = {
     client_name = "gopls",
     position_encoding = "utf-8",
@@ -670,7 +1141,14 @@ local function run()
   local navigation_model = model.build(navigation_context, navigation_graph, {
     include_external = false,
   })
-  local navigation_row = navigation_model.sections[1].rows[1]
+  local navigation_row
+  for _, section in ipairs(navigation_model.sections) do
+    if section.id == "implementations" then
+      navigation_row = section.rows[1]
+      break
+    end
+  end
+  assert(navigation_row, "the implementation relationship should remain navigable")
   local original_show_document = vim.lsp.util.show_document
   local opened_location
   local opened_encoding

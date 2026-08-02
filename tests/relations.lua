@@ -20,6 +20,26 @@ equal(relations.ordered(), {
     suppress_self = true,
   },
   {
+    id = "supertypes",
+    label = "Supertypes",
+    marker = "↑",
+    order = 15,
+    source = "semantic",
+    endpoint = "target",
+    sort = "name",
+    suppress_self = true,
+  },
+  {
+    id = "subtypes",
+    label = "Subtypes",
+    marker = "↓",
+    order = 16,
+    source = "semantic",
+    endpoint = "source",
+    sort = "name",
+    suppress_self = true,
+  },
+  {
     id = "implementations",
     label = "Implementations",
     marker = "↳",
@@ -28,6 +48,8 @@ equal(relations.ordered(), {
     endpoint = "target",
     sort = "location",
     kind_name = "Implementation",
+    corroborates = "subtypes",
+    corroborates_by = "location",
     suppress_self = true,
   },
   {
@@ -49,6 +71,40 @@ equal(relations.ordered(), {
     sort = "name",
   },
   {
+    id = "module_imports",
+    label = "File imports",
+    marker = "⇢",
+    order = 45,
+    source = "semantic",
+    endpoint = "target",
+    sort = "name",
+    kind_name = "Module",
+    anchor = "file",
+    suppress_self = true,
+  },
+  {
+    id = "configuration_consumers",
+    label = "Configuration used at",
+    marker = "↤",
+    order = 48,
+    source = "semantic",
+    endpoint = "source",
+    sort = "location",
+    kind_name = "Configuration use",
+    suppress_self = true,
+  },
+  {
+    id = "test_references",
+    label = "Referenced from tests",
+    marker = "◇",
+    order = 49,
+    source = "semantic",
+    endpoint = "source",
+    sort = "location",
+    kind_name = "Test reference",
+    suppress_self = true,
+  },
+  {
     id = "references",
     label = "Referenced across project",
     marker = "◆",
@@ -57,6 +113,19 @@ equal(relations.ordered(), {
     endpoint = "source",
     sort = "location",
     kind_name = "Reference",
+    suppress_self = true,
+  },
+  {
+    id = "test_structural",
+    label = "Potential test matches",
+    marker = "⋄",
+    order = 59,
+    source = "structural",
+    endpoint = "source",
+    sort = "location",
+    kind_name = "Test match",
+    corroborates = "test_references",
+    corroborates_by = "line",
     suppress_self = true,
   },
   {
@@ -69,6 +138,7 @@ equal(relations.ordered(), {
     sort = "location",
     kind_name = "Structural match",
     corroborates = "references",
+    corroborates_by = "line",
     suppress_self = true,
   },
   {
@@ -91,7 +161,7 @@ local ordered = relations.ordered()
 ordered[1].marker = "mutated"
 table.remove(ordered, 2)
 equal(relations.ordered()[1].marker, "└", "ordered should return deep copies")
-equal(#relations.ordered(), 7, "mutating an ordered result must not mutate the registry")
+equal(#relations.ordered(), 13, "mutating an ordered result must not mutate the registry")
 
 local custom_input = {
   id = "dependencies",
@@ -114,7 +184,7 @@ equal(relations.get("dependencies"), {
   endpoint = "target",
   sort = "location",
 })
-equal(relations.ordered()[5].id, "dependencies", "custom kinds should follow declared order")
+equal(relations.ordered()[7].id, "dependencies", "custom kinds should follow declared order")
 
 local alias = relations.register("owns", {
   label = "Owns",
@@ -131,12 +201,18 @@ equal(
   end, relations.ordered()),
   {
     "children",
+    "supertypes",
+    "subtypes",
     "implementations",
     "incoming",
     "outgoing",
     "dependencies",
+    "module_imports",
     "owns",
+    "configuration_consumers",
+    "test_references",
     "references",
+    "test_structural",
     "structural",
     "siblings",
   },
@@ -180,6 +256,14 @@ local invalid = {
     suppress_self = "yes",
   },
   {
+    id = "bad_anchor",
+    label = "Bad anchor",
+    marker = "!",
+    order = 80,
+    source = "custom",
+    anchor = "symbol",
+  },
+  {
     id = "provider_behavior",
     label = "Provider behavior",
     marker = "!",
@@ -210,6 +294,23 @@ local invalid = {
     order = 80,
     source = "custom",
     corroborates = "missing_relation",
+  },
+  {
+    id = "orphaned_corroboration_mode",
+    label = "Orphaned corroboration mode",
+    marker = "!",
+    order = 80,
+    source = "custom",
+    corroborates_by = "location",
+  },
+  {
+    id = "bad_corroboration_mode",
+    label = "Bad corroboration mode",
+    marker = "!",
+    order = 80,
+    source = "custom",
+    corroborates = "references",
+    corroborates_by = "fuzzy",
   },
 }
 for _, kind in ipairs(invalid) do

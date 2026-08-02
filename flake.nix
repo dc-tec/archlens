@@ -100,6 +100,15 @@
                 -l ${./tests/graph.lua}
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/scope.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/imports.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/test_paths.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
                 -l ${./tests/lsp_positions.lua}
               touch "$out"
             '';

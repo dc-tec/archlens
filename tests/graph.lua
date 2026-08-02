@@ -56,6 +56,7 @@ equal(snapshot.edges[1].evidence, {
   method = "children",
   class = "syntax",
 })
+equal(snapshot.edges[1].occurrences, {}, "graph edges should always expose occurrence arrays")
 equal(snapshot.contributors, {
   { id = "lsp:7", label = "gopls" },
   { id = "syntax", label = "Tree-sitter" },
@@ -115,6 +116,26 @@ equal(
   snapshot.edges[2].target.kind_name,
   "mutated",
   "graph navigation should preserve node identity inside a snapshot"
+)
+
+local file_source = graph.node({
+  name = "main.go",
+  scope = "file",
+  location = location(0, 0, 0),
+})
+local imported_module = graph.node_from_location(location(7), {
+  name = "internal/storage",
+  scope = "module",
+})
+local file_import = graph.edge("module_imports", file_source, imported_module, {
+  provider = "Tree-sitter",
+  method = "adapter/moduleTarget",
+  class = "semantic",
+})
+equal(
+  pcall(graph.add_edge, snapshot, file_import),
+  true,
+  "file-context edges should belong to every symbol focused in the same file"
 )
 
 for _, invalid in ipairs({
@@ -185,6 +206,24 @@ for _, invalid in ipairs({
     })
     graph.add_edge(snapshot, mismatched)
   end,
+  function()
+    local foreign_file = graph.node({
+      name = "foreign.go",
+      scope = "file",
+      location = {
+        uri = "file:///workspace/foreign.go",
+        range = location(0).range,
+      },
+    })
+    graph.add_edge(
+      snapshot,
+      graph.edge("module_imports", foreign_file, imported_module, {
+        provider = "Tree-sitter",
+        method = "adapter/moduleTarget",
+        class = "semantic",
+      })
+    )
+  end,
 }) do
   equal(pcall(invalid), false, "invalid graph values should be rejected")
 end
@@ -214,6 +253,46 @@ equal(
 assert(
   wire_edge.source.context.wire_call_item == wire_item,
   "opaque wire call items should preserve identity"
+)
+
+local supertype = graph.node_from_location(location(10), { name = "Base" })
+local subtype = graph.node_from_location(location(11), { name = "Derived" })
+local supertype_edge = graph.edge("supertypes", snapshot.focus, supertype, {
+  provider = "gopls",
+  method = "typeHierarchy/supertypes",
+  class = "semantic",
+})
+local subtype_edge = graph.edge("subtypes", subtype, snapshot.focus, {
+  provider = "gopls",
+  method = "typeHierarchy/subtypes",
+  class = "semantic",
+})
+equal(graph.related_node(supertype_edge).name, "Base", "supertypes should point upward")
+equal(graph.focus_node(supertype_edge).name, "Current", "supertype edges should retain focus")
+equal(graph.related_node(subtype_edge).name, "Derived", "subtypes should point downward")
+equal(graph.focus_node(subtype_edge).name, "Current", "subtype edges should retain focus")
+
+local wire_type_item = vim.tbl_extend("force", vim.deepcopy(wire_item), {
+  data = { targetUri = "opaque-type-state" },
+})
+local type_focus = graph.node({
+  id = "type-focus",
+  scope = "symbol",
+  context = { wire_type_item = wire_type_item },
+})
+local focused_type_edge = graph.edge("supertypes", type_focus, supertype, {
+  provider = "gopls",
+  method = "typeHierarchy/supertypes",
+  class = "semantic",
+})
+equal(
+  pcall(graph.add_edge, graph.delta(), focused_type_edge),
+  true,
+  "opaque wire type items should be allowed"
+)
+assert(
+  focused_type_edge.source.context.wire_type_item == wire_type_item,
+  "opaque wire type items should preserve identity"
 )
 
 print("archlens relationship graph tests passed")

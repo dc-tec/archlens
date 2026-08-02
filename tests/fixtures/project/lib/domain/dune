@@ -1,0 +1,6 @@
+(library
+ (name camlet_domain)
+ (public_name camlet.domain))
+
+(executable
+ (name not_a_library))

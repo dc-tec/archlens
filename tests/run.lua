@@ -26,6 +26,7 @@ end
 
 local function run()
   local model = require("archlens.model")
+  local graph = require("archlens.graph")
   local render = require("archlens.render")
   local view = require("archlens.view")
 
@@ -82,40 +83,79 @@ local function run()
     supports_calls = true,
   })
 
-  local function call(name, uri, line)
-    return {
-      to = {
-        name = name,
-        kind = vim.lsp.protocol.SymbolKind.Function,
-        uri = uri,
-        range = {
-          start = { line = line, character = 0 },
-          ["end"] = { line = line + 2, character = 0 },
-        },
-        selectionRange = {
-          start = { line = line, character = 0 },
-          ["end"] = { line = line, character = 4 },
-        },
+  local function call_context(name, uri, line)
+    return model.context_from_item({
+      name = name,
+      kind = vim.lsp.protocol.SymbolKind.Function,
+      uri = uri,
+      range = {
+        start = { line = line, character = 0 },
+        ["end"] = { line = line + 2, character = 0 },
       },
-    }
+      selectionRange = {
+        start = { line = line, character = 0 },
+        ["end"] = { line = line, character = 4 },
+      },
+    }, {
+      id = context.client_id,
+      name = context.client_name,
+      offset_encoding = "utf-8",
+      root_dir = context.root_dir,
+      supports_calls = true,
+    })
   end
 
-  local relationships = {
-    outgoing = {
-      call("Read", "file:///workspace/internal/storage/store.go", 8),
-      call("Read", "file:///workspace/internal/storage/store.go", 8),
-      call("Println", "file:///usr/local/go/src/fmt/print.go", 20),
-    },
-  }
+  local function add_outgoing(snapshot, name, uri, line)
+    graph.add_edge(
+      snapshot,
+      graph.edge(
+        "outgoing",
+        snapshot.focus,
+        graph.node_from_context(call_context(name, uri, line)),
+        {
+          provider = "gopls",
+          method = "callHierarchy/outgoingCalls",
+          class = "semantic",
+        }
+      )
+    )
+  end
+
+  local function add_location(snapshot, kind, location, fields, provider, edge_fields)
+    local related = graph.node_from_location(location, fields)
+    local reverse = kind == "references" or kind == "structural"
+    local source = reverse and related or snapshot.focus
+    local target = reverse and snapshot.focus or related
+    graph.add_edge(
+      snapshot,
+      graph.edge(kind, source, target, {
+        provider = provider or (kind == "structural" and "ast-grep" or "gopls"),
+        method = kind == "implementations" and "textDocument/implementation"
+          or kind == "references" and "textDocument/references"
+          or "structural",
+        class = kind == "structural" and "structural" or "semantic",
+      }, edge_fields)
+    )
+  end
+
+  local relationships = graph.new(context)
+  add_outgoing(relationships, "Read", "file:///workspace/internal/storage/store.go", 8)
+  add_outgoing(relationships, "Read", "file:///workspace/internal/storage/store.go", 8)
+  add_outgoing(relationships, "Write", "file:///workspace/internal/storage/store.go", 8)
+  add_outgoing(relationships, "Println", "file:///usr/local/go/src/fmt/print.go", 20)
   local mapped = model.build(context, relationships, { include_external = false })
   assert_equal(#mapped.sections, 1, "only a non-empty outgoing section should be shown")
-  assert_equal(#mapped.sections[1].rows, 1, "duplicate relationships should collapse")
+  assert_equal(
+    #mapped.sections[1].rows,
+    2,
+    "identical calls should collapse without merging distinct symbols at one location"
+  )
   assert(
     contains(mapped.notes, "1 external relationship hidden."),
     "hidden external calls should be explicit"
   )
 
-  local empty = model.build(context, {}, { include_external = false })
+  local empty = model.build(context, graph.new(context), { include_external = false })
   assert(
     contains(empty.notes, "No local or project relationships were returned."),
     "an empty map should be explained"
@@ -143,31 +183,40 @@ local function run()
     siblings = {},
   }
   local implementation_link = {
-    targetUri = "file:///workspace/internal/storage/store.go",
-    targetRange = {
+    uri = "file:///workspace/internal/storage/store.go",
+    full_range = {
       start = { line = 7, character = 0 },
       ["end"] = { line = 14, character = 1 },
     },
-    targetSelectionRange = {
+    range = {
       start = { line = 8, character = 2 },
       ["end"] = { line = 8, character = 10 },
     },
   }
-  local implementation_map = model.build(implementation_context, {
-    implementations = {
-      implementation_link,
-      vim.deepcopy(implementation_link),
-      vim.deepcopy(context.location),
-      {
-        uri = "file:///usr/local/go/src/example/external.go",
-        range = {
-          start = { line = 3, character = 0 },
-          ["end"] = { line = 3, character = 8 },
-        },
-      },
+  local implementation_graph = graph.new(implementation_context)
+  add_location(implementation_graph, "implementations", implementation_link)
+  add_location(
+    implementation_graph,
+    "implementations",
+    vim.deepcopy(implementation_link),
+    nil,
+    "other-lsp",
+    {
+      occurrences = { { uri = context.location.uri, ranges = { context.location.range } } },
+    }
+  )
+  graph.add_contributor(implementation_graph, "lsp:2", "other-lsp")
+  add_location(implementation_graph, "implementations", vim.deepcopy(context.location))
+  add_location(implementation_graph, "implementations", {
+    uri = "file:///usr/local/go/src/example/external.go",
+    range = {
+      start = { line = 3, character = 0 },
+      ["end"] = { line = 3, character = 8 },
     },
-    outgoing = { call("Read", "file:///workspace/internal/storage/store.go", 18) },
-  }, { include_external = false })
+  })
+  add_outgoing(implementation_graph, "Read", "file:///workspace/internal/storage/store.go", 18)
+  local implementation_map =
+    model.build(implementation_context, implementation_graph, { include_external = false })
   assert_equal(
     vim.tbl_map(function(section)
       return section.id
@@ -179,7 +228,7 @@ local function run()
   assert_equal(#implementation_section.rows, 1, "implementation locations should deduplicate")
   assert_equal(
     implementation_section.rows[1].location.range,
-    implementation_link.targetSelectionRange,
+    implementation_link.range,
     "LocationLink selection ranges should identify the implementation symbol"
   )
   assert_equal(
@@ -188,10 +237,15 @@ local function run()
     "implementation rows should retain their relationship type"
   )
   assert_equal(implementation_section.rows[1].evidence, {
-    provider = "gopls",
+    provider = "gopls+other-lsp",
     method = "textDocument/implementation",
     class = "semantic",
   }, "implementation provenance should remain semantic and provider-specific")
+  assert_equal(
+    #implementation_section.rows[1].occurrences,
+    1,
+    "duplicate semantic edges should merge their occurrences"
+  )
   assert(
     implementation_section.rows[1].resolve_on_focus,
     "implementation locations should resolve when focused"
@@ -231,22 +285,29 @@ local function run()
   local corroborating_location = vim.deepcopy(reference_location)
   corroborating_location.range.start.character = 0
   corroborating_location.range["end"].character = 9
-  local project_map = model.build(context, {
-    references = { reference_location },
-    structural = {
-      vim.tbl_extend(
-        "force",
-        corroborating_location,
-        { provider = "ast-grep", text = "Reconcile(ctx)" }
-      ),
-      vim.tbl_extend(
-        "force",
-        structural_location,
-        { provider = "ast-grep", text = "Reconcile(job)" }
-      ),
+  local project_graph = graph.new(context)
+  add_location(project_graph, "references", reference_location)
+  add_location(project_graph, "structural", corroborating_location, {
+    name = "Reconcile(ctx)",
+  })
+  add_location(project_graph, "structural", structural_location, {
+    name = "Reconcile(job)",
+  })
+  local external_reference = {
+    uri = "file:///usr/local/go/src/example/external.go",
+    range = {
+      start = { line = 7, character = 4 },
+      ["end"] = { line = 7, character = 13 },
     },
-    ast_grep_ran = true,
-  }, { include_external = false })
+  }
+  local external_structural = vim.deepcopy(external_reference)
+  external_structural.range.start.character = 0
+  add_location(project_graph, "references", external_reference)
+  add_location(project_graph, "structural", external_structural, {
+    name = "Reconcile(external)",
+  })
+  graph.add_contributor(project_graph, "ast_grep", "ast-grep")
+  local project_map = model.build(context, project_graph, { include_external = false })
   local reference_section
   local structural_section
   for _, section in ipairs(project_map.sections) do
@@ -266,6 +327,36 @@ local function run()
     #structural_section.rows,
     1,
     "only additional structural matches should get a section"
+  )
+  assert(
+    contains(project_map.notes, "1 external relationship hidden."),
+    "corroborating external evidence should count as one hidden relationship"
+  )
+
+  local relations = require("archlens.relations")
+  relations.register("dependencies", {
+    label = "Depends on",
+    marker = "◇",
+    order = 55,
+    source = "semantic",
+    endpoint = "source",
+    sort = "location",
+  })
+  local custom_graph = graph.new(context)
+  add_location(custom_graph, "references", reference_location)
+  local dependency = graph.node_from_location(reference_location, { name = "dependency" })
+  graph.add_edge(
+    custom_graph,
+    graph.edge("dependencies", dependency, custom_graph.focus, {
+      provider = "gopls",
+      method = "textDocument/references",
+      class = "semantic",
+    })
+  )
+  local custom_map = model.build(context, custom_graph, { include_external = false })
+  assert(
+    custom_map.sections[1].rows[1].id ~= custom_map.sections[2].rows[1].id,
+    "row ids should remain unique when relation kinds share a method and location"
   )
 
   context.syntax = {

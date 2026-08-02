@@ -1,4 +1,5 @@
 local ast_grep = require("archlens.ast_grep")
+local graph = require("archlens.graph")
 local lsp = require("archlens.lsp")
 local model = require("archlens.model")
 local treesitter = require("archlens.treesitter")
@@ -142,16 +143,13 @@ local function render(session, rendered_model)
 end
 
 local function render_local_context(session, context)
-  local pending_providers = { "LSP" }
+  local pending_providers = { { id = "lsp", label = "LSP" } }
   if config.ast_grep.enabled then
-    pending_providers[#pending_providers + 1] = "ast-grep"
+    pending_providers[#pending_providers + 1] = { id = "ast_grep", label = "ast-grep" }
   end
-  render(
-    session,
-    model.build(context, {
-      pending_providers = pending_providers,
-    }, config)
-  )
+  local snapshot = graph.new(context)
+  graph.set_pending(snapshot, pending_providers)
+  render(session, model.build(context, snapshot, config))
 end
 
 local function load_context(session, context, generation)
@@ -161,35 +159,11 @@ local function load_context(session, context, generation)
 
   session.current = context
 
-  local relationships = {
-    incoming = {},
-    outgoing = {},
-    implementations = {},
-    references = {},
-    structural = {},
-    errors = {},
-    notes = {},
-    structural_omitted = 0,
-    ast_grep_ran = false,
-  }
+  local relationships = graph.new(context)
   local tasks = {}
 
   local function merge(result)
-    result = result or {}
-    for _, key in ipairs({
-      "incoming",
-      "outgoing",
-      "implementations",
-      "references",
-      "structural",
-      "errors",
-      "notes",
-    }) do
-      vim.list_extend(relationships[key], result[key] or {})
-    end
-    relationships.structural_omitted = relationships.structural_omitted
-      + (result.structural_omitted or 0)
-    relationships.ast_grep_ran = relationships.ast_grep_ran or result.ast_grep_ran == true
+    graph.merge(relationships, result or graph.delta())
   end
 
   if context.client_id then
@@ -225,10 +199,10 @@ local function load_context(session, context, generation)
     local pending_providers = {}
     for _, task in ipairs(tasks) do
       if pending[task.id] then
-        pending_providers[#pending_providers + 1] = task.label
+        pending_providers[#pending_providers + 1] = { id = task.id, label = task.label }
       end
     end
-    relationships.pending_providers = pending_providers
+    graph.set_pending(relationships, pending_providers)
     render(session, model.build(context, relationships, config))
   end
 
@@ -254,8 +228,10 @@ local function load_context(session, context, generation)
     elseif not completed and is_current(session, generation) then
       completed = true
       pending[task.id] = nil
-      relationships.errors[#relationships.errors + 1] =
+      graph.add_error(
+        relationships,
         string.format("%s failed to start: %s", task.label, tostring(cancel_or_error))
+      )
       render_progress()
     end
   end

@@ -38,6 +38,7 @@ local rendered = vim.wait(15000, function()
       return not text:find("Resolving the symbol", 1, true)
         and not text:find("Loading relationships", 1, true)
         and not text:find("Loading local and project relationships", 1, true)
+        and not text:find("Pending:", 1, true)
     end
   end
   return false
@@ -80,6 +81,7 @@ if focus_name and focus_name ~= "" then
     return focused_text:find(focus_expected, 1, true)
       and not focused_text:find("Loading relationships", 1, true)
       and not focused_text:find("Loading local and project relationships", 1, true)
+      and not focused_text:find("Pending:", 1, true)
   end, 50)
   assert(
     focused,
@@ -94,6 +96,7 @@ if focus_name and focus_name ~= "" then
     return restored_text:find(back_expected, 1, true)
       and not restored_text:find("Loading relationships", 1, true)
       and not restored_text:find("Loading local and project relationships", 1, true)
+      and not restored_text:find("Pending:", 1, true)
   end, 50)
   assert(restored, "returning to the previous focus timed out")
 end

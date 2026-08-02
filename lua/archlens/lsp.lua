@@ -1,3 +1,4 @@
+local graph = require("archlens.graph")
 local model = require("archlens.model")
 
 local M = {}
@@ -138,7 +139,6 @@ local function normalize_location(location, encoding, fallback_bufnr, origin_uri
   if not location then
     return nil
   end
-  local normalized = vim.deepcopy(location)
   if location.targetUri then
     local target_range =
       range_from_client(location.targetUri, location.targetRange, encoding, fallback_bufnr)
@@ -147,23 +147,27 @@ local function normalize_location(location, encoding, fallback_bufnr, origin_uri
     if not target_range or not target_selection_range then
       return nil
     end
-    normalized.targetRange = target_range
-    normalized.targetSelectionRange = target_selection_range
+    local normalized = {
+      uri = location.targetUri,
+      range = target_selection_range,
+      full_range = target_range,
+    }
     if location.originSelectionRange then
-      normalized.originSelectionRange = range_from_client(
+      normalized.origin_range = range_from_client(
         origin_uri or location.targetUri,
         location.originSelectionRange,
         encoding,
         fallback_bufnr
       )
     end
+    return normalized
   else
-    normalized.range = range_from_client(location.uri, location.range, encoding, fallback_bufnr)
-    if not normalized.range then
+    local range = range_from_client(location.uri, location.range, encoding, fallback_bufnr)
+    if not range then
       return nil
     end
+    return { uri = location.uri, range = range, full_range = range }
   end
-  return normalized
 end
 
 local function location_list(value)
@@ -261,6 +265,63 @@ local function normalize_call(call, direction, encoding, fallback_bufnr, origin_
     end
   end
   return normalized
+end
+
+local function call_edge(call, direction, context)
+  local item = direction == "incoming" and call.from or call.to
+  if not item then
+    return nil
+  end
+  local row_context = model.context_from_item(item, {
+    id = context.client_id,
+    name = context.client_name,
+    offset_encoding = internal_position_encoding,
+    root_dir = context.root_dir,
+    supports_calls = true,
+  })
+  row_context.wire_call_item = call.wire_call_item
+  local focus = graph.node_from_context(context)
+  local related = graph.node_from_context(row_context)
+  local source = direction == "incoming" and related or focus
+  local target = direction == "incoming" and focus or related
+  local occurrence_uri = direction == "incoming" and item.uri or context.location.uri
+  local occurrences = {}
+  if call.fromRanges and #call.fromRanges > 0 then
+    occurrences[1] = { uri = occurrence_uri, ranges = vim.deepcopy(call.fromRanges) }
+  end
+  return graph.edge(direction, source, target, {
+    provider = context.client_name or "LSP",
+    method = direction == "incoming" and methods.incoming or methods.outgoing,
+    class = "semantic",
+  }, {
+    occurrences = occurrences,
+    position_encoding = internal_position_encoding,
+  })
+end
+
+local function location_edge(location, kind, context)
+  local focus = graph.node_from_context(context)
+  local related = graph.node_from_location(location, {
+    kind_name = kind == "implementations" and "Implementation" or "Reference",
+    position_encoding = internal_position_encoding,
+  })
+  local source = kind == "references" and related or focus
+  local target = kind == "references" and focus or related
+  local occurrences = {}
+  if location.origin_range then
+    occurrences[1] = {
+      uri = context.location.uri,
+      ranges = { vim.deepcopy(location.origin_range) },
+    }
+  end
+  return graph.edge(kind, source, target, {
+    provider = context.client_name or "LSP",
+    method = kind == "implementations" and methods.implementation or methods.references,
+    class = "semantic",
+  }, {
+    occurrences = occurrences,
+    position_encoding = internal_position_encoding,
+  })
 end
 
 local function internal_position(source)
@@ -521,12 +582,12 @@ function M.relationships(context, bufnr, callback, options)
   options = options or {}
   local client = vim.lsp.get_client_by_id(context.client_id)
   if not client or client:is_stopped() then
-    callback({ incoming = {}, outgoing = {}, implementations = {}, references = {}, errors = {} })
+    callback(graph.delta())
     return function() end
   end
 
-  local result =
-    { incoming = {}, outgoing = {}, implementations = {}, references = {}, errors = {} }
+  local result = graph.delta()
+  graph.add_contributor(result, "lsp:" .. tostring(client.id), client.name)
   local pending = 0
   local cancelled = false
   local completed = false
@@ -559,7 +620,7 @@ function M.relationships(context, bufnr, callback, options)
           local normalized_location =
             normalize_location(location, client.offset_encoding, bufnr, spec.origin_uri)
           if normalized_location then
-            normalized[#normalized + 1] = normalized_location
+            normalized[#normalized + 1] = location_edge(normalized_location, spec.key, context)
           else
             skipped = skipped + 1
           end
@@ -569,13 +630,13 @@ function M.relationships(context, bufnr, callback, options)
           local normalized_call =
             normalize_call(call, spec.key, client.offset_encoding, bufnr, spec.origin_uri)
           if normalized_call then
-            normalized[#normalized + 1] = normalized_call
+            normalized[#normalized + 1] = call_edge(normalized_call, spec.key, context)
           else
             skipped = skipped + 1
           end
         end
       end
-      result[spec.key] = normalized
+      vim.list_extend(result.edges, normalized)
       if skipped > 0 then
         result.errors[#result.errors + 1] = string.format(
           "%s omitted %d result%s because its source text was unavailable for position conversion.",

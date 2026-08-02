@@ -24,6 +24,7 @@ local function section(model, id)
 end
 
 local function run()
+  local graph = require("archlens.graph")
   local source_buffer = vim.api.nvim_get_current_buf()
   local source_window = vim.api.nvim_get_current_win()
   local source_path = vim.fn.tempname() .. ".lua"
@@ -91,6 +92,67 @@ local function run()
   syntax_context.item = nil
   syntax_context.call_item = nil
   syntax_context.supports_calls = false
+
+  local function semantic_delta(current, implementations, outgoing)
+    local delta = graph.delta()
+    local focus = graph.node_from_context(current)
+    for _, value in ipairs(implementations or {}) do
+      local related = graph.node_from_location(value, {
+        kind_name = "Implementation",
+        position_encoding = "utf-8",
+      })
+      graph.add_edge(
+        delta,
+        graph.edge("implementations", focus, related, {
+          provider = current.client_name,
+          method = "textDocument/implementation",
+          class = "semantic",
+        })
+      )
+    end
+    for _, item in ipairs(outgoing or {}) do
+      local related_context = require("archlens.model").context_from_item(item, {
+        id = current.client_id,
+        name = current.client_name,
+        offset_encoding = "utf-8",
+        root_dir = current.root_dir,
+        supports_calls = true,
+      })
+      graph.add_edge(
+        delta,
+        graph.edge("outgoing", focus, graph.node_from_context(related_context), {
+          provider = current.client_name,
+          method = "callHierarchy/outgoingCalls",
+          class = "semantic",
+        })
+      )
+    end
+    return delta
+  end
+
+  local function structural_delta(current, values, ran)
+    local delta = graph.delta()
+    local focus = graph.node_from_context(current)
+    for _, value in ipairs(values or {}) do
+      local related = graph.node_from_location(value, {
+        name = value.text,
+        kind_name = "Structural match",
+        position_encoding = "utf-8",
+      })
+      graph.add_edge(
+        delta,
+        graph.edge("structural", related, focus, {
+          provider = "ast-grep",
+          method = "structural",
+          class = "structural",
+        })
+      )
+    end
+    if ran then
+      graph.add_contributor(delta, "ast_grep", "ast-grep")
+    end
+    return delta
+  end
 
   local relationship_callbacks = {}
   local relationship_contexts = {}
@@ -183,12 +245,9 @@ local function run()
     "the rendered pane should expose pending providers"
   )
 
-  structural_callbacks[1]({
-    structural = {
-      vim.tbl_extend("force", location(3), { provider = "ast-grep", text = "Current()" }),
-    },
-    ast_grep_ran = true,
-  })
+  structural_callbacks[1](structural_delta(base_context, {
+    vim.tbl_extend("force", location(3), { provider = "ast-grep", text = "Current()" }),
+  }, true))
   local structural_model = rendered[#rendered]
   assert(section(structural_model, "structural"), "ast-grep results should render on arrival")
   assert_equal(
@@ -197,20 +256,15 @@ local function run()
     "out-of-order ast-grep completion should leave only LSP pending"
   )
 
-  relationship_callbacks[1]({
-    implementations = { location(2) },
-    outgoing = {
-      {
-        to = {
-          name = "Child",
-          kind = vim.lsp.protocol.SymbolKind.Function,
-          uri = uri,
-          range = location(1).range,
-          selectionRange = location(1).range,
-        },
-      },
+  relationship_callbacks[1](semantic_delta(base_context, { location(2) }, {
+    {
+      name = "Child",
+      kind = vim.lsp.protocol.SymbolKind.Function,
+      uri = uri,
+      range = location(1).range,
+      selectionRange = location(1).range,
     },
-  })
+  }))
   local complete_model = rendered[#rendered]
   assert(
     section(complete_model, "implementations"),
@@ -232,13 +286,10 @@ local function run()
   assert(cancellation_count >= 3, "starting a new generation should cancel previous provider work")
   local renders_before_stale = #rendered
 
-  stale_lsp({ outgoing = { { to = { name = "StaleLsp" } } } })
-  stale_structural({
-    structural = {
-      vim.tbl_extend("force", location(2), { provider = "ast-grep", text = "StaleAstGrep()" }),
-    },
-    ast_grep_ran = true,
-  })
+  stale_lsp(semantic_delta(base_context, {}, {}))
+  stale_structural(structural_delta(base_context, {
+    vim.tbl_extend("force", location(2), { provider = "ast-grep", text = "StaleAstGrep()" }),
+  }, true))
   assert_equal(
     #rendered,
     renders_before_stale,
@@ -246,13 +297,13 @@ local function run()
   )
 
   resolve_callbacks[3](vim.deepcopy(base_context))
-  structural_callbacks[3]({ structural = {}, ast_grep_ran = true })
+  structural_callbacks[3](structural_delta(base_context, {}, true))
   assert_equal(
     rendered[#rendered].pending_providers,
     { "gopls" },
     "the current generation should continue after stale callbacks are ignored"
   )
-  relationship_callbacks[3]({ outgoing = {} })
+  relationship_callbacks[3](semantic_delta(base_context, {}, {}))
   assert_equal(
     rendered[#rendered].pending_providers,
     {},
@@ -294,8 +345,8 @@ local function run()
     { data = "wire-item" },
     "focused location resolution should preserve the context-owned transport item"
   )
-  relationship_callbacks[4]({ outgoing = {} })
-  structural_callbacks[4]({ structural = {}, ast_grep_ran = true })
+  relationship_callbacks[4](semantic_delta(semantic_implementation, {}, {}))
+  structural_callbacks[4](structural_delta(semantic_implementation, {}, true))
 
   archlens.close()
   assert(vim.api.nvim_win_is_valid(source_window), "the source window should remain valid")

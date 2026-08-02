@@ -109,6 +109,11 @@ require("archlens.adapters").register("zig", {
 })
 ```
 
+Relationship providers exchange a focused graph defined in
+[`lua/archlens/graph.lua`](lua/archlens/graph.lua). Section names, ordering, and
+direction live in [`lua/archlens/relations.lua`](lua/archlens/relations.lua), so
+new relationship types do not need orchestration or renderer branches.
+
 ## Development
 
 Run the source tests with Neovim:

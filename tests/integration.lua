@@ -137,8 +137,19 @@ assert(
   end, 20),
   "ast-grep integration timed out"
 )
-assert(structural.ast_grep_ran, "ast-grep did not run against the Nix fixture")
-assert(#structural.structural >= 2, "ast-grep did not find project-level Nix usages")
+assert(
+  vim.tbl_contains(
+    vim.tbl_map(function(value)
+      return value.label
+    end, structural.contributors),
+    "ast-grep"
+  ),
+  "ast-grep did not run against the Nix fixture"
+)
+assert(#structural.edges >= 2, "ast-grep did not find project-level Nix usages")
+for _, edge in ipairs(structural.edges) do
+  assert(edge.kind == "structural", "ast-grep returned a non-structural graph edge")
+end
 
 print("archlens.nvim parser and ast-grep integration tests passed")
 vim.cmd.quitall()

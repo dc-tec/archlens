@@ -1,3 +1,6 @@
+local graph = require("archlens.graph")
+local relations = require("archlens.relations")
+
 local M = {}
 
 local function position_lte(left, right)
@@ -107,7 +110,7 @@ local function location_from_item(item)
     return {
       uri = location.uri,
       range = location.range,
-      full_range = location.range,
+      full_range = location.full_range or location.range,
     }
   end
 
@@ -156,66 +159,6 @@ function M.context_from_item(item, provider)
   }
 end
 
-local function location_key(location)
-  local range = location and location.range
-  local start = range and range.start or {}
-  return table.concat({
-    location and location.uri or "",
-    tostring(start.line or 0),
-    tostring(start.character or 0),
-  }, ":")
-end
-
-local function location_line_key(location)
-  local range = location and location.range
-  return table.concat({
-    "line",
-    location and location.uri or "",
-    tostring(range and range.start and range.start.line or 0),
-  }, ":")
-end
-
-local function row_from_call(call, direction, context)
-  local item = direction == "incoming" and call.from or call.to
-  if not item then
-    return nil
-  end
-
-  local row_context = M.context_from_item(item, {
-    id = context.client_id,
-    name = context.client_name,
-    offset_encoding = context.position_encoding,
-    root_dir = context.root_dir,
-    supports_calls = true,
-  })
-  row_context.wire_call_item = call.wire_call_item
-  local range = row_context.location.range
-  local start = range and range.start or { line = 0, character = 0 }
-
-  return {
-    id = table.concat({
-      direction,
-      row_context.location.uri or "",
-      tostring(start.line),
-      tostring(start.character),
-      row_context.name,
-    }, ":"),
-    name = row_context.name,
-    detail = row_context.detail,
-    kind_name = row_context.kind_name,
-    path_label = row_context.path_label,
-    line = row_context.line,
-    location = row_context.location,
-    context = row_context,
-    internal = is_within(context.root_dir, row_context.path),
-    evidence = {
-      provider = context.client_name,
-      method = direction == "incoming" and "callHierarchy/incomingCalls"
-        or "callHierarchy/outgoingCalls",
-    },
-  }
-end
-
 local function source_line(location, cache)
   if not location or not location.uri or not location.range then
     return nil
@@ -241,141 +184,89 @@ local function source_line(location, cache)
   return text
 end
 
-local function row_from_location(location, context, relationship, cache, fallback_name)
+local function row_from_edge(edge, relation, context, cache)
+  local node = graph.related_node(edge)
+  local location = node and node.location
   if not location or not location.uri or not location.range then
     return nil
   end
-  local evidence = relationship.evidence
   local path = vim.uri_to_fname(location.uri)
   local line = location.range.start.line + 1
+  local name = node.name
+  if not node.context then
+    name = source_line(location, cache) or name or context.name
+  end
+  local id
+  if edge.evidence.class == "syntax" then
+    id = table.concat({ edge.kind, graph.location_key(location), name or "" }, ":")
+  elseif relation.sort == "name" then
+    id = table.concat({ edge.kind, graph.location_key(location), name or "" }, ":")
+  else
+    id = table.concat({ edge.kind, edge.evidence.method, graph.location_key(location) }, ":")
+  end
   return {
-    id = table.concat({ evidence.method, location_key(location) }, ":"),
-    name = source_line(location, cache) or fallback_name or context.name,
-    kind_name = relationship.kind_name,
-    path_label = relative_path(context.root_dir, path),
-    line = line,
-    location = { uri = location.uri, range = location.range, full_range = location.range },
-    position_encoding = context.position_encoding or "utf-8",
+    id = id,
+    name = name,
+    detail = node.detail,
+    kind_name = node.kind_name or relation.kind_name,
+    path_label = node.path_label or relative_path(context.root_dir, path),
+    line = node.line or line,
+    location = location,
+    context = node.context,
+    position_encoding = node.position_encoding or edge.position_encoding or "utf-8",
     internal = is_within(context.root_dir, path),
-    resolve_on_focus = true,
-    evidence = vim.deepcopy(evidence),
+    resolve_on_focus = node.resolve_on_focus == true,
+    evidence = vim.deepcopy(edge.evidence),
+    occurrences = vim.deepcopy(edge.occurrences or {}),
   }
 end
 
-local function row_from_syntax(syntax_context, relation)
-  return {
-    id = table.concat(
-      { relation, location_key(syntax_context.location), syntax_context.name },
-      ":"
-    ),
-    name = syntax_context.name,
-    detail = syntax_context.detail,
-    kind_name = syntax_context.kind_name,
-    path_label = syntax_context.path_label,
-    line = syntax_context.line,
-    location = syntax_context.location,
-    context = syntax_context,
-    internal = true,
-    evidence = { provider = "Tree-sitter", method = relation },
-  }
-end
-
-local function normalize_calls(calls, direction, context, include_external)
-  local rows = {}
-  local seen = {}
-  local hidden = 0
-
-  for _, call in ipairs(calls or {}) do
-    local row = row_from_call(call, direction, context)
-    if row and not seen[row.id] then
-      seen[row.id] = true
-      if row.internal or include_external then
-        rows[#rows + 1] = row
-      else
-        hidden = hidden + 1
-      end
+local function add_provider(evidence, provider)
+  local present = {}
+  for value in evidence.provider:gmatch("[^+]+") do
+    present[value] = true
+  end
+  for value in provider:gmatch("[^+]+") do
+    if not present[value] then
+      evidence.provider = evidence.provider .. "+" .. value
+      present[value] = true
     end
   end
-
-  table.sort(rows, function(left, right)
-    if left.name ~= right.name then
-      return left.name < right.name
-    end
-    if left.path_label ~= right.path_label then
-      return left.path_label < right.path_label
-    end
-    return (left.line or 0) < (right.line or 0)
-  end)
-
-  return rows, hidden
 end
 
-local function normalize_locations(locations, context, include_external, relationship, cache)
-  local rows = {}
-  local hidden = 0
-  local seen = {}
-  local self_key = location_key(context.location)
-  for _, location in ipairs(locations or {}) do
-    if location.targetUri then
-      location = {
-        uri = location.targetUri,
-        range = location.targetSelectionRange or location.targetRange,
-      }
-    end
-    local key = location_key(location)
-    if key ~= self_key and not seen[key] then
-      local row = row_from_location(location, context, relationship, cache)
-      if row then
-        if row.internal or include_external then
-          rows[#rows + 1] = row
-          seen[key] = row
-          seen[location_line_key(location)] = seen[location_line_key(location)] or row
-        else
-          hidden = hidden + 1
-          seen[key] = true
-        end
-      end
-    end
+local function occurrence_key(occurrence)
+  local parts = { occurrence.uri or "" }
+  for _, range in ipairs(occurrence.ranges or {}) do
+    parts[#parts + 1] = table.concat({
+      range.start.line,
+      range.start.character,
+      range["end"].line,
+      range["end"].character,
+    }, ":")
   end
-  return rows, hidden, seen
+  return table.concat(parts, ":")
 end
 
-local function normalize_structural(matches, context, include_external, cache, excluded)
-  local rows = {}
-  local hidden = 0
+local function merge_row(target, source)
+  add_provider(target.evidence, source.evidence.provider)
   local seen = {}
-  local self_key = location_key(context.location)
-  for _, match in ipairs(matches or {}) do
-    local location = { uri = match.uri, range = match.range }
-    local key = location_key(location)
-    local semantic_row = excluded[key] or excluded[location_line_key(location)]
-    if key ~= self_key and semantic_row then
-      if type(semantic_row) == "table" and semantic_row.evidence then
-        semantic_row.evidence.provider = semantic_row.evidence.provider .. "+ast-grep"
-      end
-    elseif key ~= self_key and not seen[key] then
+  for _, occurrence in ipairs(target.occurrences or {}) do
+    seen[occurrence_key(occurrence)] = true
+  end
+  for _, occurrence in ipairs(source.occurrences or {}) do
+    local key = occurrence_key(occurrence)
+    if not seen[key] then
       seen[key] = true
-      local row = row_from_location(location, context, {
-        kind_name = "Structural match",
-        evidence = {
-          provider = match.provider or "ast-grep",
-          method = "structural",
-        },
-      }, cache, match.text)
-      if row then
-        if row.internal or include_external then
-          rows[#rows + 1] = row
-        else
-          hidden = hidden + 1
-        end
-      end
+      target.occurrences[#target.occurrences + 1] = occurrence
     end
   end
-  return rows, hidden
 end
 
-local function sort_rows(rows)
+local function sort_rows(rows, style)
   table.sort(rows, function(left, right)
+    if style == "name" and left.name ~= right.name then
+      return (left.name or "") < (right.name or "")
+    end
     if left.path_label ~= right.path_label then
       return (left.path_label or "") < (right.path_label or "")
     end
@@ -387,12 +278,91 @@ local function sort_rows(rows)
   return rows
 end
 
-local function syntax_rows(context, key)
-  local rows = {}
-  for _, syntax_context in ipairs((context.syntax and context.syntax[key]) or {}) do
-    rows[#rows + 1] = row_from_syntax(syntax_context, key)
+local function normalize_edges(snapshot, context, include_external)
+  local cache = {}
+  local grouped = {}
+  local seen = {}
+  local hidden_locations = {}
+  local hidden = 0
+  local self_key = graph.location_key(context.location)
+
+  for _, relation in ipairs(relations.ordered()) do
+    grouped[relation.id] = {}
+    seen[relation.id] = {}
+    hidden_locations[relation.id] = {}
   end
-  return sort_rows(rows)
+
+  for _, edge in ipairs(snapshot.edges or {}) do
+    local relation = relations.get(edge.kind)
+    local node = relation and graph.related_node(edge)
+    local location = node and node.location
+    if relation and location and location.uri and location.range then
+      local key = graph.location_key(location)
+      local dedupe_key = relation.sort == "name" and table.concat({ key, node.name or "" }, ":")
+        or key
+      local suppress_self = relation.suppress_self == true and key == self_key
+      if not suppress_self and not seen[relation.id][dedupe_key] then
+        local row = row_from_edge(edge, relation, context, cache)
+        if row then
+          if row.internal or include_external then
+            grouped[relation.id][#grouped[relation.id] + 1] = row
+            seen[relation.id][dedupe_key] = row
+          else
+            hidden = hidden + 1
+            seen[relation.id][dedupe_key] = true
+            hidden_locations[relation.id][#hidden_locations[relation.id] + 1] = location
+          end
+        end
+      elseif type(seen[relation.id][dedupe_key]) == "table" then
+        local row = row_from_edge(edge, relation, context, cache)
+        if row then
+          merge_row(seen[relation.id][dedupe_key], row)
+        end
+      end
+    end
+  end
+
+  for _, relation in ipairs(relations.ordered()) do
+    sort_rows(grouped[relation.id], relation.sort)
+  end
+
+  for _, relation in ipairs(relations.ordered()) do
+    if relation.corroborates then
+      local corroborated = {}
+      for _, row in ipairs(grouped[relation.corroborates] or {}) do
+        corroborated[graph.location_key(row.location)] = row
+        corroborated[graph.line_key(row.location)] = corroborated[graph.line_key(row.location)]
+          or row
+      end
+      local remaining = {}
+      for _, row in ipairs(grouped[relation.id]) do
+        local semantic = corroborated[graph.location_key(row.location)]
+          or corroborated[graph.line_key(row.location)]
+        if semantic then
+          add_provider(semantic.evidence, row.evidence.provider)
+        else
+          remaining[#remaining + 1] = row
+        end
+      end
+      grouped[relation.id] = remaining
+
+      local hidden_corroborated = {}
+      for _, location in ipairs(hidden_locations[relation.corroborates] or {}) do
+        hidden_corroborated[graph.location_key(location)] = true
+        hidden_corroborated[graph.line_key(location)] = true
+      end
+      for _, location in ipairs(hidden_locations[relation.id]) do
+        if
+          hidden_corroborated[graph.location_key(location)]
+          or hidden_corroborated[graph.line_key(location)]
+        then
+          hidden = hidden - 1
+        end
+      end
+    end
+  end
+
+  return grouped, hidden
 end
 
 function M.loading(context, message)
@@ -414,47 +384,21 @@ function M.error(message)
   }
 end
 
-function M.build(context, relationships, opts)
+function M.build(context, snapshot, opts)
   opts = opts or {}
-  relationships = relationships or {}
-  local pending_providers = vim.deepcopy(relationships.pending_providers or {})
-  local resolving_lsp = vim.tbl_contains(pending_providers, "LSP")
-
-  local cache = {}
-  local incoming, incoming_hidden =
-    normalize_calls(relationships.incoming, "incoming", context, opts.include_external)
-  local outgoing, outgoing_hidden =
-    normalize_calls(relationships.outgoing, "outgoing", context, opts.include_external)
-  local implementations, implementations_hidden =
-    normalize_locations(relationships.implementations, context, opts.include_external, {
-      kind_name = "Implementation",
-      evidence = {
-        provider = context.client_name or "LSP",
-        method = "textDocument/implementation",
-        class = "semantic",
-      },
-    }, cache)
-  local references, references_hidden, reference_keys =
-    normalize_locations(relationships.references, context, opts.include_external, {
-      kind_name = "Reference",
-      evidence = {
-        provider = context.client_name or "LSP",
-        method = "textDocument/references",
-        class = "semantic",
-      },
-    }, cache)
-  local structural, structural_hidden = normalize_structural(
-    relationships.structural,
-    context,
-    opts.include_external,
-    cache,
-    reference_keys
-  )
-  sort_rows(implementations)
-  sort_rows(references)
-  sort_rows(structural)
-  local children = syntax_rows(context, "children")
-  local siblings = syntax_rows(context, "siblings")
+  snapshot = snapshot or graph.new(context)
+  assert(snapshot.version == 1, "unsupported relationship graph version")
+  local pending_providers = vim.tbl_map(function(provider)
+    return provider.label
+  end, snapshot.pending or {})
+  local resolving_lsp = false
+  for _, provider in ipairs(snapshot.pending or {}) do
+    if provider.id == "lsp" then
+      resolving_lsp = true
+      break
+    end
+  end
+  local grouped, hidden = normalize_edges(snapshot, context, opts.include_external)
 
   local notes = {}
   if context.file_fallback and not resolving_lsp then
@@ -466,103 +410,44 @@ function M.build(context, relationships, opts)
       context.client_name or "The attached language server"
     )
   end
-  local hidden = incoming_hidden
-    + outgoing_hidden
-    + implementations_hidden
-    + references_hidden
-    + structural_hidden
   if hidden > 0 then
     notes[#notes + 1] =
       string.format("%d external relationship%s hidden.", hidden, hidden == 1 and "" or "s")
   end
-  if (relationships.structural_omitted or 0) > 0 then
+  local structural_omitted = (snapshot.omitted or {}).structural or 0
+  if structural_omitted > 0 then
     notes[#notes + 1] = string.format(
       "%d additional structural match%s omitted by the project-search limit.",
-      relationships.structural_omitted,
-      relationships.structural_omitted == 1 and " was" or "es were"
+      structural_omitted,
+      structural_omitted == 1 and " was" or "es were"
     )
   end
-  for _, error_message in ipairs(relationships.errors or {}) do
+  for _, error_message in ipairs(snapshot.errors or {}) do
     notes[#notes + 1] = error_message
   end
-  for _, note in ipairs(relationships.notes or {}) do
+  for _, note in ipairs(snapshot.notes or {}) do
     notes[#notes + 1] = note
   end
 
   local sections = {}
-  if #children > 0 then
-    sections[#sections + 1] = {
-      id = "children",
-      label = "Contains",
-      marker = "└",
-      rows = children,
-    }
-  end
-  if #implementations > 0 then
-    sections[#sections + 1] = {
-      id = "implementations",
-      label = "Implementations",
-      marker = "↳",
-      rows = implementations,
-    }
-  end
-  if #incoming > 0 then
-    sections[#sections + 1] = {
-      id = "incoming",
-      label = "Entered through",
-      marker = "←",
-      rows = incoming,
-    }
-  end
-  if #outgoing > 0 then
-    sections[#sections + 1] = {
-      id = "outgoing",
-      label = "Touches",
-      marker = "→",
-      rows = outgoing,
-    }
-  end
-  if #references > 0 then
-    sections[#sections + 1] = {
-      id = "references",
-      label = "Referenced across project",
-      marker = "◆",
-      rows = references,
-    }
-  end
-  if #structural > 0 then
-    sections[#sections + 1] = {
-      id = "structural",
-      label = "Structural matches",
-      marker = "≈",
-      rows = structural,
-    }
-  end
-  if #siblings > 0 then
-    sections[#sections + 1] = {
-      id = "siblings",
-      label = "Nearby definitions",
-      marker = "·",
-      rows = siblings,
-    }
+  for _, relation in ipairs(relations.ordered()) do
+    local rows = grouped[relation.id]
+    if rows and #rows > 0 then
+      sections[#sections + 1] = {
+        id = relation.id,
+        label = relation.label,
+        marker = relation.marker,
+        rows = rows,
+      }
+    end
   end
   if #sections == 0 and #notes == 0 and #pending_providers == 0 then
     notes[#notes + 1] = "No local or project relationships were returned."
   end
 
-  local providers = {}
-  local provider_seen = {}
-  local function add_provider(provider)
-    if provider and not provider_seen[provider] then
-      provider_seen[provider] = true
-      providers[#providers + 1] = provider
-    end
-  end
-  add_provider(context.client_name)
-  add_provider(context.syntax and context.syntax.provider)
-  if relationships.ast_grep_ran then
-    add_provider("ast-grep")
-  end
+  local providers = vim.tbl_map(function(contributor)
+    return contributor.label
+  end, snapshot.contributors or {})
 
   return {
     title = "ArchLens",
@@ -574,6 +459,6 @@ function M.build(context, relationships, opts)
   }
 end
 
-M.location_key = location_key
+M.location_key = graph.location_key
 
 return M

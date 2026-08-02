@@ -16,7 +16,18 @@ local function assert_equal(actual, expected, message)
 end
 
 local function run()
+  local graph = require("archlens.graph")
   local lsp = require("archlens.lsp")
+  local model = require("archlens.model")
+  local function edges_for(result, kind)
+    local edges = {}
+    for _, edge in ipairs(result.edges or {}) do
+      if edge.kind == kind then
+        edges[#edges + 1] = edge
+      end
+    end
+    return edges
+  end
   local position_buffer = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_name(position_buffer, "/tmp/archlens-lsp-position.go")
   vim.api.nvim_buf_set_lines(position_buffer, 0, -1, false, { "éé target", "😀 target" })
@@ -143,7 +154,7 @@ local function run()
     },
   }, position_uri, "utf-16", position_buffer)
   assert_equal(
-    require("archlens.model").select_document_symbol(symbols, byte_position, position_uri).name,
+    model.select_document_symbol(symbols, byte_position, position_uri).name,
     "target",
     "document symbol selection should compare byte-oriented cursor and result ranges"
   )
@@ -201,7 +212,7 @@ local function run()
     nil,
     "call items without convertible source ranges should be omitted"
   )
-  local call_model = require("archlens.model").build({
+  local call_context = {
     client_id = 99,
     client_name = "gopls",
     position_encoding = "utf-8",
@@ -211,11 +222,25 @@ local function run()
       uri = position_uri,
       range = { start = { line = 0, character = 0 }, ["end"] = byte_position },
     },
-  }, {
-    outgoing = {
-      { to = normalized_call_item, wire_call_item = raw_call_item },
-    },
-  }, { include_external = true })
+  }
+  local call_graph = graph.new(call_context)
+  local related_context = model.context_from_item(normalized_call_item, {
+    id = 99,
+    name = "gopls",
+    offset_encoding = "utf-8",
+    root_dir = "/tmp",
+    supports_calls = true,
+  })
+  related_context.wire_call_item = raw_call_item
+  graph.add_edge(
+    call_graph,
+    graph.edge("outgoing", call_graph.focus, graph.node_from_context(related_context), {
+      provider = "gopls",
+      method = "callHierarchy/outgoingCalls",
+      class = "semantic",
+    })
+  )
+  local call_model = model.build(call_context, call_graph, { include_external = true })
   assert(
     call_model.sections[1].rows[1].context.wire_call_item == raw_call_item,
     "relationship contexts should own the original item needed by follow-up call requests"
@@ -224,6 +249,7 @@ local function run()
   local original_get_client_by_id = vim.lsp.get_client_by_id
   local relationship_context = {
     supports_calls = false,
+    name = "Contract",
     location = {
       uri = position_uri,
       range = { start = byte_position, ["end"] = { line = 0, character = 11 } },
@@ -236,6 +262,9 @@ local function run()
     end
     local context = vim.tbl_extend("force", vim.deepcopy(relationship_context), {
       client_id = fake_client.id,
+      client_name = fake_client.name,
+      position_encoding = "utf-8",
+      root_dir = "/tmp",
     }, context_overrides or {})
     local cancel = lsp.relationships(context, position_buffer, function(value)
       result = value
@@ -277,6 +306,10 @@ local function run()
                 ["end"] = { line = 0, character = 9 },
               },
               targetSelectionRange = {
+                start = { line = 0, character = 4 },
+                ["end"] = { line = 0, character = 9 },
+              },
+              originSelectionRange = {
                 start = { line = 0, character = 3 },
                 ["end"] = { line = 0, character = 9 },
               },
@@ -298,6 +331,8 @@ local function run()
     end,
   }
   local supported_result = run_relationships(supported_client)
+  local supported_references = edges_for(supported_result, "references")
+  local supported_implementations = edges_for(supported_result, "implementations")
   assert_equal(
     captured_params["textDocument/references"].position.character,
     3,
@@ -309,19 +344,95 @@ local function run()
     "implementation requests should use the same client-position boundary"
   )
   assert_equal(
-    supported_result.references[1].range.start.character,
+    supported_references[1].source.location.range.start.character,
     5,
     "reference responses should be normalized to byte columns"
   )
   assert_equal(
-    supported_result.implementations[1].targetSelectionRange.start.character,
-    5,
+    supported_implementations[1].target.location.range.start.character,
+    6,
     "LocationLink selection ranges should be normalized to byte columns"
   )
   assert_equal(
-    supported_result.implementations[1].targetRange.start.character,
+    supported_implementations[1].target.location.full_range.start.character,
     0,
     "LocationLink target ranges should remain distinct from selection ranges"
+  )
+  assert_equal(
+    supported_implementations[1].occurrences[1].ranges[1].start.character,
+    5,
+    "LocationLink origin ranges should remain normalized edge occurrences"
+  )
+  for _, edge in ipairs(supported_result.edges) do
+    for _, raw_key in ipairs({
+      "from",
+      "to",
+      "fromRanges",
+      "targetUri",
+      "targetRange",
+      "targetSelectionRange",
+    }) do
+      assert_equal(edge[raw_key], nil, "canonical edges must not expose LSP key " .. raw_key)
+      assert_equal(
+        edge.source.location and edge.source.location[raw_key],
+        nil,
+        "canonical source nodes must not expose LSP key " .. raw_key
+      )
+      assert_equal(
+        edge.target.location and edge.target.location[raw_key],
+        nil,
+        "canonical target nodes must not expose LSP key " .. raw_key
+      )
+    end
+    assert_equal(edge.position_encoding, "utf-8", "canonical edges must declare byte columns")
+  end
+
+  local incoming_wire = vim.deepcopy(raw_call_item)
+  incoming_wire.name = "caller"
+  local outgoing_wire = vim.deepcopy(raw_call_item)
+  outgoing_wire.name = "callee"
+  local call_client = {
+    id = 106,
+    name = "call-lsp",
+    offset_encoding = "utf-16",
+    requests = {},
+    is_stopped = function()
+      return false
+    end,
+    supports_method = function(_, method)
+      return method == "callHierarchy/incomingCalls" or method == "callHierarchy/outgoingCalls"
+    end,
+    request = function(_, method, _, handler)
+      vim.schedule(function()
+        if method == "callHierarchy/incomingCalls" then
+          handler(nil, { { from = incoming_wire, fromRanges = { incoming_wire.selectionRange } } })
+        else
+          handler(nil, { { to = outgoing_wire, fromRanges = { outgoing_wire.selectionRange } } })
+        end
+      end)
+      return true, method == "callHierarchy/incomingCalls" and 1 or 2
+    end,
+  }
+  local call_result = run_relationships(call_client, {
+    supports_calls = true,
+    wire_call_item = raw_call_item,
+  })
+  local incoming_edges = edges_for(call_result, "incoming")
+  local outgoing_edges = edges_for(call_result, "outgoing")
+  assert_equal(#incoming_edges, 1, "incoming calls should become canonical graph edges")
+  assert_equal(#outgoing_edges, 1, "outgoing calls should become canonical graph edges")
+  assert(
+    incoming_edges[1].source.context.wire_call_item == incoming_wire,
+    "incoming edge contexts should retain their opaque call hierarchy item"
+  )
+  assert(
+    outgoing_edges[1].target.context.wire_call_item == outgoing_wire,
+    "outgoing edge contexts should retain their opaque call hierarchy item"
+  )
+  assert_equal(
+    incoming_edges[1].occurrences[1].ranges[1].start.character,
+    5,
+    "incoming call occurrences should use internal byte columns"
   )
 
   local captured_incoming_item
@@ -373,15 +484,7 @@ local function run()
     captured_incoming_item == raw_call_item,
     "call hierarchy transport should use the context-owned original item"
   )
-  assert_equal(
-    {
-      incoming = unavailable_result.incoming,
-      implementations = unavailable_result.implementations,
-      references = unavailable_result.references,
-    },
-    { incoming = {}, implementations = {}, references = {} },
-    "unconvertible call, implementation, and reference results should all be omitted"
-  )
+  assert_equal(#unavailable_result.edges, 0, "unconvertible relationship results should be omitted")
   local unavailable_errors = table.concat(unavailable_result.errors, "\n")
   for _, label in ipairs({ "Incoming calls", "Implementations", "Project references" }) do
     assert(
@@ -415,13 +518,14 @@ local function run()
     end,
   }
   local singleton_result = run_relationships(singleton_client)
+  local singleton_implementations = edges_for(singleton_result, "implementations")
   assert_equal(
-    #singleton_result.implementations,
+    #singleton_implementations,
     1,
     "a singleton Location implementation response should be normalized as one result"
   )
   assert_equal(
-    singleton_result.implementations[1].range.start.character,
+    singleton_implementations[1].target.location.range.start.character,
     5,
     "singleton Location ranges should use internal byte columns"
   )
@@ -453,7 +557,7 @@ local function run()
     "clients without implementation support should not receive that request"
   )
   assert_equal(
-    unsupported_result.implementations,
+    edges_for(unsupported_result, "implementations"),
     {},
     "unsupported implementation capability should remain an empty relationship"
   )
@@ -542,12 +646,12 @@ local function run()
     "a rejected implementation request should be reported without aborting the batch"
   )
   assert_equal(
-    rejected_result.implementations,
+    edges_for(rejected_result, "implementations"),
     {},
     "rejected implementation requests should not synthesize structural fallback rows"
   )
 
-  local navigation_model = require("archlens.model").build({
+  local navigation_context = {
     client_name = "gopls",
     position_encoding = "utf-8",
     root_dir = vim.fs.dirname(vim.uri_to_fname(position_uri)),
@@ -556,13 +660,16 @@ local function run()
     location = {
       uri = position_uri,
       range = {
-        start = { line = 0, character = 0 },
-        ["end"] = { line = 0, character = 1 },
+        start = byte_position,
+        ["end"] = { line = 0, character = 11 },
       },
     },
-  }, {
-    implementations = supported_result.implementations,
-  }, { include_external = false })
+  }
+  local navigation_graph = graph.new(navigation_context)
+  graph.merge(navigation_graph, supported_result)
+  local navigation_model = model.build(navigation_context, navigation_graph, {
+    include_external = false,
+  })
   local navigation_row = navigation_model.sections[1].rows[1]
   local original_show_document = vim.lsp.util.show_document
   local opened_location
@@ -576,7 +683,7 @@ local function run()
   vim.lsp.util.show_document = original_show_document
   assert_equal(
     opened_location.range.start.character,
-    5,
+    6,
     "opening a normalized implementation should retain its byte-oriented target column"
   )
   assert_equal(

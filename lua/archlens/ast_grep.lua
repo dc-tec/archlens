@@ -1,4 +1,5 @@
 local adapters = require("archlens.adapters")
+local graph = require("archlens.graph")
 
 local M = {}
 
@@ -9,10 +10,9 @@ M.default_globs = {
 }
 
 local function empty(note)
-  return {
-    structural = {},
-    notes = note and { note } or {},
-  }
+  local result = graph.delta()
+  graph.add_note(result, note)
+  return result
 end
 
 local function executable(command)
@@ -160,12 +160,26 @@ function M.relationships(context, options, callback)
       return
     end
     local matches, omitted = decode_matches(result.stdout, root, maximum)
-    finish({
-      structural = matches,
-      structural_omitted = omitted,
-      ast_grep_ran = true,
-      notes = {},
-    })
+    local delta = graph.delta()
+    local focus = graph.node_from_context(context)
+    for _, match in ipairs(matches) do
+      local related = graph.node_from_location({ uri = match.uri, range = match.range }, {
+        name = match.text,
+        kind_name = "Structural match",
+        position_encoding = "utf-8",
+      })
+      graph.add_edge(
+        delta,
+        graph.edge("structural", related, focus, {
+          provider = match.provider or "ast-grep",
+          method = "structural",
+          class = "structural",
+        })
+      )
+    end
+    graph.add_omitted(delta, "structural", omitted)
+    graph.add_contributor(delta, "ast_grep", "ast-grep")
+    finish(delta)
   end)
 
   timer = vim.defer_fn(function()

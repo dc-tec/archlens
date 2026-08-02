@@ -141,13 +141,25 @@ local function render(session, rendered_model)
   view.render(session, rendered_model, config)
 end
 
+local function render_local_context(session, context)
+  local pending_providers = { "LSP" }
+  if config.ast_grep.enabled then
+    pending_providers[#pending_providers + 1] = "ast-grep"
+  end
+  render(
+    session,
+    model.build(context, {
+      pending_providers = pending_providers,
+    }, config)
+  )
+end
+
 local function load_context(session, context, generation)
   if not is_current(session, generation) then
     return
   end
 
   session.current = context
-  render(session, model.loading(context, "Loading local and project relationships…"))
 
   local relationships = {
     incoming = {},
@@ -172,36 +184,71 @@ local function load_context(session, context, generation)
   end
 
   if context.client_id then
-    tasks[#tasks + 1] = function(done)
-      return lsp.relationships(context, session.source_buffer, done, {
-        timeout_ms = config.lsp.relationship_timeout_ms,
-      })
-    end
+    tasks[#tasks + 1] = {
+      id = "lsp",
+      label = context.client_name or "LSP",
+      start = function(done)
+        return lsp.relationships(context, session.source_buffer, done, {
+          timeout_ms = config.lsp.relationship_timeout_ms,
+        })
+      end,
+    }
   end
   if config.ast_grep.enabled then
-    tasks[#tasks + 1] = function(done)
-      return ast_grep.relationships(context, config.ast_grep, done)
-    end
+    tasks[#tasks + 1] = {
+      id = "ast_grep",
+      label = "ast-grep",
+      start = function(done)
+        return ast_grep.relationships(context, config.ast_grep, done)
+      end,
+    }
   end
 
-  if #tasks == 0 then
-    render(session, model.build(context, relationships, config))
-    return
-  end
-
-  local pending = #tasks
+  local pending = {}
   for _, task in ipairs(tasks) do
-    local cancel = task(function(result)
-      if not is_current(session, generation) then
+    pending[task.id] = true
+  end
+
+  local function render_progress()
+    if not is_current(session, generation) then
+      return
+    end
+    local pending_providers = {}
+    for _, task in ipairs(tasks) do
+      if pending[task.id] then
+        pending_providers[#pending_providers + 1] = task.label
+      end
+    end
+    relationships.pending_providers = pending_providers
+    render(session, model.build(context, relationships, config))
+  end
+
+  -- Tree-sitter context is already available, so show it before starting any
+  -- project-wide work. Later provider results enrich this same bounded view.
+  render_progress()
+
+  for _, task in ipairs(tasks) do
+    local completed = false
+    local function done(result)
+      if completed or not is_current(session, generation) then
         return
       end
+      completed = true
       merge(result)
-      pending = pending - 1
-      if pending == 0 then
-        render(session, model.build(context, relationships, config))
-      end
-    end)
-    register_cancel(session, cancel)
+      pending[task.id] = nil
+      render_progress()
+    end
+
+    local ok, cancel_or_error = pcall(task.start, done)
+    if ok then
+      register_cancel(session, cancel_or_error)
+    elseif not completed and is_current(session, generation) then
+      completed = true
+      pending[task.id] = nil
+      relationships.errors[#relationships.errors + 1] =
+        string.format("%s failed to start: %s", task.label, tostring(cancel_or_error))
+      render_progress()
+    end
   end
 end
 
@@ -231,11 +278,15 @@ function M.show_here(tabpage)
   session.restore_row_id = nil
   session.active = true
   local generation = begin_run(session, true)
-  render(session, model.error("Resolving the symbol under the cursor…"))
 
   local cursor = vim.api.nvim_win_get_cursor(session.source_window)
   local position = { line = cursor[1] - 1, character = cursor[2] }
   local syntax_context = treesitter.resolve(session.source_buffer, position, nil)
+  if syntax_context then
+    render_local_context(session, syntax_context)
+  else
+    render(session, model.error("Resolving the symbol under the cursor…"))
+  end
   local resolved = false
 
   local function finish(context, err)
@@ -342,7 +393,11 @@ local function focus_location(session, row)
     load_context(session, context, generation)
   end
 
-  render(session, model.error("Resolving the focused relationship…"))
+  if syntax_context then
+    render_local_context(session, syntax_context)
+  else
+    render(session, model.error("Resolving the focused relationship…"))
+  end
   local cancel = lsp.resolve(buffer, position, finish)
   register_cancel(session, cancel)
   local timer = vim.defer_fn(function()

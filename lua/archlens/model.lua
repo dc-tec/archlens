@@ -411,6 +411,8 @@ end
 function M.build(context, relationships, opts)
   opts = opts or {}
   relationships = relationships or {}
+  local pending_providers = vim.deepcopy(relationships.pending_providers or {})
+  local resolving_lsp = vim.tbl_contains(pending_providers, "LSP")
 
   local cache = {}
   local incoming, incoming_hidden =
@@ -437,7 +439,7 @@ function M.build(context, relationships, opts)
   local siblings = syntax_rows(context, "siblings")
 
   local notes = {}
-  if not context.supports_calls then
+  if not context.supports_calls and not resolving_lsp then
     notes[#notes + 1] = string.format(
       "%s has no call hierarchy here; project references and syntax structure are used instead.",
       context.client_name or "The attached language server"
@@ -511,7 +513,7 @@ function M.build(context, relationships, opts)
       rows = siblings,
     }
   end
-  if #sections == 0 and #notes == 0 then
+  if #sections == 0 and #notes == 0 and #pending_providers == 0 then
     notes[#notes + 1] = "No local or project relationships were returned."
   end
 
@@ -535,6 +537,7 @@ function M.build(context, relationships, opts)
     sections = sections,
     notes = notes,
     providers = providers,
+    pending_providers = pending_providers,
   }
 end
 

@@ -60,6 +60,10 @@ function M.build(model, opts)
     add(table.concat(model.providers, " · "), nil, "DiagnosticHint")
   end
 
+  if model.pending_providers and #model.pending_providers > 0 then
+    add("Pending: " .. table.concat(model.pending_providers, " · "), nil, "DiagnosticInfo")
+  end
+
   if model.focus then
     local focus = model.focus
     add("")

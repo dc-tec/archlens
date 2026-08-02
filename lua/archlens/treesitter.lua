@@ -8,6 +8,7 @@ local kind_by_label = {
   Class = vim.lsp.protocol.SymbolKind.Class,
   Constant = vim.lsp.protocol.SymbolKind.Constant,
   Enum = vim.lsp.protocol.SymbolKind.Enum,
+  Field = vim.lsp.protocol.SymbolKind.Field,
   Function = vim.lsp.protocol.SymbolKind.Function,
   Implementation = vim.lsp.protocol.SymbolKind.Namespace,
   Interface = vim.lsp.protocol.SymbolKind.Interface,
@@ -187,8 +188,14 @@ local function merge_base(syntax_context, base_context)
   merged.supports_calls = base_context.supports_calls
   merged.call_item = base_context.supports_calls and base_context.item or nil
   merged.wire_call_item = base_context.wire_call_item
+  merged.wire_type_item = base_context.wire_type_item
+  merged.module_context = base_context.module_context
+  merged.configuration = base_context.configuration
   merged.language = syntax_context.language
   merged.syntax_node_type = syntax_context.syntax_node_type
+  if merged.configuration then
+    merged.scope = "configuration"
+  end
   return merged
 end
 
@@ -265,12 +272,102 @@ function M.resolve(bufnr, position, base_context)
     children = child_contexts,
     siblings = siblings,
   }
+  if not context.configuration and adapter.configuration then
+    local container_context = ancestors[#ancestors] or syntax_context
+    local configured, configuration =
+      pcall(adapter.configuration, bufnr, context, container_context)
+    if configured and configuration then
+      context.configuration = configuration
+      context.scope = "configuration"
+    end
+  end
   return context
 end
 
 function M.supports(bufnr)
   local adapter = adapters.get(language_for(bufnr))
   return adapter ~= nil and adapter.treesitter ~= nil
+end
+
+function M.supports_imports(bufnr)
+  local adapter = adapters.get(language_for(bufnr))
+  return adapter ~= nil and adapter.treesitter ~= nil and adapter.treesitter.imports ~= nil
+end
+
+function M.import_sites(bufnr)
+  local language = language_for(bufnr)
+  local adapter = adapters.get(language)
+  local spec = adapter and adapter.treesitter and adapter.treesitter.imports
+  if not spec then
+    return {}
+  end
+
+  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, language, { error = false })
+  if not parser_ok or not parser then
+    return {}, parser_ok and "Tree-sitter parser unavailable" or tostring(parser)
+  end
+  local query_ok, query = pcall(vim.treesitter.query.parse, language, spec.query)
+  if not query_ok then
+    return {}, tostring(query)
+  end
+  local trees = parser:parse()
+  local root = trees and trees[1] and trees[1]:root()
+  if not root then
+    return {}, "Tree-sitter returned no syntax tree"
+  end
+
+  local sites = {}
+  local seen = {}
+  local uri = vim.uri_from_bufnr(bufnr)
+  local iter_ok, iter_error = pcall(function()
+    for capture_id, node in query:iter_captures(root, bufnr, 0, -1) do
+      if query.captures[capture_id] == spec.capture then
+        local range = node_range(node)
+        local text = node_text(node, bufnr)
+        local normalized = { name = text }
+        if spec.normalize then
+          local ok, value = pcall(spec.normalize, node, text, bufnr)
+          normalized = ok and value or nil
+        end
+        if normalized and type(normalized.name) == "string" and normalized.name ~= "" then
+          local position = vim.deepcopy(range.start)
+          position.character = position.character + (normalized.position_offset or 0)
+          local key = table.concat({
+            normalized.name,
+            range.start.line,
+            range.start.character,
+            range["end"].line,
+            range["end"].character,
+          }, ":")
+          if not seen[key] then
+            seen[key] = true
+            local target_locations = {}
+            for _, path in ipairs(normalized.target_paths or {}) do
+              target_locations[#target_locations + 1] = {
+                uri = vim.uri_from_fname(path),
+                range = {
+                  start = { line = 0, character = 0 },
+                  ["end"] = { line = 0, character = 0 },
+                },
+              }
+            end
+            sites[#sites + 1] = {
+              name = normalized.name,
+              location = { uri = uri, range = range, full_range = range },
+              position = position,
+              target_locations = target_locations,
+              resolution_provider = normalized.resolution_provider,
+              resolution_method = normalized.resolution_method,
+            }
+          end
+        end
+      end
+    end
+  end)
+  if not iter_ok then
+    return {}, tostring(iter_error)
+  end
+  return sites
 end
 
 return M

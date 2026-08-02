@@ -7,9 +7,11 @@ local minimum_version = { major = 0, minor = 12 }
 
 local lsp_methods = {
   { method = "textDocument/documentSymbol", label = "document symbols" },
+  { method = "textDocument/definition", label = "import target definitions" },
   { method = "textDocument/prepareCallHierarchy", label = "call hierarchy preparation" },
   { method = "callHierarchy/incomingCalls", label = "incoming calls" },
   { method = "callHierarchy/outgoingCalls", label = "outgoing calls" },
+  { method = "textDocument/prepareTypeHierarchy", label = "type hierarchy" },
   { method = "textDocument/implementation", label = "implementations" },
   { method = "textDocument/references", label = "project references" },
 }

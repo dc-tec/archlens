@@ -1,13 +1,11 @@
 local adapters = require("archlens.adapters")
 local graph = require("archlens.graph")
+local scope = require("archlens.scope")
+local test_paths = require("archlens.test_paths")
 
 local M = {}
 
-M.default_globs = {
-  "!vendor/**",
-  "!node_modules/**",
-  "!target/**",
-}
+M.default_globs = {}
 
 local function empty(note)
   local result = graph.delta()
@@ -33,32 +31,35 @@ local function absolute_path(root, path)
   return vim.fs.normalize(root .. "/" .. path)
 end
 
-local function decode_matches(stdout, root, maximum)
+local function decode_matches(stdout, root, maximum, filters)
   local matches = {}
   local seen = {}
   local total = 0
   for line in (stdout or ""):gmatch("[^\r\n]+") do
     local ok, decoded = pcall(vim.json.decode, line)
     if ok and type(decoded) == "table" and decoded.file and decoded.range then
-      total = total + 1
       local path = absolute_path(root, decoded.file)
       local range = decoded.range
       local start = range.start or {}
       local key = table.concat({ path, start.line or 0, start.column or 0 }, ":")
-      if not seen[key] and #matches < maximum then
+      local kind = scope.classify(root, path, filters)
+      if not seen[key] and scope.visible(kind, filters) then
         seen[key] = true
-        matches[#matches + 1] = {
-          uri = vim.uri_from_fname(path),
-          range = {
-            start = { line = start.line or 0, character = start.column or 0 },
-            ["end"] = {
-              line = (range["end"] or {}).line or start.line or 0,
-              character = (range["end"] or {}).column or start.column or 0,
+        total = total + 1
+        if #matches < maximum then
+          matches[#matches + 1] = {
+            uri = vim.uri_from_fname(path),
+            range = {
+              start = { line = start.line or 0, character = start.column or 0 },
+              ["end"] = {
+                line = (range["end"] or {}).line or start.line or 0,
+                character = (range["end"] or {}).column or start.column or 0,
+              },
             },
-          },
-          text = vim.trim((decoded.lines or decoded.text or ""):gsub("%s+", " ")),
-          provider = "ast-grep",
-        }
+            text = vim.trim((decoded.lines or decoded.text or ""):gsub("%s+", " ")),
+            provider = "ast-grep",
+          }
+        end
       end
     end
   end
@@ -90,6 +91,41 @@ local function command_args(command, context, language, root, options)
     tostring(options.threads or 1),
   })
   for _, glob in ipairs(options.globs or M.default_globs) do
+    vim.list_extend(args, { "--globs", glob })
+  end
+  local filters = options.filters or {}
+  local filter_globs = {}
+  if not filters.include_vendored then
+    vim.list_extend(filter_globs, {
+      "!**/vendor/**",
+      "!**/node_modules/**",
+      "!**/.venv/**",
+      "!**/venv/**",
+      "!**/_opam/**",
+    })
+  end
+  if not filters.include_generated then
+    vim.list_extend(filter_globs, {
+      "!**/.direnv/**",
+      "!**/_build/**",
+      "!**/generated/**",
+      "!**/target/**",
+      "!**/zz_generated.*",
+      "!**/zz_generated_*",
+      "!**/*_generated.*",
+      "!**/*_generated_*",
+      "!**/*.generated.*",
+      "!**/*.generated_*",
+      "!**/*.gen.*",
+      "!**/*.pb.go",
+    })
+  end
+  for _, prefix in ipairs(filters.exclude or {}) do
+    if type(prefix) == "string" and prefix ~= "" then
+      filter_globs[#filter_globs + 1] = "!" .. prefix:gsub("^%./", ""):gsub("/$", "") .. "/**"
+    end
+  end
+  for _, glob in ipairs(filter_globs) do
     vim.list_extend(args, { "--globs", glob })
   end
   args[#args + 1] = root
@@ -159,18 +195,25 @@ function M.relationships(context, options, callback)
       )
       return
     end
-    local matches, omitted = decode_matches(result.stdout, root, maximum)
+    local matches, omitted = decode_matches(result.stdout, root, maximum, options.filters or {})
     local delta = graph.delta()
     local focus = graph.node_from_context(context)
     for _, match in ipairs(matches) do
+      local path = vim.uri_to_fname(match.uri)
+      local kind = test_paths.is_test(
+        context.language,
+        path,
+        context.root_dir,
+        match.range.start.line
+      ) and "test_structural" or "structural"
       local related = graph.node_from_location({ uri = match.uri, range = match.range }, {
         name = match.text,
-        kind_name = "Structural match",
+        kind_name = kind == "test_structural" and "Test match" or "Structural match",
         position_encoding = "utf-8",
       })
       graph.add_edge(
         delta,
-        graph.edge("structural", related, focus, {
+        graph.edge(kind, related, focus, {
           provider = match.provider or "ast-grep",
           method = "structural",
           class = "structural",

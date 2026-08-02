@@ -1,5 +1,6 @@
 local ast_grep = require("archlens.ast_grep")
 local graph = require("archlens.graph")
+local imports = require("archlens.imports")
 local lsp = require("archlens.lsp")
 local model = require("archlens.model")
 local treesitter = require("archlens.treesitter")
@@ -11,6 +12,18 @@ local config = {
   width = 56,
   max_items = 8,
   include_external = false,
+  filters = {
+    include_generated = false,
+    include_vendored = false,
+    exclude = {},
+  },
+  imports = {
+    enabled = true,
+    timeout_ms = 5000,
+    max_imports = 24,
+    max_sites = 96,
+    concurrency = 4,
+  },
   lsp = {
     resolve_timeout_ms = 5000,
     relationship_timeout_ms = 8000,
@@ -166,7 +179,7 @@ local function load_context(session, context, generation)
     graph.merge(relationships, result or graph.delta())
   end
 
-  if context.client_id then
+  if context.client_id and not context.module_context then
     tasks[#tasks + 1] = {
       id = "lsp",
       label = context.client_name or "LSP",
@@ -177,12 +190,27 @@ local function load_context(session, context, generation)
       end,
     }
   end
-  if config.ast_grep.enabled then
+  if config.imports.enabled and treesitter.supports_imports(session.source_buffer) then
+    tasks[#tasks + 1] = {
+      id = "imports",
+      label = "Imports",
+      start = function(done)
+        local options = vim.deepcopy(config.imports)
+        options.filters = vim.deepcopy(config.filters)
+        options.filters.include_external = config.include_external
+        return imports.relationships(context, session.source_buffer, options, done)
+      end,
+    }
+  end
+  if config.ast_grep.enabled and not context.module_context and not context.configuration then
     tasks[#tasks + 1] = {
       id = "ast_grep",
       label = "ast-grep",
       start = function(done)
-        return ast_grep.relationships(context, config.ast_grep, done)
+        local options = vim.deepcopy(config.ast_grep)
+        options.filters = vim.deepcopy(config.filters)
+        options.filters.include_external = config.include_external
+        return ast_grep.relationships(context, options, done)
       end,
     }
   end
@@ -315,13 +343,27 @@ local function same_context(left, right)
     and left_start.character == right_start.character
 end
 
+local function buffer_for_uri(uri)
+  local buffer = vim.uri_to_bufnr(uri)
+  vim.fn.bufload(buffer)
+  if not valid_buffer(buffer) then
+    return nil
+  end
+  if vim.bo[buffer].filetype == "" and vim.filetype and vim.filetype.match then
+    local ok, filetype = pcall(vim.filetype.match, { buf = buffer })
+    if ok and filetype and filetype ~= "" then
+      vim.bo[buffer].filetype = filetype
+    end
+  end
+  return buffer
+end
+
 local function repair_source_buffer(session, context)
   if not context or not context.location or not context.location.uri then
     return valid_buffer(session.source_buffer)
   end
-  local buffer = vim.uri_to_bufnr(context.location.uri)
-  vim.fn.bufload(buffer)
-  if not valid_buffer(buffer) then
+  local buffer = buffer_for_uri(context.location.uri)
+  if not buffer then
     return false
   end
   session.source_buffer = buffer
@@ -341,12 +383,13 @@ local function focus_location(session, row)
   session.history[#session.history + 1] = {
     context = session.current,
     selected_row_id = view.selected_row_id(session),
+    expanded = vim.deepcopy(session.expanded),
+    collapsed = vim.deepcopy(session.collapsed),
   }
   session.restore_row_id = nil
 
-  local buffer = vim.uri_to_bufnr(row.location.uri)
-  vim.fn.bufload(buffer)
-  if not valid_buffer(buffer) then
+  local buffer = buffer_for_uri(row.location.uri)
+  if not buffer then
     table.remove(session.history)
     return
   end
@@ -413,6 +456,8 @@ function M.focus(target, tabpage)
   session.history[#session.history + 1] = {
     context = session.current,
     selected_row_id = view.selected_row_id(session),
+    expanded = vim.deepcopy(session.expanded),
+    collapsed = vim.deepcopy(session.collapsed),
   }
   session.restore_row_id = nil
   local generation = begin_run(session, false)
@@ -427,6 +472,8 @@ function M.back(tabpage)
   end
   session.restore_row_id = entry.selected_row_id
   local generation = begin_run(session, false)
+  session.expanded = entry.expanded or {}
+  session.collapsed = entry.collapsed or {}
   load_context(session, entry.context, generation)
 end
 
@@ -440,6 +487,7 @@ function M.refresh(tabpage)
     render(session, model.error("ArchLens could not recover its source buffer."))
     return
   end
+  imports.clear_cache()
   session.restore_row_id = view.selected_row_id(session)
   local generation = begin_run(session, false)
   load_context(session, session.current, generation)

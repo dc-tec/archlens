@@ -1,17 +1,47 @@
 local graph = require("archlens.graph")
 local model = require("archlens.model")
+local test_paths = require("archlens.test_paths")
 
 local M = {}
 
 local internal_position_encoding = "utf-8"
 local methods = {
   symbols = "textDocument/documentSymbol",
+  definition = "textDocument/definition",
   prepare = "textDocument/prepareCallHierarchy",
   incoming = "callHierarchy/incomingCalls",
   outgoing = "callHierarchy/outgoingCalls",
+  prepare_type = "textDocument/prepareTypeHierarchy",
+  supertypes = "typeHierarchy/supertypes",
+  subtypes = "typeHierarchy/subtypes",
   references = "textDocument/references",
   implementation = "textDocument/implementation",
 }
+
+local implementation_kinds = {
+  [vim.lsp.protocol.SymbolKind.Class] = true,
+  [vim.lsp.protocol.SymbolKind.Method] = true,
+  [vim.lsp.protocol.SymbolKind.Property] = true,
+  [vim.lsp.protocol.SymbolKind.Field] = true,
+  [vim.lsp.protocol.SymbolKind.Enum] = true,
+  [vim.lsp.protocol.SymbolKind.Interface] = true,
+  [vim.lsp.protocol.SymbolKind.Object] = true,
+  [vim.lsp.protocol.SymbolKind.Struct] = true,
+  [vim.lsp.protocol.SymbolKind.TypeParameter] = true,
+}
+
+local type_hierarchy_kinds = {
+  [vim.lsp.protocol.SymbolKind.Class] = true,
+  [vim.lsp.protocol.SymbolKind.Enum] = true,
+  [vim.lsp.protocol.SymbolKind.Interface] = true,
+  [vim.lsp.protocol.SymbolKind.Object] = true,
+  [vim.lsp.protocol.SymbolKind.Struct] = true,
+  [vim.lsp.protocol.SymbolKind.TypeParameter] = true,
+}
+
+local function supports_symbol_kind(context, kinds)
+  return context.kind == nil or kinds[context.kind] == true
+end
 
 local function client_provider(client, supports_calls)
   return {
@@ -224,6 +254,7 @@ local function normalize_call_item(item, encoding, fallback_bufnr)
     return nil
   end
   local normalized = vim.deepcopy(item)
+  normalized.data = nil
   normalized.range = range_from_client(item.uri, item.range, encoding, fallback_bufnr)
   normalized.selectionRange =
     range_from_client(item.uri, item.selectionRange, encoding, fallback_bufnr)
@@ -231,6 +262,10 @@ local function normalize_call_item(item, encoding, fallback_bufnr)
     return nil
   end
   return normalized
+end
+
+local function normalize_type_item(item, encoding, fallback_bufnr)
+  return normalize_call_item(item, encoding, fallback_bufnr)
 end
 
 local function context_from_call_item(item, client, fallback_bufnr)
@@ -299,14 +334,87 @@ local function call_edge(call, direction, context)
   })
 end
 
+local function type_edge(item, kind, context, client, bufnr)
+  local normalized = normalize_type_item(item, client.offset_encoding, bufnr)
+  if not normalized then
+    return nil
+  end
+  local row_context = model.context_from_item(normalized, client_provider(client, false))
+  row_context.wire_type_item = item
+  local focus = graph.node_from_context(context)
+  local related = graph.node_from_context(row_context)
+  local source = kind == "subtypes" and related or focus
+  local target = kind == "subtypes" and focus or related
+  return graph.edge(kind, source, target, {
+    provider = context.client_name or "LSP",
+    method = kind == "supertypes" and methods.supertypes or methods.subtypes,
+    class = "semantic",
+  }, {
+    position_encoding = internal_position_encoding,
+  })
+end
+
+local function type_item_score(item, context)
+  local score = 0
+  local context_location = context.location or {}
+  local context_position = context_location.range and context_location.range.start
+  if item.uri == context_location.uri then
+    score = score + 8
+  end
+  if item.name == context.name then
+    score = score + 4
+  end
+  if context_position and model.range_contains(item.selectionRange, context_position) then
+    score = score + 2
+  end
+  if context_position and model.range_contains(item.range, context_position) then
+    score = score + 1
+  end
+  return score
+end
+
+local function select_type_item(items, context, client, bufnr)
+  local candidates = {}
+  for index, item in ipairs(items or {}) do
+    local normalized = normalize_type_item(item, client.offset_encoding, bufnr)
+    if normalized then
+      candidates[#candidates + 1] = {
+        index = index,
+        item = item,
+        normalized = normalized,
+        score = type_item_score(normalized, context),
+      }
+    end
+  end
+  table.sort(candidates, function(left, right)
+    if left.score ~= right.score then
+      return left.score > right.score
+    end
+    if left.normalized.name ~= right.normalized.name then
+      return left.normalized.name < right.normalized.name
+    end
+    if left.normalized.uri ~= right.normalized.uri then
+      return left.normalized.uri < right.normalized.uri
+    end
+    return left.index < right.index
+  end)
+  return candidates[1] and candidates[1].item or nil, candidates
+end
+
 local function location_edge(location, kind, context)
   local focus = graph.node_from_context(context)
   local related = graph.node_from_location(location, {
-    kind_name = kind == "implementations" and "Implementation" or "Reference",
+    kind_name = kind == "implementations" and "Implementation"
+      or kind == "test_references" and "Test reference"
+      or kind == "configuration_consumers" and "Configuration use"
+      or "Reference",
     position_encoding = internal_position_encoding,
   })
-  local source = kind == "references" and related or focus
-  local target = kind == "references" and focus or related
+  local reverse = kind == "references"
+    or kind == "test_references"
+    or kind == "configuration_consumers"
+  local source = reverse and related or focus
+  local target = reverse and focus or related
   local occurrences = {}
   if location.origin_range then
     occurrences[1] = {
@@ -580,13 +688,19 @@ end
 
 function M.relationships(context, bufnr, callback, options)
   options = options or {}
+  local result = graph.delta()
   local client = vim.lsp.get_client_by_id(context.client_id)
   if not client or client:is_stopped() then
-    callback(graph.delta())
+    if context.configuration then
+      graph.add_note(
+        result,
+        "Configuration uses require an active language server with project reference support."
+      )
+    end
+    callback(result)
     return function() end
   end
 
-  local result = graph.delta()
   graph.add_contributor(result, "lsp:" .. tostring(client.id), client.name)
   local pending = 0
   local cancelled = false
@@ -606,8 +720,61 @@ function M.relationships(context, bufnr, callback, options)
     callback(result)
   end
 
+  local request
+
+  local function type_requests(item)
+    return {
+      {
+        key = "supertypes",
+        label = "Supertypes",
+        method = methods.supertypes,
+        params = { item = item },
+      },
+      {
+        key = "subtypes",
+        label = "Subtypes",
+        method = methods.subtypes,
+        params = { item = item },
+      },
+    }
+  end
+
+  local function enqueue(specs)
+    pending = pending + #specs
+    for _, spec in ipairs(specs) do
+      request(spec)
+    end
+  end
+
   local function finish(spec, err, value)
     if cancelled or completed then
+      return
+    end
+    if spec.key == "prepare_type" then
+      if err then
+        result.errors[#result.errors + 1] =
+          string.format("%s failed: %s", spec.label, as_error(err))
+      else
+        local item, candidates = select_type_item(value, context, client, bufnr)
+        if item then
+          if #candidates > 1 then
+            result.notes[#result.notes + 1] = string.format(
+              "Type hierarchy preparation returned %d candidates; using %s.",
+              #candidates,
+              item.name
+            )
+          end
+          enqueue(type_requests(item))
+        elseif value and #value > 0 then
+          result.errors[#result.errors + 1] = string.format(
+            "Type hierarchy preparation omitted %d result%s because its source text was unavailable for position conversion.",
+            #value,
+            #value == 1 and "" or "s"
+          )
+        end
+      end
+      pending = pending - 1
+      complete()
       return
     end
     if err then
@@ -616,14 +783,37 @@ function M.relationships(context, bufnr, callback, options)
       local normalized = {}
       local skipped = 0
       if spec.key == "implementations" or spec.key == "references" then
-        for _, location in ipairs(location_list(value)) do
+        local locations = location_list(value)
+        for _, location in ipairs(locations) do
           local normalized_location =
             normalize_location(location, client.offset_encoding, bufnr, spec.origin_uri)
           if normalized_location then
-            normalized[#normalized + 1] = location_edge(normalized_location, spec.key, context)
+            local kind = spec.key
+            local path_ok, path = pcall(vim.uri_to_fname, normalized_location.uri)
+            if kind == "references" and context.configuration then
+              kind = "configuration_consumers"
+            elseif
+              kind == "references"
+              and path_ok
+              and test_paths.is_test(
+                context.language,
+                path,
+                context.root_dir,
+                normalized_location.range.start.line
+              )
+            then
+              kind = "test_references"
+            end
+            normalized[#normalized + 1] = location_edge(normalized_location, kind, context)
           else
             skipped = skipped + 1
           end
+        end
+        if spec.key == "references" and context.configuration and #locations == 0 then
+          result.notes[#result.notes + 1] = string.format(
+            "%s returned no configuration uses for this field.",
+            context.client_name or "The language server"
+          )
         end
       elseif spec.key == "incoming" or spec.key == "outgoing" then
         for _, call in ipairs(value or {}) do
@@ -631,6 +821,15 @@ function M.relationships(context, bufnr, callback, options)
             normalize_call(call, spec.key, client.offset_encoding, bufnr, spec.origin_uri)
           if normalized_call then
             normalized[#normalized + 1] = call_edge(normalized_call, spec.key, context)
+          else
+            skipped = skipped + 1
+          end
+        end
+      elseif spec.key == "supertypes" or spec.key == "subtypes" then
+        for _, item in ipairs(value or {}) do
+          local edge = type_edge(item, spec.key, context, client, bufnr)
+          if edge then
+            normalized[#normalized + 1] = edge
           else
             skipped = skipped + 1
           end
@@ -651,7 +850,7 @@ function M.relationships(context, bufnr, callback, options)
   end
 
   local requests = {}
-  local call_item = context.wire_call_item or context.call_item or context.item
+  local call_item = context.wire_call_item or context.call_item
   if context.supports_calls and call_item then
     for _, request in ipairs({
       {
@@ -675,15 +874,37 @@ function M.relationships(context, bufnr, callback, options)
     end
   end
 
+  if context.wire_type_item then
+    vim.list_extend(requests, type_requests(context.wire_type_item))
+  end
+
   local reference_range = context.location and context.location.range
   local supports_implementation = not context.file_fallback
+    and not context.module_context
+    and not context.configuration
+    and supports_symbol_kind(context, implementation_kinds)
     and client:supports_method(methods.implementation, bufnr)
   local supports_references = not context.file_fallback
+    and not context.module_context
     and client:supports_method(methods.references, bufnr)
+  if context.configuration and not supports_references then
+    graph.add_note(
+      result,
+      string.format(
+        "%s does not support project references for configuration fields.",
+        context.client_name or client.name
+      )
+    )
+  end
+  local supports_type_hierarchy = not context.file_fallback
+    and not context.module_context
+    and not context.wire_type_item
+    and supports_symbol_kind(context, type_hierarchy_kinds)
+    and client:supports_method(methods.prepare_type, bufnr)
   if
     reference_range
     and context.location.uri
-    and (supports_implementation or supports_references)
+    and (supports_implementation or supports_references or supports_type_hierarchy)
   then
     local position = position_to_client_uri(
       context.location.uri,
@@ -716,6 +937,17 @@ function M.relationships(context, bufnr, callback, options)
         },
       }
     end
+    if position and supports_type_hierarchy then
+      requests[#requests + 1] = {
+        key = "prepare_type",
+        label = "Type hierarchy preparation",
+        method = methods.prepare_type,
+        params = {
+          textDocument = { uri = context.location.uri },
+          position = position,
+        },
+      }
+    end
     if not position then
       result.errors[#result.errors + 1] =
         "LSP locations were skipped because their source text was unavailable for position conversion."
@@ -723,7 +955,7 @@ function M.relationships(context, bufnr, callback, options)
   end
   pending = #requests
 
-  local function request(spec)
+  request = function(spec)
     local ok, request_id = client:request(spec.method, spec.params, function(err, value)
       finish(spec, err, value)
     end, bufnr)
@@ -740,21 +972,23 @@ function M.relationships(context, bufnr, callback, options)
     for _, spec in ipairs(requests) do
       request(spec)
     end
-    local timeout_ms = options.timeout_ms or 8000
-    timer = vim.defer_fn(function()
-      if cancelled or completed then
-        return
-      end
-      for _, request_id in ipairs(request_ids) do
-        if client.requests[request_id] then
-          pcall(client.cancel_request, client, request_id)
+    if not completed then
+      local timeout_ms = options.timeout_ms or 8000
+      timer = vim.defer_fn(function()
+        if cancelled or completed then
+          return
         end
-      end
-      result.errors[#result.errors + 1] =
-        string.format("LSP relationship requests exceeded %d ms and were stopped.", timeout_ms)
-      pending = 0
-      complete()
-    end, timeout_ms)
+        for _, request_id in ipairs(request_ids) do
+          if client.requests[request_id] then
+            pcall(client.cancel_request, client, request_id)
+          end
+        end
+        result.errors[#result.errors + 1] =
+          string.format("LSP relationship requests exceeded %d ms and were stopped.", timeout_ms)
+        pending = 0
+        complete()
+      end, timeout_ms)
+    end
   end
 
   return function()
@@ -771,6 +1005,65 @@ function M.relationships(context, bufnr, callback, options)
       if current_client.requests[request_id] then
         pcall(current_client.cancel_request, current_client, request_id)
       end
+    end
+  end
+end
+
+function M.definition_at(context, bufnr, location, position, callback)
+  local client = context.client_id and vim.lsp.get_client_by_id(context.client_id) or nil
+  if not client or client:is_stopped() or not client:supports_method(methods.definition, bufnr) then
+    callback({}, "definition unavailable", 0)
+    return function() end
+  end
+  local client_position =
+    position_to_client_uri(location.uri, position, client.offset_encoding, bufnr)
+  if not client_position then
+    callback({}, "source text unavailable for position conversion", 0)
+    return function() end
+  end
+
+  local completed = false
+  local request_id
+  local ok
+  ok, request_id = client:request(methods.definition, {
+    textDocument = { uri = location.uri },
+    position = client_position,
+  }, function(err, value)
+    if completed then
+      return
+    end
+    completed = true
+    if err then
+      callback({}, as_error(err), 0)
+      return
+    end
+    local locations = {}
+    local skipped = 0
+    for _, raw_location in ipairs(location_list(value)) do
+      local normalized =
+        normalize_location(raw_location, client.offset_encoding, bufnr, location.uri)
+      if normalized then
+        locations[#locations + 1] = normalized
+      else
+        skipped = skipped + 1
+      end
+    end
+    callback(locations, nil, skipped)
+  end, bufnr)
+  if not ok then
+    completed = true
+    callback({}, "request rejected", 0)
+    return function() end
+  end
+
+  return function()
+    if completed then
+      return
+    end
+    completed = true
+    local current = vim.lsp.get_client_by_id(context.client_id)
+    if current and request_id and current.requests[request_id] then
+      pcall(current.cancel_request, current, request_id)
     end
   end
 end

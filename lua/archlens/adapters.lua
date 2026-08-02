@@ -45,6 +45,337 @@ local function go_query(context)
   return "func _() { " .. context.name .. "($$$ARGS) }", "call_expression"
 end
 
+local function unquote(text)
+  if not text or #text < 2 then
+    return text
+  end
+  local first = text:sub(1, 1)
+  local last = text:sub(-1)
+  if (first == '"' and last == '"') or (first == "`" and last == "`") then
+    return text:sub(2, -2)
+  end
+  return text
+end
+
+local function go_import(_, text)
+  return { name = unquote(text), position_offset = 1 }
+end
+
+local go_configuration_tags = {
+  env = true,
+  envconfig = true,
+  json = true,
+  mapstructure = true,
+  toml = true,
+  yaml = true,
+}
+
+local function go_configuration(bufnr, context, syntax_context)
+  if context.kind ~= vim.lsp.protocol.SymbolKind.Field then
+    return nil
+  end
+  local container = syntax_context and syntax_context.name or ""
+  if
+    not container:match("Config$")
+    and not container:match("Options$")
+    and not container:match("Settings$")
+    and not container:match("Spec$")
+  then
+    return nil
+  end
+  local location = context.location
+  local line = location
+      and location.range
+      and vim.api.nvim_buf_get_lines(
+        bufnr,
+        location.range.start.line,
+        location.range.start.line + 1,
+        false
+      )[1]
+    or ""
+  local tag = line:match("`([^`]*)`") or ""
+  local recognized = false
+  for name in tag:gmatch("([%w_]+):") do
+    recognized = recognized or go_configuration_tags[name] == true
+  end
+  if not recognized then
+    return nil
+  end
+  return { key = context.name, container = container, source = "field" }
+end
+
+local function rust_configuration(bufnr, context, syntax_context)
+  if context.kind ~= vim.lsp.protocol.SymbolKind.Field then
+    return nil
+  end
+  local container = syntax_context and syntax_context.name or ""
+  if
+    not container:match("Config$")
+    and not container:match("Options$")
+    and not container:match("Settings$")
+  then
+    return nil
+  end
+  local path = vim.api.nvim_buf_get_name(bufnr)
+  local explicit_file = vim.fs.basename(path) == "config.rs"
+  local container_line = syntax_context
+      and syntax_context.location
+      and syntax_context.location.full_range
+      and syntax_context.location.full_range.start.line
+    or 0
+  local start_line = math.max(0, container_line - 3)
+  local prefix =
+    table.concat(vim.api.nvim_buf_get_lines(bufnr, start_line, container_line + 1, false), "\n")
+  if not explicit_file and not prefix:match("derive[^\n]*Deserialize") then
+    return nil
+  end
+  return { key = context.name, container = container, source = "field" }
+end
+
+local function existing_paths(paths)
+  local targets = {}
+  for _, path in ipairs(paths) do
+    local stat = vim.uv.fs_stat(path)
+    if stat and stat.type == "file" then
+      targets[#targets + 1] = vim.fs.normalize(path)
+    end
+  end
+  return targets
+end
+
+local function node_text(node, bufnr)
+  local ok, text = pcall(vim.treesitter.get_node_text, node, bufnr)
+  return ok and text or ""
+end
+
+local function rust_module(node, text, bufnr)
+  local parent = node:parent()
+  if parent and #(parent:field("body") or {}) > 0 then
+    return nil
+  end
+  local source = vim.api.nvim_buf_get_name(bufnr)
+  local directory = vim.fs.dirname(source)
+  local filename = vim.fs.basename(source)
+  local stem = filename:match("^(.*)%.rs$")
+  if stem and stem ~= "main" and stem ~= "lib" and stem ~= "mod" then
+    directory = vim.fs.joinpath(directory, stem)
+  end
+  local module_path = {}
+  local ancestor = parent and parent:parent() or nil
+  while ancestor do
+    if ancestor:type() == "mod_item" and #(ancestor:field("body") or {}) > 0 then
+      local names = ancestor:field("name") or {}
+      if names[1] then
+        table.insert(module_path, 1, node_text(names[1], bufnr))
+      end
+    end
+    ancestor = ancestor:parent()
+  end
+  for _, module in ipairs(module_path) do
+    directory = vim.fs.joinpath(directory, module)
+  end
+  local candidates
+  local previous = parent and parent:prev_named_sibling() or nil
+  local explicit_path
+  while previous and previous:type() == "attribute_item" do
+    explicit_path = node_text(previous, bufnr):match('path%s*=%s*"([^"]+)"') or explicit_path
+    previous = previous:prev_named_sibling()
+  end
+  if explicit_path then
+    candidates = {
+      vim.fs.joinpath(vim.fs.dirname(source), explicit_path),
+      vim.fs.joinpath(directory, explicit_path),
+    }
+  else
+    candidates = {
+      vim.fs.joinpath(directory, text .. ".rs"),
+      vim.fs.joinpath(directory, text, "mod.rs"),
+    }
+  end
+  local qualified = vim.deepcopy(module_path)
+  qualified[#qualified + 1] = text
+  return {
+    name = "crate::" .. table.concat(qualified, "::"),
+    target_paths = existing_paths(candidates),
+  }
+end
+
+local function nix_import(_, text, bufnr)
+  local source = vim.api.nvim_buf_get_name(bufnr)
+  local path = text:sub(1, 1) == "/" and text or vim.fs.joinpath(vim.fs.dirname(source), text)
+  local stat = vim.uv.fs_stat(path)
+  if stat and stat.type == "directory" then
+    path = vim.fs.joinpath(path, "default.nix")
+  end
+  return { name = text, target_paths = existing_paths({ path }) }
+end
+
+local dune_library_cache = {}
+local dune_skip_directories = {
+  [".git"] = true,
+  [".opam"] = true,
+  ["_build"] = true,
+  ["_opam"] = true,
+  ["node_modules"] = true,
+  ["target"] = true,
+  ["vendor"] = true,
+  ["venv"] = true,
+}
+
+local function library_names(contents)
+  local names = {}
+  local cursor = 1
+  while true do
+    local start = contents:find("%(%s*library[%s%(]", cursor)
+    if not start then
+      break
+    end
+    local depth = 0
+    local in_string = false
+    local escaped = false
+    local comment = false
+    local finish
+    for index = start, #contents do
+      local character = contents:sub(index, index)
+      if comment then
+        comment = character ~= "\n"
+      elseif in_string then
+        if escaped then
+          escaped = false
+        elseif character == "\\" then
+          escaped = true
+        elseif character == '"' then
+          in_string = false
+        end
+      elseif character == ";" then
+        comment = true
+      elseif character == '"' then
+        in_string = true
+      elseif character == "(" then
+        depth = depth + 1
+      elseif character == ")" then
+        depth = depth - 1
+        if depth == 0 then
+          finish = index
+          break
+        end
+      end
+    end
+    if not finish then
+      break
+    end
+    local stanza = contents:sub(start, finish)
+    local name = stanza:match("%(%s*name%s+([%w_%-%.]+)")
+    if name then
+      names[#names + 1] = name
+    end
+    cursor = finish + 1
+  end
+  return names
+end
+
+local function read_dune_library(path, libraries)
+  local read_ok, lines = pcall(vim.fn.readfile, path)
+  local contents = read_ok and table.concat(lines, "\n") or ""
+  for _, name in ipairs(library_names(contents)) do
+    libraries[name] = libraries[name] or path
+  end
+end
+
+local function dune_libraries(root, requested_name)
+  local cached = dune_library_cache[root] or { libraries = {}, complete = false }
+  dune_library_cache[root] = cached
+  if cached.libraries[requested_name] then
+    return cached.libraries
+  end
+
+  local suffix = requested_name:match("^[^_]+_(.+)$")
+  for _, path in ipairs({
+    vim.fs.joinpath(root, "lib", requested_name, "dune"),
+    vim.fs.joinpath(root, "src", requested_name, "dune"),
+    suffix and vim.fs.joinpath(root, "lib", suffix, "dune") or "",
+    suffix and vim.fs.joinpath(root, "src", suffix, "dune") or "",
+  }) do
+    if path ~= "" and vim.uv.fs_stat(path) then
+      read_dune_library(path, cached.libraries)
+      if cached.libraries[requested_name] then
+        return cached.libraries
+      end
+    end
+  end
+  if cached.complete then
+    return cached.libraries
+  end
+
+  local visited = 0
+  local function walk(directory)
+    if visited >= 1000 then
+      return
+    end
+    local ok, entries = pcall(function()
+      local values = {}
+      for name, kind in vim.fs.dir(directory) do
+        values[#values + 1] = { name = name, kind = kind }
+        if visited + #values >= 1000 then
+          break
+        end
+      end
+      return values
+    end)
+    if not ok then
+      return
+    end
+    for _, entry in ipairs(entries) do
+      visited = visited + 1
+      if visited >= 1000 then
+        break
+      end
+      local path = vim.fs.joinpath(directory, entry.name)
+      if entry.kind == "directory" and not dune_skip_directories[entry.name] then
+        walk(path)
+      elseif entry.kind == "file" and entry.name == "dune" then
+        read_dune_library(path, cached.libraries)
+      end
+    end
+  end
+  walk(root)
+  cached.complete = visited < 1000
+  return cached.libraries
+end
+
+function M.clear_cache()
+  dune_library_cache = {}
+end
+
+local function ocaml_import(_, text, bufnr)
+  local name = vim.trim(text:gsub("%s+", " "))
+  local source = vim.api.nvim_buf_get_name(bufnr)
+  local module_name = name:match("^([%w_']+)")
+  if not module_name then
+    return { name = name }
+  end
+  local basename = module_name:sub(1, 1):lower() .. module_name:sub(2)
+  local directory = vim.fs.dirname(source)
+  local targets = existing_paths({
+    vim.fs.joinpath(directory, basename .. ".ml"),
+    vim.fs.joinpath(directory, basename .. ".mli"),
+  })
+  if #targets == 0 then
+    local root = vim.fs.root(source, { "dune-project", ".git" })
+    local dune = root and dune_libraries(root, basename)[basename]
+    if dune then
+      targets[1] = dune
+      return {
+        name = name,
+        target_paths = targets,
+        resolution_provider = "Tree-sitter+Dune",
+        resolution_method = "dune/library",
+      }
+    end
+  end
+  return { name = name, target_paths = targets }
+end
+
 local function normalize(language, adapter)
   assert(type(language) == "string" and language ~= "", "adapter language must be a string")
   assert(type(adapter) == "table", "adapter must be a table")
@@ -65,6 +396,28 @@ local function normalize(language, adapter)
     normalized.treesitter.name_node_types = normalized.treesitter.name_node_types
       or vim.deepcopy(default_name_node_types)
     normalized.treesitter.synthetic_name = normalized.treesitter.synthetic_name or declaration_name
+    if normalized.treesitter.imports then
+      assert(
+        type(normalized.treesitter.imports.query) == "string"
+          and normalized.treesitter.imports.query ~= "",
+        "Tree-sitter import adapters require a query"
+      )
+      normalized.treesitter.imports.capture = normalized.treesitter.imports.capture or "import"
+      assert(
+        type(normalized.treesitter.imports.capture) == "string"
+          and normalized.treesitter.imports.capture ~= "",
+        "Tree-sitter import adapters require a capture"
+      )
+      if normalized.treesitter.imports.normalize ~= nil then
+        assert(
+          type(normalized.treesitter.imports.normalize) == "function",
+          "Tree-sitter import adapter normalize must be a function"
+        )
+      end
+    end
+  end
+  if normalized.configuration ~= nil then
+    assert(type(normalized.configuration) == "function", "adapter configuration must be a function")
   end
 
   return normalized
@@ -103,6 +456,11 @@ function M.root_markers(filetype)
   return vim.deepcopy(treesitter and treesitter.root_markers or default_root_markers)
 end
 
+function M.imports_for_filetype(filetype)
+  local adapter = M.for_filetype(filetype)
+  return vim.deepcopy(adapter and adapter.treesitter and adapter.treesitter.imports or nil)
+end
+
 function M.ast_grep_query(context, language)
   local adapter = registry[language]
   local provider = adapter and adapter.ast_grep
@@ -113,12 +471,23 @@ function M.ast_grep_query(context, language)
 end
 
 M.register("go", {
+  configuration = go_configuration,
   treesitter = {
     symbol_types = {
       function_declaration = "Function",
       method_declaration = "Method",
       type_declaration = "Type",
       type_spec = "Type",
+    },
+    imports = {
+      query = [[
+        (import_spec
+          path: [
+            (interpreted_string_literal)
+            (raw_string_literal)
+          ] @import)
+      ]],
+      normalize = go_import,
     },
   },
   ast_grep = {
@@ -133,6 +502,22 @@ M.register("nix", {
       binding = "Binding",
       inherit = "Binding",
     },
+    imports = {
+      query = [[
+        ((apply_expression
+          function: (variable_expression
+            name: (identifier) @_function)
+          argument: (path_expression) @import)
+          (#eq? @_function "import"))
+
+        ((binding
+          attrpath: (attrpath) @_imports
+          expression: (list_expression
+            element: (path_expression) @import))
+          (#eq? @_imports "imports"))
+      ]],
+      normalize = nix_import,
+    },
   },
   ast_grep = { language = "nix" },
 })
@@ -146,6 +531,15 @@ M.register("ocaml", {
       module_definition = "Module",
       module_type_definition = "Module",
       type_definition = "Type",
+    },
+    imports = {
+      query = [[
+        [
+          (open_module module: (_) @import)
+          (include_module module: (_) @import)
+        ]
+      ]],
+      normalize = ocaml_import,
     },
   },
   ast_grep = {
@@ -163,6 +557,15 @@ M.register("ocaml_interface", {
       type_definition = "Type",
       value_specification = "Value",
     },
+    imports = {
+      query = [[
+        [
+          (open_module_signature module: (extended_module_path) @import)
+          (include_module_type module_type: (_) @import)
+        ]
+      ]],
+      normalize = ocaml_import,
+    },
   },
   ast_grep = {
     unsupported_note = "ast-grep has no OCaml parser; semantic references and Tree-sitter context remain available.",
@@ -170,10 +573,12 @@ M.register("ocaml_interface", {
 })
 
 M.register("rust", {
+  configuration = rust_configuration,
   treesitter = {
     symbol_types = {
       const_item = "Constant",
       enum_item = "Enum",
+      field_declaration = "Field",
       function_item = "Function",
       impl_item = "Implementation",
       mod_item = "Module",
@@ -181,6 +586,12 @@ M.register("rust", {
       struct_item = "Struct",
       trait_item = "Interface",
       type_item = "Type",
+    },
+    imports = {
+      query = [[
+        (mod_item name: (identifier) @import)
+      ]],
+      normalize = rust_module,
     },
   },
   ast_grep = { language = "rust" },

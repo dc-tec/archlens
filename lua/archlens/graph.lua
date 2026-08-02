@@ -47,7 +47,12 @@ local raw_provider_fields = {
   to = true,
 }
 
-local function validate_canonical(value, path, seen, allow_wire_call_item)
+local opaque_context_fields = {
+  wire_call_item = true,
+  wire_type_item = true,
+}
+
+local function validate_canonical(value, path, seen, allow_wire_items)
   if type(value) ~= "table" then
     return
   end
@@ -62,7 +67,7 @@ local function validate_canonical(value, path, seen, allow_wire_call_item)
       not raw_provider_fields[key],
       string.format("graph values cannot expose provider field %s at %s", tostring(key), path)
     )
-    if not (allow_wire_call_item and key == "wire_call_item") then
+    if not (allow_wire_items and opaque_context_fields[key]) then
       validate_canonical(nested, path .. "." .. tostring(key), seen, key == "context")
     end
   end
@@ -184,6 +189,7 @@ function M.edge(kind, source, target, evidence, fields)
     target = target,
     evidence = vim.deepcopy(evidence),
   })
+  edge.occurrences = edge.occurrences or {}
   edge.position_encoding = edge.position_encoding or "utf-8"
   assert(edge.position_encoding == "utf-8", "graph edges must use UTF-8 byte columns")
   return edge
@@ -230,7 +236,22 @@ function M.add_edge(target, edge)
   validate_canonical(edge, "edge")
   if target.focus then
     local focus = M.focus_node(edge)
-    assert(focus and focus.id == target.focus.id, "graph edge does not belong to the focused node")
+    local relation = relations.get(edge.kind)
+    if relation.anchor == "file" then
+      assert(
+        focus
+          and focus.scope == "file"
+          and focus.location
+          and target.focus.location
+          and focus.location.uri == target.focus.location.uri,
+        "file-context graph edge does not belong to the focused file"
+      )
+    else
+      assert(
+        focus and focus.id == target.focus.id,
+        "graph edge does not belong to the focused node"
+      )
+    end
   end
   target.edges[#target.edges + 1] = edge
   return edge

@@ -1,5 +1,6 @@
 local graph = require("archlens.graph")
 local relations = require("archlens.relations")
+local scope = require("archlens.scope")
 
 local M = {}
 
@@ -74,15 +75,6 @@ end
 
 local function normalized_path(path)
   return path and vim.fs.normalize(path) or nil
-end
-
-local function is_within(root, path)
-  root = normalized_path(root)
-  path = normalized_path(path)
-  if not root or not path then
-    return true
-  end
-  return path == root or path:sub(1, #root + 1) == root .. "/"
 end
 
 local function relative_path(root, path)
@@ -214,7 +206,6 @@ local function row_from_edge(edge, relation, context, cache)
     location = location,
     context = node.context,
     position_encoding = node.position_encoding or edge.position_encoding or "utf-8",
-    internal = is_within(context.root_dir, path),
     resolve_on_focus = node.resolve_on_focus == true,
     evidence = vim.deepcopy(edge.evidence),
     occurrences = vim.deepcopy(edge.occurrences or {}),
@@ -278,12 +269,18 @@ local function sort_rows(rows, style)
   return rows
 end
 
-local function normalize_edges(snapshot, context, include_external)
+local function normalize_edges(snapshot, context, filters)
   local cache = {}
+  local scope_cache = {}
   local grouped = {}
   local seen = {}
   local hidden_locations = {}
-  local hidden = 0
+  local hidden = {
+    excluded = 0,
+    external = 0,
+    generated = 0,
+    vendored = 0,
+  }
   local self_key = graph.location_key(context.location)
 
   for _, relation in ipairs(relations.ordered()) do
@@ -304,13 +301,19 @@ local function normalize_edges(snapshot, context, include_external)
       if not suppress_self and not seen[relation.id][dedupe_key] then
         local row = row_from_edge(edge, relation, context, cache)
         if row then
-          if row.internal or include_external then
+          local path = vim.uri_to_fname(row.location.uri)
+          row.scope = scope.classify(context.root_dir, path, filters, scope_cache)
+          row.internal = row.scope ~= "external"
+          if scope.visible(row.scope, filters) then
             grouped[relation.id][#grouped[relation.id] + 1] = row
             seen[relation.id][dedupe_key] = row
           else
-            hidden = hidden + 1
+            hidden[row.scope] = hidden[row.scope] + 1
             seen[relation.id][dedupe_key] = true
-            hidden_locations[relation.id][#hidden_locations[relation.id] + 1] = location
+            hidden_locations[relation.id][#hidden_locations[relation.id] + 1] = {
+              location = location,
+              scope = row.scope,
+            }
           end
         end
       elseif type(seen[relation.id][dedupe_key]) == "table" then
@@ -331,13 +334,17 @@ local function normalize_edges(snapshot, context, include_external)
       local corroborated = {}
       for _, row in ipairs(grouped[relation.corroborates] or {}) do
         corroborated[graph.location_key(row.location)] = row
-        corroborated[graph.line_key(row.location)] = corroborated[graph.line_key(row.location)]
-          or row
+        if relation.corroborates_by == "line" then
+          corroborated[graph.line_key(row.location)] = corroborated[graph.line_key(row.location)]
+            or row
+        end
       end
       local remaining = {}
       for _, row in ipairs(grouped[relation.id]) do
         local semantic = corroborated[graph.location_key(row.location)]
-          or corroborated[graph.line_key(row.location)]
+        if not semantic and relation.corroborates_by == "line" then
+          semantic = corroborated[graph.line_key(row.location)]
+        end
         if semantic then
           add_provider(semantic.evidence, row.evidence.provider)
         else
@@ -347,16 +354,19 @@ local function normalize_edges(snapshot, context, include_external)
       grouped[relation.id] = remaining
 
       local hidden_corroborated = {}
-      for _, location in ipairs(hidden_locations[relation.corroborates] or {}) do
-        hidden_corroborated[graph.location_key(location)] = true
-        hidden_corroborated[graph.line_key(location)] = true
+      for _, entry in ipairs(hidden_locations[relation.corroborates] or {}) do
+        hidden_corroborated[graph.location_key(entry.location)] = true
+        if relation.corroborates_by == "line" then
+          hidden_corroborated[graph.line_key(entry.location)] = true
+        end
       end
-      for _, location in ipairs(hidden_locations[relation.id]) do
-        if
-          hidden_corroborated[graph.location_key(location)]
-          or hidden_corroborated[graph.line_key(location)]
-        then
-          hidden = hidden - 1
+      for _, entry in ipairs(hidden_locations[relation.id]) do
+        local corroborated_location = hidden_corroborated[graph.location_key(entry.location)]
+        if not corroborated_location and relation.corroborates_by == "line" then
+          corroborated_location = hidden_corroborated[graph.line_key(entry.location)]
+        end
+        if corroborated_location then
+          hidden[entry.scope] = hidden[entry.scope] - 1
         end
       end
     end
@@ -398,21 +408,36 @@ function M.build(context, snapshot, opts)
       break
     end
   end
-  local grouped, hidden = normalize_edges(snapshot, context, opts.include_external)
+  local filters = vim.deepcopy(opts.filters or {})
+  if filters.include_external == nil then
+    filters.include_external = opts.include_external == true
+  end
+  local grouped, hidden = normalize_edges(snapshot, context, filters)
 
   local notes = {}
-  if context.file_fallback and not resolving_lsp then
+  if context.configuration and not context.client_id and not resolving_lsp then
+    notes[#notes + 1] =
+      "Configuration uses require an active language server with project reference support."
+  elseif context.file_fallback and not resolving_lsp then
     notes[#notes + 1] =
       "No symbol could be resolved at this position; semantic relationships were skipped."
-  elseif not context.supports_calls and not resolving_lsp then
+  elseif
+    not context.module_context
+    and not context.configuration
+    and not context.supports_calls
+    and not resolving_lsp
+  then
     notes[#notes + 1] = string.format(
-      "%s has no call hierarchy here; project references and syntax structure are used instead.",
+      "%s has no call hierarchy here; other semantic and syntax relationships are used instead.",
       context.client_name or "The attached language server"
     )
   end
-  if hidden > 0 then
-    notes[#notes + 1] =
-      string.format("%d external relationship%s hidden.", hidden, hidden == 1 and "" or "s")
+  for _, hidden_kind in ipairs({ "vendored", "generated", "excluded", "external" }) do
+    local count = hidden[hidden_kind]
+    if count > 0 then
+      notes[#notes + 1] =
+        string.format("%d %s relationship%s hidden.", count, hidden_kind, count == 1 and "" or "s")
+    end
   end
   local structural_omitted = (snapshot.omitted or {}).structural or 0
   if structural_omitted > 0 then

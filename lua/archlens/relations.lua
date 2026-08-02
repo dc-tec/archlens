@@ -2,7 +2,9 @@ local M = {}
 
 local registry = {}
 local allowed_fields = {
+  anchor = true,
   corroborates = true,
+  corroborates_by = true,
   endpoint = true,
   id = true,
   kind_name = true,
@@ -51,8 +53,18 @@ local function validate(spec)
   if spec.corroborates ~= nil then
     assert(nonempty_string(spec.corroborates), "relation kind corroborates must be an identifier")
   end
+  if spec.corroborates_by ~= nil then
+    assert(spec.corroborates ~= nil, "relation kind corroborates_by requires corroborates")
+    assert(
+      spec.corroborates_by == "location" or spec.corroborates_by == "line",
+      "relation kind corroborates_by must be location or line"
+    )
+  end
   if spec.suppress_self ~= nil then
     assert(type(spec.suppress_self) == "boolean", "relation kind suppress_self must be boolean")
+  end
+  if spec.anchor ~= nil then
+    assert(spec.anchor == "file", "relation kind anchor must be file")
   end
 
   return vim.deepcopy(spec)
@@ -120,6 +132,26 @@ for _, kind in ipairs({
     suppress_self = true,
   },
   {
+    id = "supertypes",
+    label = "Supertypes",
+    marker = "↑",
+    order = 15,
+    source = "semantic",
+    endpoint = "target",
+    sort = "name",
+    suppress_self = true,
+  },
+  {
+    id = "subtypes",
+    label = "Subtypes",
+    marker = "↓",
+    order = 16,
+    source = "semantic",
+    endpoint = "source",
+    sort = "name",
+    suppress_self = true,
+  },
+  {
     id = "implementations",
     label = "Implementations",
     marker = "↳",
@@ -128,6 +160,8 @@ for _, kind in ipairs({
     endpoint = "target",
     sort = "location",
     kind_name = "Implementation",
+    corroborates = "subtypes",
+    corroborates_by = "location",
     suppress_self = true,
   },
   {
@@ -149,6 +183,40 @@ for _, kind in ipairs({
     sort = "name",
   },
   {
+    id = "module_imports",
+    label = "File imports",
+    marker = "⇢",
+    order = 45,
+    source = "semantic",
+    endpoint = "target",
+    sort = "name",
+    kind_name = "Module",
+    anchor = "file",
+    suppress_self = true,
+  },
+  {
+    id = "configuration_consumers",
+    label = "Configuration used at",
+    marker = "↤",
+    order = 48,
+    source = "semantic",
+    endpoint = "source",
+    sort = "location",
+    kind_name = "Configuration use",
+    suppress_self = true,
+  },
+  {
+    id = "test_references",
+    label = "Referenced from tests",
+    marker = "◇",
+    order = 49,
+    source = "semantic",
+    endpoint = "source",
+    sort = "location",
+    kind_name = "Test reference",
+    suppress_self = true,
+  },
+  {
     id = "references",
     label = "Referenced across project",
     marker = "◆",
@@ -157,6 +225,19 @@ for _, kind in ipairs({
     endpoint = "source",
     sort = "location",
     kind_name = "Reference",
+    suppress_self = true,
+  },
+  {
+    id = "test_structural",
+    label = "Potential test matches",
+    marker = "⋄",
+    order = 59,
+    source = "structural",
+    endpoint = "source",
+    sort = "location",
+    kind_name = "Test match",
+    corroborates = "test_references",
+    corroborates_by = "line",
     suppress_self = true,
   },
   {
@@ -169,6 +250,7 @@ for _, kind in ipairs({
     sort = "location",
     kind_name = "Structural match",
     corroborates = "references",
+    corroborates_by = "line",
     suppress_self = true,
   },
   {

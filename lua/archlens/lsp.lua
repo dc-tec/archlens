@@ -2,22 +2,273 @@ local model = require("archlens.model")
 
 local M = {}
 
+local internal_position_encoding = "utf-8"
 local methods = {
   symbols = "textDocument/documentSymbol",
   prepare = "textDocument/prepareCallHierarchy",
   incoming = "callHierarchy/incomingCalls",
   outgoing = "callHierarchy/outgoingCalls",
   references = "textDocument/references",
+  implementation = "textDocument/implementation",
 }
 
 local function client_provider(client, supports_calls)
   return {
     id = client.id,
     name = client.name,
-    offset_encoding = client.offset_encoding,
+    offset_encoding = internal_position_encoding,
     root_dir = client.root_dir or (client.config and client.config.root_dir),
     supports_calls = supports_calls,
   }
+end
+
+local function buffer_line(bufnr, line)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) or not vim.api.nvim_buf_is_loaded(bufnr) then
+    return nil
+  end
+  return vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)[1]
+end
+
+local function buffer_matches_uri(bufnr, uri)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
+  if vim.api.nvim_buf_get_name(bufnr) == uri then
+    return true
+  end
+  local ok, buffer_uri = pcall(vim.uri_from_bufnr, bufnr)
+  return ok and buffer_uri == uri
+end
+
+local function loaded_buffer_for_uri(uri, fallback_bufnr)
+  if buffer_matches_uri(fallback_bufnr, uri) and vim.api.nvim_buf_is_loaded(fallback_bufnr) then
+    return fallback_bufnr
+  end
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(bufnr) and buffer_matches_uri(bufnr, uri) then
+      return bufnr
+    end
+  end
+  return nil
+end
+
+local function uri_line(uri, line, fallback_bufnr)
+  local loaded_bufnr = loaded_buffer_for_uri(uri, fallback_bufnr)
+  if loaded_bufnr then
+    return buffer_line(loaded_bufnr, line)
+  end
+  if type(uri) ~= "string" or not uri:match("^file:") then
+    return nil
+  end
+  local ok, path = pcall(vim.uri_to_fname, uri)
+  if not ok then
+    return nil
+  end
+  local read_ok, lines = pcall(vim.fn.readfile, path, "", line + 1)
+  return read_ok and lines[line + 1] or nil
+end
+
+local function converted_character(text, character, from_encoding, to_encoding)
+  if character == nil then
+    return nil
+  end
+  if character == 0 or from_encoding == to_encoding then
+    return character
+  end
+  if not text then
+    return nil
+  end
+
+  local byte_character = character
+  if from_encoding ~= internal_position_encoding then
+    local ok, converted = pcall(vim.str_byteindex, text, from_encoding, character, false)
+    if not ok then
+      return nil
+    end
+    byte_character = converted
+  end
+  if to_encoding == internal_position_encoding then
+    return byte_character
+  end
+
+  local ok, converted = pcall(vim.str_utfindex, text, to_encoding, byte_character, false)
+  return ok and converted or nil
+end
+
+local function position_to_client(bufnr, position, encoding)
+  if not position then
+    return nil
+  end
+  local text = buffer_line(bufnr, position.line)
+  local character =
+    converted_character(text, position.character, internal_position_encoding, encoding or "utf-16")
+  return character ~= nil and { line = position.line, character = character } or nil
+end
+
+local function position_to_client_uri(uri, position, encoding, fallback_bufnr)
+  if not position then
+    return nil
+  end
+  local text = uri_line(uri, position.line, fallback_bufnr)
+  local character =
+    converted_character(text, position.character, internal_position_encoding, encoding or "utf-16")
+  return character ~= nil and { line = position.line, character = character } or nil
+end
+
+local function position_from_client(uri, position, encoding, fallback_bufnr)
+  if not position then
+    return nil
+  end
+  local text = uri_line(uri, position.line, fallback_bufnr)
+  local character =
+    converted_character(text, position.character, encoding or "utf-16", internal_position_encoding)
+  return character ~= nil and { line = position.line, character = character } or nil
+end
+
+local function range_from_client(uri, range, encoding, fallback_bufnr)
+  if not range then
+    return nil
+  end
+  local start = position_from_client(uri, range.start, encoding, fallback_bufnr)
+  local finish = position_from_client(uri, range["end"], encoding, fallback_bufnr)
+  return start and finish and { start = start, ["end"] = finish } or nil
+end
+
+local function normalize_location(location, encoding, fallback_bufnr, origin_uri)
+  if not location then
+    return nil
+  end
+  local normalized = vim.deepcopy(location)
+  if location.targetUri then
+    local target_range =
+      range_from_client(location.targetUri, location.targetRange, encoding, fallback_bufnr)
+    local target_selection_range =
+      range_from_client(location.targetUri, location.targetSelectionRange, encoding, fallback_bufnr)
+    if not target_range or not target_selection_range then
+      return nil
+    end
+    normalized.targetRange = target_range
+    normalized.targetSelectionRange = target_selection_range
+    if location.originSelectionRange then
+      normalized.originSelectionRange = range_from_client(
+        origin_uri or location.targetUri,
+        location.originSelectionRange,
+        encoding,
+        fallback_bufnr
+      )
+    end
+  else
+    normalized.range = range_from_client(location.uri, location.range, encoding, fallback_bufnr)
+    if not normalized.range then
+      return nil
+    end
+  end
+  return normalized
+end
+
+local function location_list(value)
+  if not value then
+    return {}
+  end
+  if value.uri or value.targetUri then
+    return { value }
+  end
+  return value
+end
+
+local function normalize_document_symbol(symbol, uri, encoding, fallback_bufnr)
+  local normalized = vim.deepcopy(symbol)
+  if symbol.location then
+    normalized.location = normalize_location(symbol.location, encoding, fallback_bufnr)
+    if not normalized.location then
+      return nil
+    end
+  else
+    normalized.range = range_from_client(uri, symbol.range, encoding, fallback_bufnr)
+    normalized.selectionRange =
+      range_from_client(uri, symbol.selectionRange, encoding, fallback_bufnr)
+    if not normalized.range or not normalized.selectionRange then
+      return nil
+    end
+  end
+  normalized.children = nil
+  if symbol.children then
+    normalized.children = {}
+    for _, child in ipairs(symbol.children) do
+      local normalized_child = normalize_document_symbol(child, uri, encoding, fallback_bufnr)
+      if normalized_child then
+        normalized.children[#normalized.children + 1] = normalized_child
+      end
+    end
+  end
+  return normalized
+end
+
+local function normalize_document_symbols(symbols, uri, encoding, fallback_bufnr)
+  local normalized = {}
+  for _, symbol in ipairs(symbols or {}) do
+    local normalized_symbol = normalize_document_symbol(symbol, uri, encoding, fallback_bufnr)
+    if normalized_symbol then
+      normalized[#normalized + 1] = normalized_symbol
+    end
+  end
+  return normalized
+end
+
+local function normalize_call_item(item, encoding, fallback_bufnr)
+  if not item then
+    return nil
+  end
+  local normalized = vim.deepcopy(item)
+  normalized.range = range_from_client(item.uri, item.range, encoding, fallback_bufnr)
+  normalized.selectionRange =
+    range_from_client(item.uri, item.selectionRange, encoding, fallback_bufnr)
+  if not normalized.range or not normalized.selectionRange then
+    return nil
+  end
+  return normalized
+end
+
+local function context_from_call_item(item, client, fallback_bufnr)
+  local normalized = normalize_call_item(item, client.offset_encoding, fallback_bufnr)
+  if not normalized then
+    return nil
+  end
+  local context = model.context_from_item(normalized, client_provider(client, true))
+  context.wire_call_item = item
+  return context
+end
+
+local function normalize_call(call, direction, encoding, fallback_bufnr, origin_uri)
+  local normalized = vim.deepcopy(call)
+  local item_key = direction == "incoming" and "from" or "to"
+  if not call[item_key] then
+    return nil
+  end
+  normalized[item_key] = normalize_call_item(call[item_key], encoding, fallback_bufnr)
+  if not normalized[item_key] then
+    return nil
+  end
+  normalized.wire_call_item = call[item_key]
+  if call.fromRanges then
+    local range_uri = direction == "incoming" and call.from.uri or origin_uri
+    normalized.fromRanges = {}
+    for _, range in ipairs(call.fromRanges) do
+      local normalized_range = range_from_client(range_uri, range, encoding, fallback_bufnr)
+      if normalized_range then
+        normalized.fromRanges[#normalized.fromRanges + 1] = normalized_range
+      end
+    end
+  end
+  return normalized
+end
+
+local function internal_position(source)
+  if type(source) == "table" then
+    return { line = source.line, character = source.character }
+  end
+  local cursor = vim.api.nvim_win_get_cursor(source)
+  return { line = cursor[1] - 1, character = cursor[2] }
 end
 
 local function sorted_clients(bufnr, method)
@@ -50,13 +301,6 @@ local function fallback_file_item(bufnr, position)
   }
 end
 
-local function client_position(source, client)
-  if type(source) == "table" then
-    return source
-  end
-  return vim.lsp.util.make_position_params(source, client.offset_encoding).position
-end
-
 local function resolve_document_symbol(bufnr, position_source, callback)
   local clients = sorted_clients(bufnr, methods.symbols)
   if #clients == 0 then
@@ -64,10 +308,7 @@ local function resolve_document_symbol(bufnr, position_source, callback)
     return function() end
   end
 
-  local positions = {}
-  for _, client in ipairs(clients) do
-    positions[client.id] = client_position(position_source, client)
-  end
+  local position = internal_position(position_source)
   local uri = vim.uri_from_bufnr(bufnr)
 
   local hierarchy_cancel
@@ -88,10 +329,10 @@ local function resolve_document_symbol(bufnr, position_source, callback)
         if response.err then
           errors[#errors + 1] = as_error(response.err)
         elseif client then
-          local symbol =
-            model.select_document_symbol(response.result or {}, positions[client_id], uri)
+          local symbols =
+            normalize_document_symbols(response.result, uri, client.offset_encoding, bufnr)
+          local symbol = model.select_document_symbol(symbols, position, uri)
           if symbol then
-            symbol = vim.deepcopy(symbol)
             if not symbol.uri and not symbol.location then
               symbol.uri = uri
             end
@@ -102,7 +343,8 @@ local function resolve_document_symbol(bufnr, position_source, callback)
           else
             fallback_candidates[#fallback_candidates + 1] = {
               client = client,
-              symbol = fallback_file_item(bufnr, positions[client_id]),
+              symbol = fallback_file_item(bufnr, position),
+              file_fallback = true,
             }
           end
         end
@@ -126,22 +368,32 @@ local function resolve_document_symbol(bufnr, position_source, callback)
       if candidate then
         local fallback_context =
           model.context_from_item(candidate.symbol, client_provider(candidate.client, false))
+        fallback_context.file_fallback = candidate.file_fallback == true
         local location = candidate.symbol.location
         local selection_range = candidate.symbol.selectionRange
           or (location and location.range)
           or candidate.symbol.range
         local symbol_uri = candidate.symbol.uri or (location and location.uri) or uri
+        local prepare_position = selection_range
+          and position_to_client_uri(
+            symbol_uri,
+            selection_range.start,
+            candidate.client.offset_encoding,
+            bufnr
+          )
 
-        if candidate.client:supports_method(methods.prepare, bufnr) and selection_range then
+        if candidate.client:supports_method(methods.prepare, bufnr) and prepare_position then
           local ok, request_id = candidate.client:request(methods.prepare, {
             textDocument = { uri = symbol_uri },
-            position = selection_range.start,
+            position = prepare_position,
           }, function(err, items)
             if cancelled then
               return
             end
             if not err and items and items[1] then
-              callback(model.context_from_item(items[1], client_provider(candidate.client, true)))
+              callback(
+                context_from_call_item(items[1], candidate.client, bufnr) or fallback_context
+              )
             else
               callback(fallback_context)
             end
@@ -179,12 +431,21 @@ function M.resolve(bufnr, position_source, callback)
     return resolve_document_symbol(bufnr, position_source, callback)
   end
 
+  local position = internal_position(position_source)
+  local client_positions = {}
+  for _, client in ipairs(clients) do
+    client_positions[client.id] = position_to_client(bufnr, position, client.offset_encoding)
+    if not client_positions[client.id] then
+      return resolve_document_symbol(bufnr, position_source, callback)
+    end
+  end
+
   local fallback_cancel
   local cancelled = false
   local prepare_cancel = vim.lsp.buf_request_all(bufnr, methods.prepare, function(client)
     return {
       textDocument = vim.lsp.util.make_text_document_params(bufnr),
-      position = client_position(position_source, client),
+      position = client_positions[client.id],
     }
   end, function(results)
     if cancelled then
@@ -195,10 +456,14 @@ function M.resolve(bufnr, position_source, callback)
       local client = vim.lsp.get_client_by_id(client_id)
       if client and not response.err then
         for _, item in ipairs(response.result or {}) do
-          candidates[#candidates + 1] = {
-            client = client,
-            item = item,
-          }
+          local normalized = normalize_call_item(item, client.offset_encoding, bufnr)
+          if normalized then
+            candidates[#candidates + 1] = {
+              client = client,
+              item = normalized,
+              wire_call_item = item,
+            }
+          end
         end
       end
     end
@@ -230,9 +495,10 @@ function M.resolve(bufnr, position_source, callback)
     end)
 
     if candidates[1] then
-      callback(
+      local context =
         model.context_from_item(candidates[1].item, client_provider(candidates[1].client, true))
-      )
+      context.wire_call_item = candidates[1].wire_call_item
+      callback(context)
     else
       fallback_cancel = resolve_document_symbol(bufnr, position_source, function(context, err)
         if not cancelled then
@@ -255,11 +521,12 @@ function M.relationships(context, bufnr, callback, options)
   options = options or {}
   local client = vim.lsp.get_client_by_id(context.client_id)
   if not client or client:is_stopped() then
-    callback({ incoming = {}, outgoing = {}, references = {}, errors = {} })
+    callback({ incoming = {}, outgoing = {}, implementations = {}, references = {}, errors = {} })
     return function() end
   end
 
-  local result = { incoming = {}, outgoing = {}, references = {}, errors = {} }
+  local result =
+    { incoming = {}, outgoing = {}, implementations = {}, references = {}, errors = {} }
   local pending = 0
   local cancelled = false
   local completed = false
@@ -285,14 +552,45 @@ function M.relationships(context, bufnr, callback, options)
     if err then
       result.errors[#result.errors + 1] = string.format("%s failed: %s", spec.label, as_error(err))
     else
-      result[spec.key] = value or {}
+      local normalized = {}
+      local skipped = 0
+      if spec.key == "implementations" or spec.key == "references" then
+        for _, location in ipairs(location_list(value)) do
+          local normalized_location =
+            normalize_location(location, client.offset_encoding, bufnr, spec.origin_uri)
+          if normalized_location then
+            normalized[#normalized + 1] = normalized_location
+          else
+            skipped = skipped + 1
+          end
+        end
+      elseif spec.key == "incoming" or spec.key == "outgoing" then
+        for _, call in ipairs(value or {}) do
+          local normalized_call =
+            normalize_call(call, spec.key, client.offset_encoding, bufnr, spec.origin_uri)
+          if normalized_call then
+            normalized[#normalized + 1] = normalized_call
+          else
+            skipped = skipped + 1
+          end
+        end
+      end
+      result[spec.key] = normalized
+      if skipped > 0 then
+        result.errors[#result.errors + 1] = string.format(
+          "%s omitted %d result%s because its source text was unavailable for position conversion.",
+          spec.label,
+          skipped,
+          skipped == 1 and "" or "s"
+        )
+      end
     end
     pending = pending - 1
     complete()
   end
 
   local requests = {}
-  local call_item = context.call_item or context.item
+  local call_item = context.wire_call_item or context.call_item or context.item
   if context.supports_calls and call_item then
     for _, request in ipairs({
       {
@@ -300,12 +598,14 @@ function M.relationships(context, bufnr, callback, options)
         label = "Incoming calls",
         method = methods.incoming,
         params = { item = call_item },
+        origin_uri = call_item.uri,
       },
       {
         key = "outgoing",
         label = "Outgoing calls",
         method = methods.outgoing,
         params = { item = call_item },
+        origin_uri = call_item.uri,
       },
     }) do
       if client:supports_method(request.method, bufnr) then
@@ -315,17 +615,50 @@ function M.relationships(context, bufnr, callback, options)
   end
 
   local reference_range = context.location and context.location.range
-  if reference_range and client:supports_method(methods.references, bufnr) then
-    requests[#requests + 1] = {
-      key = "references",
-      label = "Project references",
-      method = methods.references,
-      params = {
-        textDocument = { uri = context.location.uri },
-        position = reference_range.start,
-        context = { includeDeclaration = false },
-      },
-    }
+  local supports_implementation = not context.file_fallback
+    and client:supports_method(methods.implementation, bufnr)
+  local supports_references = not context.file_fallback
+    and client:supports_method(methods.references, bufnr)
+  if
+    reference_range
+    and context.location.uri
+    and (supports_implementation or supports_references)
+  then
+    local position = position_to_client_uri(
+      context.location.uri,
+      reference_range.start,
+      client.offset_encoding,
+      bufnr
+    )
+    if position and supports_implementation then
+      requests[#requests + 1] = {
+        key = "implementations",
+        label = "Implementations",
+        method = methods.implementation,
+        origin_uri = context.location.uri,
+        params = {
+          textDocument = { uri = context.location.uri },
+          position = position,
+        },
+      }
+    end
+    if position and supports_references then
+      requests[#requests + 1] = {
+        key = "references",
+        label = "Project references",
+        method = methods.references,
+        origin_uri = context.location.uri,
+        params = {
+          textDocument = { uri = context.location.uri },
+          position = position,
+          context = { includeDeclaration = false },
+        },
+      }
+    end
+    if not position then
+      result.errors[#result.errors + 1] =
+        "LSP locations were skipped because their source text was unavailable for position conversion."
+    end
   end
   pending = #requests
 
@@ -380,5 +713,11 @@ function M.relationships(context, bufnr, callback, options)
     end
   end
 end
+
+M._position_to_client = position_to_client
+M._position_from_client = position_from_client
+M._range_from_client = range_from_client
+M._normalize_document_symbols = normalize_document_symbols
+M._normalize_call_item = normalize_call_item
 
 return M

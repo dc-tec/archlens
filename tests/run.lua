@@ -121,6 +121,99 @@ local function run()
     "an empty map should be explained"
   )
 
+  local implementation_context = vim.deepcopy(context)
+  implementation_context.syntax = {
+    provider = "Tree-sitter",
+    ancestors = {},
+    children = {
+      {
+        name = "nested",
+        kind_name = "Function",
+        location = {
+          uri = context.location.uri,
+          range = {
+            start = { line = 12, character = 2 },
+            ["end"] = { line = 14, character = 2 },
+          },
+        },
+        path_label = context.path_label,
+        line = 13,
+      },
+    },
+    siblings = {},
+  }
+  local implementation_link = {
+    targetUri = "file:///workspace/internal/storage/store.go",
+    targetRange = {
+      start = { line = 7, character = 0 },
+      ["end"] = { line = 14, character = 1 },
+    },
+    targetSelectionRange = {
+      start = { line = 8, character = 2 },
+      ["end"] = { line = 8, character = 10 },
+    },
+  }
+  local implementation_map = model.build(implementation_context, {
+    implementations = {
+      implementation_link,
+      vim.deepcopy(implementation_link),
+      vim.deepcopy(context.location),
+      {
+        uri = "file:///usr/local/go/src/example/external.go",
+        range = {
+          start = { line = 3, character = 0 },
+          ["end"] = { line = 3, character = 8 },
+        },
+      },
+    },
+    outgoing = { call("Read", "file:///workspace/internal/storage/store.go", 18) },
+  }, { include_external = false })
+  assert_equal(
+    vim.tbl_map(function(section)
+      return section.id
+    end, implementation_map.sections),
+    { "children", "implementations", "outgoing" },
+    "implementations should appear immediately after local containment"
+  )
+  local implementation_section = implementation_map.sections[2]
+  assert_equal(#implementation_section.rows, 1, "implementation locations should deduplicate")
+  assert_equal(
+    implementation_section.rows[1].location.range,
+    implementation_link.targetSelectionRange,
+    "LocationLink selection ranges should identify the implementation symbol"
+  )
+  assert_equal(
+    implementation_section.rows[1].kind_name,
+    "Implementation",
+    "implementation rows should retain their relationship type"
+  )
+  assert_equal(implementation_section.rows[1].evidence, {
+    provider = "gopls",
+    method = "textDocument/implementation",
+    class = "semantic",
+  }, "implementation provenance should remain semantic and provider-specific")
+  assert(
+    implementation_section.rows[1].resolve_on_focus,
+    "implementation locations should resolve when focused"
+  )
+  assert(
+    contains(implementation_map.notes, "1 external relationship hidden."),
+    "external implementations should follow the existing project boundary"
+  )
+  local implementation_render = render.build(implementation_map, { width = 80 })
+  assert(
+    contains(implementation_render.lines, "▾ Implementations  1"),
+    "the generic renderer should show the implementation section"
+  )
+  assert(
+    contains(implementation_render.lines, "  ↳ Reconcile"),
+    "the generic renderer should apply the implementation marker"
+  )
+  assert(
+    contains(implementation_render.lines, "internal/storage/store.go:9 · gopls"),
+    "implementation rows should show compact location provenance"
+  )
+
   local reference_location = {
     uri = "file:///workspace/internal/controller/reconcile.go",
     range = {

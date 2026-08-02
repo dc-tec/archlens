@@ -188,6 +188,7 @@ local function row_from_call(call, direction, context)
     root_dir = context.root_dir,
     supports_calls = true,
   })
+  row_context.wire_call_item = call.wire_call_item
   local range = row_context.location.range
   local start = range and range.start or { line = 0, character = 0 }
 
@@ -240,19 +241,21 @@ local function source_line(location, cache)
   return text
 end
 
-local function row_from_location(location, context, evidence, cache, fallback_name)
+local function row_from_location(location, context, relationship, cache, fallback_name)
   if not location or not location.uri or not location.range then
     return nil
   end
+  local evidence = relationship.evidence
   local path = vim.uri_to_fname(location.uri)
   local line = location.range.start.line + 1
   return {
     id = table.concat({ evidence.method, location_key(location) }, ":"),
     name = source_line(location, cache) or fallback_name or context.name,
-    kind_name = "Reference",
+    kind_name = relationship.kind_name,
     path_label = relative_path(context.root_dir, path),
     line = line,
     location = { uri = location.uri, range = location.range, full_range = location.range },
+    position_encoding = context.position_encoding or "utf-8",
     internal = is_within(context.root_dir, path),
     resolve_on_focus = true,
     evidence = vim.deepcopy(evidence),
@@ -307,7 +310,7 @@ local function normalize_calls(calls, direction, context, include_external)
   return rows, hidden
 end
 
-local function normalize_locations(locations, context, include_external, evidence, cache)
+local function normalize_locations(locations, context, include_external, relationship, cache)
   local rows = {}
   local hidden = 0
   local seen = {}
@@ -321,7 +324,7 @@ local function normalize_locations(locations, context, include_external, evidenc
     end
     local key = location_key(location)
     if key ~= self_key and not seen[key] then
-      local row = row_from_location(location, context, evidence, cache)
+      local row = row_from_location(location, context, relationship, cache)
       if row then
         if row.internal or include_external then
           rows[#rows + 1] = row
@@ -353,8 +356,11 @@ local function normalize_structural(matches, context, include_external, cache, e
     elseif key ~= self_key and not seen[key] then
       seen[key] = true
       local row = row_from_location(location, context, {
-        provider = match.provider or "ast-grep",
-        method = "structural",
+        kind_name = "Structural match",
+        evidence = {
+          provider = match.provider or "ast-grep",
+          method = "structural",
+        },
       }, cache, match.text)
       if row then
         if row.internal or include_external then
@@ -419,13 +425,24 @@ function M.build(context, relationships, opts)
     normalize_calls(relationships.incoming, "incoming", context, opts.include_external)
   local outgoing, outgoing_hidden =
     normalize_calls(relationships.outgoing, "outgoing", context, opts.include_external)
-  local references, references_hidden, reference_keys = normalize_locations(
-    relationships.references,
-    context,
-    opts.include_external,
-    { provider = context.client_name or "LSP", method = "textDocument/references" },
-    cache
-  )
+  local implementations, implementations_hidden =
+    normalize_locations(relationships.implementations, context, opts.include_external, {
+      kind_name = "Implementation",
+      evidence = {
+        provider = context.client_name or "LSP",
+        method = "textDocument/implementation",
+        class = "semantic",
+      },
+    }, cache)
+  local references, references_hidden, reference_keys =
+    normalize_locations(relationships.references, context, opts.include_external, {
+      kind_name = "Reference",
+      evidence = {
+        provider = context.client_name or "LSP",
+        method = "textDocument/references",
+        class = "semantic",
+      },
+    }, cache)
   local structural, structural_hidden = normalize_structural(
     relationships.structural,
     context,
@@ -433,19 +450,27 @@ function M.build(context, relationships, opts)
     cache,
     reference_keys
   )
+  sort_rows(implementations)
   sort_rows(references)
   sort_rows(structural)
   local children = syntax_rows(context, "children")
   local siblings = syntax_rows(context, "siblings")
 
   local notes = {}
-  if not context.supports_calls and not resolving_lsp then
+  if context.file_fallback and not resolving_lsp then
+    notes[#notes + 1] =
+      "No symbol could be resolved at this position; semantic relationships were skipped."
+  elseif not context.supports_calls and not resolving_lsp then
     notes[#notes + 1] = string.format(
       "%s has no call hierarchy here; project references and syntax structure are used instead.",
       context.client_name or "The attached language server"
     )
   end
-  local hidden = incoming_hidden + outgoing_hidden + references_hidden + structural_hidden
+  local hidden = incoming_hidden
+    + outgoing_hidden
+    + implementations_hidden
+    + references_hidden
+    + structural_hidden
   if hidden > 0 then
     notes[#notes + 1] =
       string.format("%d external relationship%s hidden.", hidden, hidden == 1 and "" or "s")
@@ -471,6 +496,14 @@ function M.build(context, relationships, opts)
       label = "Contains",
       marker = "└",
       rows = children,
+    }
+  end
+  if #implementations > 0 then
+    sections[#sections + 1] = {
+      id = "implementations",
+      label = "Implementations",
+      marker = "↳",
+      rows = implementations,
     }
   end
   if #incoming > 0 then

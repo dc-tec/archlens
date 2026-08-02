@@ -93,6 +93,7 @@ local function run()
   syntax_context.supports_calls = false
 
   local relationship_callbacks = {}
+  local relationship_contexts = {}
   local structural_callbacks = {}
   local resolve_callbacks = {}
   local cancellation_count = 0
@@ -105,7 +106,8 @@ local function run()
         cancellation_count = cancellation_count + 1
       end
     end,
-    relationships = function(_, _, callback)
+    relationships = function(context, _, callback)
+      relationship_contexts[#relationship_contexts + 1] = vim.deepcopy(context)
       relationship_callbacks[#relationship_callbacks + 1] = callback
       return function()
         cancellation_count = cancellation_count + 1
@@ -196,6 +198,7 @@ local function run()
   )
 
   relationship_callbacks[1]({
+    implementations = { location(2) },
     outgoing = {
       {
         to = {
@@ -209,6 +212,10 @@ local function run()
     },
   })
   local complete_model = rendered[#rendered]
+  assert(
+    section(complete_model, "implementations"),
+    "semantic implementations should merge through the existing LSP provider"
+  )
   assert(section(complete_model, "outgoing"), "LSP results should merge after ast-grep")
   assert(section(complete_model, "structural"), "earlier ast-grep results should remain merged")
   assert_equal(
@@ -251,6 +258,44 @@ local function run()
     {},
     "the current generation should still complete normally"
   )
+
+  local semantic_item = {
+    name = "Implementation",
+    kind = vim.lsp.protocol.SymbolKind.Function,
+    uri = uri,
+    range = location(2).range,
+    selectionRange = location(2).range,
+  }
+  local semantic_implementation = vim.deepcopy(base_context)
+  semantic_implementation.item = semantic_item
+  semantic_implementation.call_item = semantic_item
+  semantic_implementation.wire_call_item = { data = "wire-item" }
+  semantic_implementation.name = semantic_item.name
+  semantic_implementation.location = location(2)
+  archlens.focus({
+    id = "implementation-focus",
+    location = location(2),
+    resolve_on_focus = true,
+  })
+  assert_equal(#resolve_callbacks, 4, "focusing a location row should start semantic resolution")
+  resolve_callbacks[4](semantic_implementation)
+  assert_equal(
+    relationship_contexts[4].supports_calls,
+    true,
+    "focused location resolution should preserve call hierarchy capability"
+  )
+  assert_equal(
+    relationship_contexts[4].item,
+    semantic_item,
+    "focused location resolution should preserve the normalized semantic item"
+  )
+  assert_equal(
+    relationship_contexts[4].wire_call_item,
+    { data = "wire-item" },
+    "focused location resolution should preserve the context-owned transport item"
+  )
+  relationship_callbacks[4]({ outgoing = {} })
+  structural_callbacks[4]({ structural = {}, ast_grep_ran = true })
 
   archlens.close()
   assert(vim.api.nvim_win_is_valid(source_window), "the source window should remain valid")

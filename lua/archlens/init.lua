@@ -164,6 +164,7 @@ local function load_context(session, context, generation)
   local relationships = {
     incoming = {},
     outgoing = {},
+    implementations = {},
     references = {},
     structural = {},
     errors = {},
@@ -175,7 +176,15 @@ local function load_context(session, context, generation)
 
   local function merge(result)
     result = result or {}
-    for _, key in ipairs({ "incoming", "outgoing", "references", "structural", "errors", "notes" }) do
+    for _, key in ipairs({
+      "incoming",
+      "outgoing",
+      "implementations",
+      "references",
+      "structural",
+      "errors",
+      "notes",
+    }) do
       vim.list_extend(relationships[key], result[key] or {})
     end
     relationships.structural_omitted = relationships.structural_omitted
@@ -377,15 +386,7 @@ local function focus_location(session, row)
       return
     end
     resolved = true
-    if syntax_context then
-      if context then
-        syntax_context.client_id = context.client_id
-        syntax_context.client_name = context.client_name
-        syntax_context.position_encoding = context.position_encoding
-        syntax_context.root_dir = context.root_dir or syntax_context.root_dir
-      end
-      context = syntax_context
-    end
+    context = treesitter.resolve(buffer, position, context) or syntax_context
     if not context then
       render(session, model.error(err or "No symbol could be resolved at this relationship."))
       return
@@ -506,7 +507,7 @@ function M.open(row, tabpage)
   vim.api.nvim_set_current_win(window)
   local opened = vim.lsp.util.show_document(
     { uri = row.location.uri, range = row.location.range },
-    (row.context and row.context.position_encoding) or "utf-16",
+    row.position_encoding or (row.context and row.context.position_encoding) or "utf-8",
     { focus = true, reuse_win = true }
   )
   if opened then

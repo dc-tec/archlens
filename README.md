@@ -88,6 +88,19 @@ pane reports omissions.
 still evolving; current options and defaults live in
 [`lua/archlens/init.lua`](lua/archlens/init.lua).
 
+Vendored and generated relationships are hidden by default. They can be
+included, or additional project-relative path prefixes can be excluded:
+
+```lua
+require("archlens").setup({
+  filters = {
+    include_vendored = true,
+    include_generated = true,
+    exclude = { "third_party/legacy" },
+  },
+})
+```
+
 ## Language adapters
 
 [`lua/archlens/adapters.lua`](lua/archlens/adapters.lua) is the source of truth

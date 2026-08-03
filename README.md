@@ -24,7 +24,9 @@ relationship.
 
 ArchLens limits project searches and visible rows. It hides external,
 generated, and vendored results by default. The pane reports filtered and
-omitted results.
+omitted results. Within a section, it places exact and corroborated evidence
+before provider-defined and structural candidates, then prefers nearby files.
+Lower-ranked relationships remain available when you expand the section.
 
 The graph uses language-neutral relationship types. Language adapters change
 labels and row presentation for language-specific concepts such as Go
@@ -98,6 +100,7 @@ Inside the pane:
 
 - `<CR>` opens a relationship, or toggles the selected section or context group.
 - `f` focuses a relationship and adds the previous symbol to navigation history.
+- `F` toggles source-cursor following. Pinned exploration remains the default.
 - `<BS>` or `h` returns to the previous focus.
 - `<Tab>` and `<S-Tab>` move between actionable rows.
 - `]s` and `[s` move between sections.
@@ -121,6 +124,16 @@ state, elapsed time, duration, retry delay, and message for each provider.
 Completed providers do not leave a persistent status line. `Results [?]`
 reports filters, search limits, and partial-analysis caveats. Its details show
 each complete message.
+
+After you focus a relationship, `Path [?]` shows the previous and current
+focus. Press `?` on that line to inspect the complete bounded path. ArchLens
+keeps up to 32 previous focuses. Back navigation and manual focus use pinned
+mode.
+
+Cursor following is optional. Press `F` to follow the symbol under the cursor
+in the tracked source window. ArchLens debounces cursor movement, skips repeated
+positions within the same symbol, and does not add automatic changes to back
+history. Press `f`, `<BS>`, or `h` to return to pinned exploration.
 
 Language-server calls, references, implementations, and type hierarchies are
 semantic relationships. ast-grep results are structural candidates. When
@@ -158,6 +171,10 @@ included, and additional project-relative path prefixes can be excluded:
 
 ```lua
 require("archlens").setup({
+  cursor_follow = {
+    enabled = false,
+    debounce_ms = 150,
+  },
   sections = {
     collapse_secondary = true,
     default_collapsed = { "siblings" },
@@ -174,6 +191,10 @@ require("archlens").setup({
   },
 })
 ```
+
+Set `cursor_follow.enabled` to start `:ArchLensHere` in cursor-follow mode. The
+`F` mapping changes the mode for the current pane. `debounce_ms` controls the
+delay after the latest cursor movement.
 
 Nearby definitions are collapsed by default. Section and context expansion is
 preserved when the pane is refreshed. Use an empty `default_collapsed` list to

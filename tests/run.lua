@@ -917,6 +917,97 @@ local function run()
     "row ids should remain unique when relation kinds share a method and location"
   )
 
+  local relevance_specs = {
+    {
+      name = "structural-near",
+      uri = "file:///workspace/internal/controller/candidate.go",
+      line = 1,
+      evidence = { provider = "ast-grep", method = "structural", class = "structural" },
+    },
+    {
+      name = "provider-defined",
+      uri = "file:///workspace/internal/storage/custom.go",
+      line = 2,
+      evidence = { provider = "custom", method = "first", class = "heuristic" },
+      corroboration = { provider = "custom-2", method = "second", class = "heuristic" },
+    },
+    {
+      name = "exact-distant",
+      uri = "file:///workspace/internal/storage/read.go",
+      line = 3,
+      evidence = { provider = "gopls", method = "references", class = "semantic" },
+    },
+    {
+      name = "exact-near",
+      uri = "file:///workspace/internal/controller/helper.go",
+      line = 4,
+      evidence = { provider = "Tree-sitter", method = "syntax", class = "syntax" },
+    },
+    {
+      name = "exact-same-file",
+      uri = context.location.uri,
+      line = 30,
+      evidence = { provider = "gopls", method = "references", class = "semantic" },
+    },
+    {
+      name = "corroborated-exact",
+      uri = "file:///workspace/cmd/controller/main.go",
+      line = 5,
+      evidence = { provider = "gopls", method = "references", class = "semantic" },
+      corroboration = { provider = "ast-grep", method = "structural", class = "structural" },
+    },
+  }
+  local function relevance_map(specs)
+    local snapshot = graph.new(context)
+    for _, spec in ipairs(specs) do
+      local location = {
+        uri = spec.uri,
+        range = {
+          start = { line = spec.line, character = 2 },
+          ["end"] = { line = spec.line, character = 6 },
+        },
+      }
+      local related = graph.node_from_location(location, { name = spec.name })
+      graph.add_edge(snapshot, graph.edge("dependencies", related, snapshot.focus, spec.evidence))
+      if spec.corroboration then
+        graph.add_edge(
+          snapshot,
+          graph.edge("dependencies", related, snapshot.focus, spec.corroboration)
+        )
+      end
+    end
+    return model.build(context, snapshot, {}).sections[1]
+  end
+  local relevance = relevance_map(relevance_specs)
+  assert_equal(
+    vim.tbl_map(function(row)
+      return row.name
+    end, relevance.rows),
+    {
+      "corroborated-exact",
+      "exact-same-file",
+      "exact-near",
+      "exact-distant",
+      "provider-defined",
+      "structural-near",
+    },
+    "relationships should rank by evidence quality and filesystem locality"
+  )
+  local reversed_specs = vim.deepcopy(relevance_specs)
+  table.sort(reversed_specs, function(left, right)
+    return left.name > right.name
+  end)
+  assert_equal(
+    vim.tbl_map(function(row)
+      return row.name
+    end, relevance_map(reversed_specs).rows),
+    vim.tbl_map(function(row)
+      return row.name
+    end, relevance.rows),
+    "relevance ordering should not depend on provider completion order"
+  )
+  assert_equal(#relevance.rows, #relevance_specs, "relevance ordering must retain every row")
+
   context.syntax = {
     provider = "Tree-sitter",
     ancestors = {

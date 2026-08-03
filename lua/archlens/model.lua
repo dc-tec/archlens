@@ -1,5 +1,6 @@
 local adapters = require("archlens.adapters")
 local graph = require("archlens.graph")
+local relevance = require("archlens.relevance")
 local relations = require("archlens.relations")
 local scope = require("archlens.scope")
 
@@ -564,6 +565,9 @@ local function projected_sections(context, relation, rows, report_adapter_issue)
     end
     section.rows[#section.rows + 1] = row
     section.show_kind = section.show_kind or projection.show_kind == true
+  end
+  for _, section in ipairs(sections) do
+    relevance.sort(section.rows, relation, context)
   end
   table.sort(sections, function(left, right)
     if left.order ~= right.order then

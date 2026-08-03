@@ -187,12 +187,59 @@ local function result_lines(result)
   return lines
 end
 
+local function navigation_lines(navigation, model)
+  local lines = { "Exploration path", "────────────────" }
+  local root = model and model.focus and model.focus.root_dir
+  for index, entry in ipairs(navigation.entries or {}) do
+    if index > 1 then
+      lines[#lines + 1] = ""
+    end
+    local heading = string.format("%d  %s", index, entry.name or "Unknown focus")
+    if entry.kind_name and entry.kind_name ~= "" then
+      heading = heading .. "  " .. entry.kind_name
+    end
+    lines[#lines + 1] = heading
+    local location = location_label(entry.location, root, entry.path_label)
+    if location then
+      lines[#lines + 1] = "   " .. location
+    end
+    if entry.via then
+      local relation = entry.via.relation_label
+      if not relation and entry.via.relation_id then
+        local registered = relations.get(entry.via.relation_id)
+        relation = registered and registered.label
+      end
+      local target = entry.via.target_name
+      if relation and target then
+        lines[#lines + 1] = string.format("   %s → %s", relation, target)
+      elseif target then
+        lines[#lines + 1] = "   Focused → " .. target
+      end
+    end
+  end
+  lines[#lines + 1] = ""
+  append(
+    lines,
+    "Back",
+    string.format(
+      "%d previous focus%s",
+      navigation.back_count or 0,
+      navigation.back_count == 1 and "" or "es"
+    )
+  )
+  if (navigation.omitted or 0) > 0 then
+    append(lines, "Earlier", string.format("%d focuses omitted", navigation.omitted))
+  end
+  return lines
+end
+
 local function help_lines()
   return {
     "ArchLens keys",
     "─────────────",
     "<CR>            Open an item or toggle a section or context group",
     "f               Focus an item and retain the previous focus in history",
+    "F               Toggle source-cursor following",
     "<BS>, h         Return to the previous focus",
     "<Tab>, <S-Tab>  Move to the next or previous actionable row",
     "]s, [s          Move to the next or previous section",
@@ -213,6 +260,9 @@ function M.lines(selection, model)
   end
   if selection and selection.result then
     return result_lines(selection.result)
+  end
+  if selection and selection.navigation then
+    return navigation_lines(selection.navigation, model)
   end
   local section = selection and selection.section
   if not section then

@@ -183,9 +183,16 @@ local function configure_buffer(session, actions)
   map(buffer, "f", function()
     local target = target_at_cursor(session)
     if target and target.row and target.row.id then
-      actions.focus(target.row)
+      actions.focus(target.row, {
+        relation_id = target.relation_id,
+        relation_label = target.relation_label,
+        target_name = target.row.name,
+      })
     end
   end, "ArchLens focus")
+  map(buffer, "F", function()
+    actions.toggle_follow()
+  end, "ArchLens toggle cursor following")
   map(buffer, "<BS>", actions.back, "ArchLens back")
   map(buffer, "h", actions.back, "ArchLens back")
   map(buffer, "r", actions.refresh, "ArchLens refresh")

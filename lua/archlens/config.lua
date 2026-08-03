@@ -13,6 +13,10 @@ local defaults = {
     order = {},
   },
   include_external = false,
+  cursor_follow = {
+    enabled = false,
+    debounce_ms = 150,
+  },
   providers = {},
   filters = {
     include_generated = false,
@@ -135,6 +139,22 @@ local function validate_cold_start_retry(value)
   end
 end
 
+local function validate_cursor_follow(value)
+  if value == nil then
+    return
+  end
+  validate_table(value, "cursor_follow")
+  if value.enabled ~= nil and type(value.enabled) ~= "boolean" then
+    error("ArchLens setup: cursor_follow.enabled must be a boolean", 3)
+  end
+  if
+    value.debounce_ms ~= nil
+    and (type(value.debounce_ms) ~= "number" or value.debounce_ms < 0 or value.debounce_ms % 1 ~= 0)
+  then
+    error("ArchLens setup: cursor_follow.debounce_ms must be a non-negative integer", 3)
+  end
+end
+
 local function validate(options)
   validate_table(options, "options")
   if not options then
@@ -143,6 +163,7 @@ local function validate(options)
 
   for _, key in ipairs({
     "sections",
+    "cursor_follow",
     "providers",
     "filters",
     "imports",
@@ -152,6 +173,7 @@ local function validate(options)
   }) do
     validate_table(options[key], key)
   end
+  validate_cursor_follow(options.cursor_follow)
   if type(options.lsp) == "table" then
     validate_cold_start_retry(options.lsp.cold_start_retry)
   end

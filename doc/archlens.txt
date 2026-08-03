@@ -48,6 +48,7 @@ The following mappings are local to the ArchLens pane:
 
 <CR>            Open a relationship or toggle a section or context group.
 f               Focus a relationship and add the previous symbol to history.
+F               Toggle source-cursor following. Pinned mode is the default.
 <BS>, h         Return to the previous focus.
 <Tab>           Move to the next actionable row.
 <S-Tab>         Move to the previous actionable row.
@@ -71,6 +72,15 @@ by count; failures, timeouts, unavailability, cancellation, and retries take
 priority. Completed providers do not leave persistent status noise.
 The details include the time to the first useful relationship.
 
+After the first focused relationship, `Path [?]` shows the previous and
+current focus. Its details contain the complete path and available back count.
+ArchLens retains up to 32 previous focuses.
+
+Source-cursor following watches only the tracked source window. It debounces
+cursor movement, skips repeated movement within one symbol, and does not add
+automatic changes to history. Manual focus and back navigation return to
+pinned mode.
+
 `Results [?]` compacts relationship filtering, provider caveats, and bounded
 analysis into one line. Its details retain each exact message. The persistent
 footer shows only primary controls; press `?` on an ordinary line for the
@@ -82,6 +92,11 @@ When semantic calls, references, implementations, or type hierarchy
 relationships exist, unmatched structural candidates start collapsed as
 secondary evidence. They start expanded when structural analysis is the only
 available usage source.
+
+Rows within a section are ordered by evidence quality and filesystem locality.
+Exact corroborated relationships appear first, followed by other exact,
+provider-defined, and structural evidence. Lower-ranked rows remain available
+through section expansion.
 
 Type-like focuses show their Tree-sitter children as members. Language
 adapters may project canonical type hierarchy relationships into familiar
@@ -99,6 +114,21 @@ Call `setup()` without options to use the defaults: >lua
 
 The plugin loads with defaults automatically. Later `setup()` calls merge
 their options into the active configuration.
+
+                                               *archlens-config-cursor-follow*
+Cursor following is optional: >lua
+
+    require("archlens").setup({
+      cursor_follow = {
+        enabled = false,
+        debounce_ms = 150,
+      },
+    })
+<
+
+`enabled` selects the mode used by |:ArchLensHere|. The `F` pane mapping
+changes the current pane. `debounce_ms` is the delay after the latest cursor
+movement.
 
                                                     *archlens-config-sections*
 Section policy controls initial collapse state and result limits: >lua

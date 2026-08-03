@@ -143,9 +143,61 @@ assert(
   )
 )
 
+local navigation = {
+  back_count = 2,
+  omitted = 3,
+  entries = {
+    {
+      name = "NewManager",
+      kind_name = "Function",
+      path_label = "internal/service/manager.go",
+      location = {
+        uri = "file:///workspace/internal/service/manager.go",
+        range = range(43, 0),
+      },
+      via = {
+        relation_id = "incoming",
+        relation_label = "Entered through",
+        target_name = "Reconcile",
+      },
+    },
+    {
+      name = "Reconcile",
+      kind_name = "Method",
+      path_label = "internal/controller/reconcile.go",
+      location = {
+        uri = "file:///workspace/internal/controller/reconcile.go",
+        range = range(90, 0),
+      },
+      via = {
+        relation_id = "outgoing",
+        target_name = "Store",
+      },
+    },
+    {
+      name = "Store",
+      kind_name = "Function",
+      path_label = "internal/storage/store.go",
+      location = {
+        uri = "file:///workspace/internal/storage/store.go",
+        range = range(11, 0),
+      },
+    },
+  },
+}
+local navigation_lines = details.lines({ navigation = navigation }, model)
+assert(contains(navigation_lines, "Exploration path"))
+assert(contains(navigation_lines, "1  NewManager  Function"))
+assert(contains(navigation_lines, "   internal/service/manager.go:44:1"))
+assert(contains(navigation_lines, "   Entered through → Reconcile"))
+assert(contains(navigation_lines, "   Touches → Store"))
+assert(contains(navigation_lines, "Back        2 previous focuses"))
+assert(contains(navigation_lines, "Earlier     3 focuses omitted"))
+
 local help_lines = details.lines({ help = true }, model)
 assert(contains(help_lines, "ArchLens keys"))
 assert(contains(help_lines, "zM, zR          Collapse or expand the complete view"))
+assert(contains(help_lines, "F               Toggle source-cursor following"))
 assert(contains(help_lines, "?               Inspect the current line, or show this help"))
 
 local section_lines = details.lines({ section = section }, model)

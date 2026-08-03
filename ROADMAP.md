@@ -22,21 +22,6 @@ languages.
 - Let providers extend the model without turning the pane into an unstructured
   result list.
 
-## Near-term direction
-
-### Context and navigation
-
-The pane should communicate how the current focus fits into its surroundings,
-not only list individual relationships.
-
-Possible improvements include:
-
-- A clearer indication of the current exploration path and available back
-  history
-- An optional mode that follows the source cursor while retaining the current
-  pinned behavior
-- Relevance ordering that preserves lower-confidence evidence
-
 ## Longer-term direction
 
 ### Module and package context

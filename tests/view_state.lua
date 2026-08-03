@@ -124,6 +124,44 @@ local function run()
     "advanced controls should move to contextual help"
   )
 
+  local navigation = {
+    back_count = 2,
+    omitted = 0,
+    entries = {
+      { name = "AQuiteLongPreviousFocus" },
+      { name = "AnIntermediateFocus" },
+      { name = "AQuiteLongCurrentFocus" },
+    },
+  }
+  local path_rendered = renderer.build({
+    title = "ArchLens",
+    navigation = navigation,
+    sections = {},
+  }, { width = 30 })
+  local path_line = vim.iter(path_rendered.lines):find(function(line)
+    return line:find("Path [?]:", 1, true) ~= nil
+  end)
+  assert(
+    path_line and path_line:find("AQuite", 1, true),
+    "the previous focus should remain visible"
+  )
+  assert(
+    path_line and path_line:find("AQuite", 10, true),
+    "the current focus should remain visible"
+  )
+  local path_index = vim.fn.index(path_rendered.lines, path_line) + 1
+  equal(
+    path_rendered.details[path_index],
+    { navigation = navigation },
+    "path details should retain the complete history"
+  )
+  local root_rendered = renderer.build({
+    title = "ArchLens",
+    navigation = { back_count = 0, omitted = 0, entries = { { name = "Root" } } },
+    sections = {},
+  }, { width = 56 })
+  assert(not contains(root_rendered.lines, "Path [?]:"), "the root focus should not add path noise")
+
   local source_window = vim.api.nvim_get_current_win()
   local options = {
     width = 100,
@@ -140,13 +178,20 @@ local function run()
     collapsed = { siblings = true },
   }
   local noop = function() end
+  local focused_navigation
+  local follow_toggles = 0
   view.ensure(session, options, {
     open = noop,
-    focus = noop,
+    focus = function(_, navigation_metadata)
+      focused_navigation = navigation_metadata
+    end,
     back = noop,
     refresh = noop,
     close = noop,
     dismiss = noop,
+    toggle_follow = function()
+      follow_toggles = follow_toggles + 1
+    end,
   })
   view.render(session, model, options)
 
@@ -155,6 +200,18 @@ local function run()
     mappings[mapping.lhs] = mapping.callback
   end
   assert(mappings.zM and mappings.zR, "the pane should map zM and zR")
+  assert(mappings.F, "the pane should map cursor following")
+  mappings.F()
+  equal(follow_toggles, 1, "the cursor-follow mapping should toggle the session mode")
+
+  local outgoing_line = vim.fn.index(session.rendered.lines, "  → first") + 1
+  vim.api.nvim_win_set_cursor(session.window, { outgoing_line, 0 })
+  mappings.f()
+  equal(focused_navigation, {
+    relation_id = "outgoing",
+    relation_label = "Touches",
+    target_name = "first",
+  }, "focus should retain the relationship used for navigation")
 
   local structural_line = vim.fn.index(session.rendered.lines, "▸ Potential test matches  1") + 1
   local toggle_mapping = mappings["<Space>"] or mappings[" "]

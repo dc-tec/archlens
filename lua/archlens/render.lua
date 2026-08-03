@@ -115,6 +115,36 @@ local function analysis_line(model, width, inspectable)
   return prefix .. table.concat(compact, " · ")
 end
 
+local function navigation_line(navigation, width)
+  local entries = navigation.entries or {}
+  local current = entries[#entries]
+  if not current then
+    return nil
+  end
+  local previous = entries[#entries - 1]
+  local prefix = "Path [?]: "
+  if not previous then
+    if (navigation.omitted or 0) == 0 then
+      return nil
+    end
+    return prefix
+      .. "… → "
+      .. truncate(current.name, width - vim.fn.strdisplaywidth(prefix .. "… → "))
+  end
+
+  local ellipsis = #entries > 2 or (navigation.omitted or 0) > 0
+  local separator = ellipsis and "… " or ""
+  local fixed = prefix .. separator .. " → "
+  local available = math.max(2, width - vim.fn.strdisplaywidth(fixed))
+  local previous_width = math.max(1, math.floor(available / 2))
+  local current_width = math.max(1, available - previous_width)
+  return prefix
+    .. separator
+    .. truncate(previous.name, previous_width)
+    .. " → "
+    .. truncate(current.name, current_width)
+end
+
 function M.build(model, opts)
   opts = opts or {}
   local width = math.max(opts.width or 56, 30)
@@ -167,6 +197,14 @@ function M.build(model, opts)
     add(analysis_line(model, width, analysis_detail ~= nil), nil, "DiagnosticInfo", analysis_detail)
   elseif model.pending_providers and #model.pending_providers > 0 then
     add("Pending: " .. table.concat(model.pending_providers, " · "), nil, "DiagnosticInfo")
+  end
+
+  local path = model.navigation and navigation_line(model.navigation, width)
+  if path then
+    add(path, nil, "DiagnosticHint", { navigation = model.navigation })
+  end
+  if model.cursor_follow then
+    add("Following source cursor", nil, "DiagnosticHint")
   end
 
   if model.focus then
@@ -244,12 +282,12 @@ function M.build(model, opts)
       if section.show_kind and row.kind_name and row.kind_name ~= "" then
         name = string.format("%s  %s", name, row.kind_name)
       end
-      add(
-        string.format("%s%s %s", indent, section.marker, name),
-        { action = "open", row = row },
-        "Normal",
-        row_detail
-      )
+      add(string.format("%s%s %s", indent, section.marker, name), {
+        action = "open",
+        row = row,
+        relation_id = section.id,
+        relation_label = section.label,
+      }, "Normal", row_detail)
       local badge = row.evidence and row.evidence.provider or "lsp"
       local detail = location_label(row)
       if detail ~= "" then
@@ -280,6 +318,7 @@ function M.build(model, opts)
             group_id = group.id,
             section_id = state_id,
             relation_id = section.id,
+            relation_label = section.label,
             row = {
               id = group.id,
               name = group.name,

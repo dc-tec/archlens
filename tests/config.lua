@@ -34,6 +34,10 @@ local function run()
   assert_equal(second.sections.max_items, {}, "section limits should fall back to max_items")
   assert_equal(second.sections.hidden, {}, "sections should remain visible by default")
   assert_equal(second.sections.order, {}, "relation registry order should remain the default")
+  assert_equal(second.cursor_follow, {
+    enabled = false,
+    debounce_ms = 150,
+  }, "cursor following should be opt-in and debounced by default")
   assert_equal(
     second.providers,
     {},
@@ -139,6 +143,14 @@ local function run()
     {
       options = { lsp = { cold_start_retry = { enabled = "yes" } } },
       message = "lsp.cold_start_retry.enabled must be a boolean",
+    },
+    {
+      options = { cursor_follow = { enabled = "yes" } },
+      message = "cursor_follow.enabled must be a boolean",
+    },
+    {
+      options = { cursor_follow = { debounce_ms = -1 } },
+      message = "cursor_follow.debounce_ms must be a non-negative integer",
     },
   }
   for _, case in ipairs(invalid_options) do

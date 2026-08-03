@@ -2,6 +2,7 @@ local config_module = require("archlens.config")
 local graph = require("archlens.graph")
 local lsp = require("archlens.lsp")
 local model = require("archlens.model")
+local navigation = require("archlens.navigation")
 local performance = require("archlens.performance")
 local providers = require("archlens.providers")
 local treesitter = require("archlens.treesitter")
@@ -15,6 +16,7 @@ local config = config_module.new()
 ---@field tabpage integer
 ---@field generation integer
 ---@field history table[]
+---@field history_omitted integer
 ---@field cancellations function[]
 ---@field expanded table<string, boolean>
 ---@field expanded_groups table<string, boolean>
@@ -40,6 +42,10 @@ local config = config_module.new()
 ---@field did_jump? boolean
 ---@field restore_row_id? string
 ---@field performance? ArchLensPerformanceRun
+---@field cursor_follow boolean
+---@field follow_timer? any
+---@field follow_token integer
+---@field follow_identity? string
 
 ---@type table<integer, ArchLensSession>
 local sessions = {}
@@ -66,15 +72,28 @@ local function session_for(tabpage)
     tabpage = tabpage,
     generation = 0,
     history = {},
+    history_omitted = 0,
     cancellations = {},
     expanded = {},
     expanded_groups = {},
     group_limits = {},
     collapsed = {},
     active = false,
+    cursor_follow = false,
+    follow_token = 0,
   }
   sessions[tabpage] = session
   return session
+end
+
+local function cancel_follow_timer(session)
+  session.follow_token = (session.follow_token or 0) + 1
+  local timer = session.follow_timer
+  session.follow_timer = nil
+  if timer and not timer:is_closing() then
+    timer:stop()
+    timer:close()
+  end
 end
 
 local function cancel_requests(session)
@@ -144,8 +163,8 @@ local function actions_for(session)
     open = function(row)
       M.open(row, session.tabpage)
     end,
-    focus = function(row)
-      M.focus(row, session.tabpage)
+    focus = function(row, navigation_metadata)
+      M.focus(row, session.tabpage, navigation_metadata)
     end,
     back = function()
       M.back(session.tabpage)
@@ -158,6 +177,9 @@ local function actions_for(session)
     end,
     dismiss = function()
       M.dismiss(session.tabpage)
+    end,
+    toggle_follow = function()
+      M.toggle_follow(session.tabpage)
     end,
   }
 end
@@ -172,11 +194,14 @@ local function render(session, rendered_model)
   end
   performance.observe(session.performance, rendered_model)
   rendered_model.performance = performance.snapshot(session.performance)
+  rendered_model.cursor_follow = session.cursor_follow == true
+  rendered_model.navigation = navigation.snapshot(session, rendered_model.focus)
   ensure_view(session)
   view.render(session, rendered_model, config)
 end
 
 local function render_local_context(session, context)
+  session.current = context
   local snapshot = graph.new(context)
   graph.set_pending(snapshot, providers.local_pending(config))
   render(session, model.build(context, snapshot, config))
@@ -205,7 +230,11 @@ end
 local function capture_source(session)
   local window = vim.api.nvim_get_current_win()
   if view.is_map_window(session, window) then
-    return valid_window(session.source_window)
+    if not valid_window(session.source_window) then
+      return false
+    end
+    session.source_buffer = vim.api.nvim_win_get_buf(session.source_window)
+    return true
   end
 
   session.source_window = window
@@ -217,25 +246,15 @@ local function capture_source(session)
   return true
 end
 
-function M.show_here(tabpage)
-  local session = session_for(tabpage)
-  if not capture_source(session) then
-    vim.notify("ArchLens could not find a source window.", vim.log.levels.WARN)
-    return
-  end
-
-  session.history = {}
-  session.restore_row_id = nil
-  session.active = true
-  local generation = begin_run(session, true)
-
-  local cursor = vim.api.nvim_win_get_cursor(session.source_window)
-  local position = { line = cursor[1] - 1, character = cursor[2] }
-  local syntax_context = treesitter.resolve(session.source_buffer, position, nil)
+local function resolve_at(session, buffer, position, opts)
+  opts = opts or {}
+  session.source_buffer = buffer
+  local generation = begin_run(session, opts.require_source_window == true)
+  local syntax_context = opts.syntax_context or treesitter.resolve(buffer, position, nil)
   if syntax_context then
     render_local_context(session, syntax_context)
   else
-    render(session, model.error("Resolving the symbol under the cursor…"))
+    render(session, model.error(opts.loading_message or "Resolving the symbol…"))
   end
   local resolved = false
 
@@ -244,20 +263,23 @@ function M.show_here(tabpage)
       return
     end
     resolved = true
-    context = treesitter.resolve(session.source_buffer, position, context) or syntax_context
+    context = treesitter.resolve(buffer, position, context) or syntax_context
     if not context then
-      render(session, model.error(err or "No symbol could be resolved at the cursor."))
+      if opts.on_failure then
+        opts.on_failure()
+      end
+      render(session, model.error(err or opts.failure_message or "No symbol could be resolved."))
       return
     end
     load_context(session, context, generation)
   end
 
-  local cancel = lsp.resolve(session.source_buffer, session.source_window, function(context, err)
+  local cancel = lsp.resolve(buffer, position, function(context, err)
     finish(context, err)
   end)
   register_cancel(session, cancel)
   local timer = vim.defer_fn(function()
-    finish(syntax_context, syntax_context and nil or "Symbol resolution timed out.")
+    finish(syntax_context, syntax_context and nil or opts.timeout_message)
   end, config.lsp.resolve_timeout_ms)
   register_cancel(session, function()
     if timer and not timer:is_closing() then
@@ -265,6 +287,36 @@ function M.show_here(tabpage)
       timer:close()
     end
   end)
+  return syntax_context
+end
+
+function M.show_here(tabpage)
+  local session = session_for(tabpage)
+  if not capture_source(session) then
+    vim.notify("ArchLens could not find a source window.", vim.log.levels.WARN)
+    return
+  end
+
+  navigation.reset(session)
+  cancel_follow_timer(session)
+  session.cursor_follow = config.cursor_follow.enabled == true
+  session.follow_identity = nil
+  session.active = true
+
+  local cursor = vim.api.nvim_win_get_cursor(session.source_window)
+  local position = { line = cursor[1] - 1, character = cursor[2] }
+  local syntax_context = resolve_at(session, session.source_buffer, position, {
+    require_source_window = true,
+    loading_message = "Resolving the symbol under the cursor…",
+    failure_message = "No symbol could be resolved at the cursor.",
+    timeout_message = "Symbol resolution timed out.",
+  })
+  if session.cursor_follow and syntax_context then
+    session.follow_identity = navigation.context_identity(
+      syntax_context,
+      vim.api.nvim_buf_get_changedtick(session.source_buffer)
+    )
+  end
 end
 
 local function same_context(left, right)
@@ -307,67 +359,127 @@ local function repair_source_buffer(session, context)
   return true
 end
 
-local function focus_location(session, row)
+local function focus_location(session, row, navigation_metadata)
   if not row.location or not row.location.uri or not row.location.range then
     return
   end
-  session.history[#session.history + 1] = {
-    context = session.current,
-    selected_row_id = view.selected_row_id(session),
-    expanded = vim.deepcopy(session.expanded),
-    expanded_groups = vim.deepcopy(session.expanded_groups),
-    group_limits = vim.deepcopy(session.group_limits),
-    collapsed = vim.deepcopy(session.collapsed),
-  }
-  session.restore_row_id = nil
-
   local buffer = buffer_for_uri(row.location.uri)
   if not buffer then
-    table.remove(session.history)
     return
   end
-  session.source_buffer = buffer
-  local generation = begin_run(session, false)
+  local entry = navigation.push(session, navigation_metadata, view.selected_row_id(session))
+  session.restore_row_id = nil
   local position = row.location.range.start
-  local syntax_context = treesitter.resolve(buffer, position, nil)
-  local resolved = false
-
-  local function finish(context, err)
-    if resolved or not is_current(session, generation) then
-      return
-    end
-    resolved = true
-    context = treesitter.resolve(buffer, position, context) or syntax_context
-    if not context then
-      render(session, model.error(err or "No symbol could be resolved at this relationship."))
-      return
-    end
-    load_context(session, context, generation)
-  end
-
-  if syntax_context then
-    render_local_context(session, syntax_context)
-  else
-    render(session, model.error("Resolving the focused relationship…"))
-  end
-  local cancel = lsp.resolve(buffer, position, finish)
-  register_cancel(session, cancel)
-  local timer = vim.defer_fn(function()
-    finish(syntax_context, syntax_context and nil or "Focused symbol resolution timed out.")
-  end, config.lsp.resolve_timeout_ms)
-  register_cancel(session, function()
-    if timer and not timer:is_closing() then
-      timer:stop()
-      timer:close()
-    end
-  end)
+  resolve_at(session, buffer, position, {
+    loading_message = "Resolving the focused relationship…",
+    failure_message = "No symbol could be resolved at this relationship.",
+    timeout_message = "Focused symbol resolution timed out.",
+    on_failure = function()
+      navigation.rollback(session, entry)
+    end,
+  })
 end
 
-function M.focus(target, tabpage)
+local function disable_cursor_follow(session)
+  cancel_follow_timer(session)
+  session.cursor_follow = false
+  session.follow_identity = nil
+end
+
+local function follow_source_cursor(session, allow_background)
+  if
+    not session.active
+    or not session.cursor_follow
+    or not vim.api.nvim_tabpage_is_valid(session.tabpage)
+    or vim.api.nvim_get_current_tabpage() ~= session.tabpage
+    or not valid_window(session.source_window)
+    or (not allow_background and vim.api.nvim_get_current_win() ~= session.source_window)
+  then
+    return
+  end
+
+  local buffer = vim.api.nvim_win_get_buf(session.source_window)
+  if not valid_buffer(buffer) then
+    return
+  end
+  local cursor = vim.api.nvim_win_get_cursor(session.source_window)
+  local position = { line = cursor[1] - 1, character = cursor[2] }
+  local changedtick = vim.api.nvim_buf_get_changedtick(buffer)
+  local syntax_context = treesitter.resolve(buffer, position, nil)
+  local identity = navigation.context_identity(syntax_context, changedtick)
+    or table.concat(
+      { vim.uri_from_bufnr(buffer), position.line, position.character, changedtick },
+      "\0"
+    )
+  if identity == session.follow_identity then
+    return
+  end
+  if
+    session.follow_identity == nil
+    and syntax_context
+    and navigation.same_symbol(syntax_context, session.current)
+  then
+    session.follow_identity = identity
+    return
+  end
+
+  session.follow_identity = identity
+  resolve_at(session, buffer, position, {
+    require_source_window = true,
+    syntax_context = syntax_context,
+    loading_message = "Resolving the source cursor…",
+    failure_message = "No symbol could be resolved at the source cursor.",
+    timeout_message = "Source cursor resolution timed out.",
+  })
+end
+
+local function schedule_cursor_follow(session, delay, allow_background)
+  cancel_follow_timer(session)
+  if not session.active or not session.cursor_follow then
+    return
+  end
+  local token = session.follow_token
+  local timer
+  timer = vim.defer_fn(function()
+    if session.follow_token ~= token then
+      return
+    end
+    session.follow_timer = nil
+    follow_source_cursor(session, allow_background)
+  end, delay == nil and config.cursor_follow.debounce_ms or delay)
+  session.follow_timer = timer
+end
+
+function M.toggle_follow(tabpage)
   local session = session_for(tabpage)
+  if not session.active then
+    return
+  end
+  if session.cursor_follow then
+    disable_cursor_follow(session)
+  else
+    cancel_follow_timer(session)
+    session.cursor_follow = true
+    session.follow_identity = nil
+    navigation.reset(session)
+  end
+  if session.model then
+    render(session, session.model)
+  end
+  if session.cursor_follow then
+    schedule_cursor_follow(session, 0, true)
+  end
+end
+
+function M.focus(target, tabpage, navigation_metadata)
+  local session = session_for(tabpage)
+  local was_following = session.cursor_follow
+  disable_cursor_follow(session)
   if target and target.resolve_on_focus then
     if session.active and session.current then
-      focus_location(session, target)
+      focus_location(session, target, navigation_metadata)
+    elseif was_following and session.model then
+      render(session, session.model)
     end
     return
   end
@@ -378,21 +490,20 @@ function M.focus(target, tabpage)
     or not session.current
     or same_context(context, session.current)
   then
+    if was_following and session.active and session.model then
+      render(session, session.model)
+    end
     return
   end
   if not repair_source_buffer(session, context) then
+    if was_following and session.model then
+      render(session, session.model)
+    end
     return
   end
   context = treesitter.resolve(session.source_buffer, context.location.range.start, context)
     or context
-  session.history[#session.history + 1] = {
-    context = session.current,
-    selected_row_id = view.selected_row_id(session),
-    expanded = vim.deepcopy(session.expanded),
-    expanded_groups = vim.deepcopy(session.expanded_groups),
-    group_limits = vim.deepcopy(session.group_limits),
-    collapsed = vim.deepcopy(session.collapsed),
-  }
+  navigation.push(session, navigation_metadata, view.selected_row_id(session))
   session.restore_row_id = nil
   local generation = begin_run(session, false)
   load_context(session, context, generation)
@@ -400,8 +511,23 @@ end
 
 function M.back(tabpage)
   local session = session_for(tabpage)
+  local was_following = session.cursor_follow
+  disable_cursor_follow(session)
+  if not session.active then
+    return
+  end
   local entry = table.remove(session.history)
-  if not session.active or not entry or not repair_source_buffer(session, entry.context) then
+  if not entry then
+    if was_following and session.model then
+      render(session, session.model)
+    end
+    return
+  end
+  if not repair_source_buffer(session, entry.context) then
+    session.history[#session.history + 1] = entry
+    if was_following and session.model then
+      render(session, session.model)
+    end
     return
   end
   session.restore_row_id = entry.selected_row_id
@@ -424,7 +550,7 @@ function M.refresh(tabpage)
     return
   end
   session.restore_row_id = view.selected_row_id(session)
-  local generation = begin_run(session, false, true)
+  local generation = begin_run(session, session.cursor_follow, true)
   providers.clear_cache(session.current.root_dir)
   load_context(session, session.current, generation)
 end
@@ -498,6 +624,7 @@ local function deactivate(session)
   end
   session.active = false
   session.generation = session.generation + 1
+  disable_cursor_follow(session)
   cancel_requests(session)
   return true
 end
@@ -531,6 +658,7 @@ function M.setup(options)
     callback = function()
       for tabpage, session in pairs(sessions) do
         if not vim.api.nvim_tabpage_is_valid(tabpage) then
+          cancel_follow_timer(session)
           cancel_requests(session)
           sessions[tabpage] = nil
         end
@@ -542,6 +670,42 @@ function M.setup(options)
     callback = function(event)
       if event.data and event.data.client_id then
         lsp.note_attach(event.data.client_id)
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd({ "CursorMoved", "BufEnter" }, {
+    group = group,
+    callback = function(event)
+      local tabpage = vim.api.nvim_get_current_tabpage()
+      local session = sessions[tabpage]
+      if
+        session
+        and session.active
+        and session.cursor_follow
+        and valid_window(session.source_window)
+        and vim.api.nvim_get_current_win() == session.source_window
+        and event.buf == vim.api.nvim_win_get_buf(session.source_window)
+      then
+        schedule_cursor_follow(session)
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    callback = function(event)
+      local closed = tonumber(event.match)
+      for _, session in pairs(sessions) do
+        if session.source_window == closed then
+          local was_following = session.cursor_follow
+          disable_cursor_follow(session)
+          if was_following and session.active and session.model then
+            vim.schedule(function()
+              if session.active and session.model then
+                render(session, session.model)
+              end
+            end)
+          end
+        end
       end
     end,
   })

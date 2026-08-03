@@ -2,6 +2,7 @@ local config_module = require("archlens.config")
 local graph = require("archlens.graph")
 local lsp = require("archlens.lsp")
 local model = require("archlens.model")
+local performance = require("archlens.performance")
 local providers = require("archlens.providers")
 local treesitter = require("archlens.treesitter")
 local view = require("archlens.view")
@@ -38,6 +39,7 @@ local config = config_module.new()
 ---@field detail? table
 ---@field did_jump? boolean
 ---@field restore_row_id? string
+---@field performance? ArchLensPerformanceRun
 
 ---@type table<integer, ArchLensSession>
 local sessions = {}
@@ -104,6 +106,7 @@ local function begin_run(session, require_source_window, preserve_view_state)
       and vim.api.nvim_buf_get_changedtick(session.source_buffer)
     or nil
   session.require_source_window = require_source_window == true
+  session.performance = performance.start()
   return session.generation
 end
 
@@ -167,6 +170,8 @@ local function render(session, rendered_model)
   if not session.active then
     return
   end
+  performance.observe(session.performance, rendered_model)
+  rendered_model.performance = performance.snapshot(session.performance)
   ensure_view(session)
   view.render(session, rendered_model, config)
 end

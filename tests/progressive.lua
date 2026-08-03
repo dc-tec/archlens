@@ -268,6 +268,10 @@ local function run()
   assert_equal(#structural_callbacks, 0, "project search must wait for symbol resolution")
   local immediate_model = rendered[#rendered]
   assert(
+    immediate_model.performance and immediate_model.performance.first_result_ms ~= nil,
+    "the first local relationship should record a first-result measurement"
+  )
+  assert(
     section(immediate_model, "children"),
     "Tree-sitter structure should render before LSP resolution"
   )
@@ -389,7 +393,12 @@ local function run()
   active_session.expanded_groups = { ["test_references:group:old"] = true }
   active_session.group_limits = { ["test_references:group:old"] = 24 }
   active_session.collapsed = { references = true }
+  local previous_performance = active_session.performance
   archlens.show_here()
+  assert(
+    active_session.performance ~= previous_performance,
+    "a new analysis generation should start a new performance measurement"
+  )
   assert_equal(active_session.expanded, {}, "ArchLensHere should clear manual section expansion")
   assert_equal(
     active_session.expanded_groups,

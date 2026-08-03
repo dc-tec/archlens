@@ -67,11 +67,25 @@
               '';
             };
           };
+          benchmark = pkgs.writeShellApplication {
+            name = "archlens-benchmark";
+            runtimeInputs = [ testNeovim ];
+            text = ''
+              export ARCHLENS_BENCHMARK_FIXTURE_ROOT=${./tests/fixtures/project}
+              exec nvim --headless -i NONE -l ${./tests/benchmark.lua}
+            '';
+          };
         in
         {
           packages = {
             default = archlens;
             test-neovim = testNeovim;
+          };
+
+          apps.benchmark = {
+            type = "app";
+            program = lib.getExe benchmark;
+            meta.description = "Run the local ArchLens performance report";
           };
 
           checks = {

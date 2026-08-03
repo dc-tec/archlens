@@ -69,6 +69,7 @@ provider ends with an exceptional outcome. Active provider names remain visible
 when they fit. At narrower widths ordinary running and queued work is summarized
 by count; failures, timeouts, unavailability, cancellation, and retries take
 priority. Completed providers do not leave persistent status noise.
+The details include the time to the first useful relationship.
 
 `Results [?]` compacts relationship filtering, provider caveats, and bounded
 analysis into one line. Its details retain each exact message. The persistent

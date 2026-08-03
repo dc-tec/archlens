@@ -145,9 +145,13 @@ function M.build(model, opts)
   add(model.title or "ArchLens", nil, "Title")
   add(string.rep("─", math.min(width, 24)), nil, "Comment")
 
-  local analysis_detail = model.provider_runs
-      and #model.provider_runs > 0
-      and { provider_runs = model.provider_runs }
+  local has_provider_runs = model.provider_runs and #model.provider_runs > 0
+  local has_performance = model.performance and model.performance.first_result_ms ~= nil
+  local analysis_detail = (has_provider_runs or has_performance)
+      and {
+        provider_runs = model.provider_runs or {},
+        performance = model.performance,
+      }
     or nil
 
   if model.providers and #model.providers > 0 then

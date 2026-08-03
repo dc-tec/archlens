@@ -142,8 +142,14 @@ local function duration_label(milliseconds)
   return string.format("%.1f s", milliseconds / 1000)
 end
 
-local function provider_lines(runs)
+local function provider_lines(runs, performance)
   local lines = { "Analysis", "────────" }
+  if performance and performance.first_result_ms ~= nil then
+    append(lines, "First", duration_label(performance.first_result_ms))
+    if #runs > 0 then
+      lines[#lines + 1] = ""
+    end
+  end
   for index, run in ipairs(runs) do
     if index > 1 then
       lines[#lines + 1] = ""
@@ -203,7 +209,7 @@ function M.lines(selection, model)
     return help_lines()
   end
   if selection and selection.provider_runs then
-    return provider_lines(selection.provider_runs)
+    return provider_lines(selection.provider_runs, selection.performance)
   end
   if selection and selection.result then
     return result_lines(selection.result)

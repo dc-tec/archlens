@@ -65,6 +65,7 @@ local model = {
       retry_delay_ms = 3000,
     },
   },
+  performance = { first_result_ms = 17 },
   focus = {
     name = "IsBlueGreenStrategy",
     kind_name = "Function",
@@ -96,7 +97,11 @@ local model = {
 }
 
 local details = require("archlens.details")
-local analysis_lines = details.lines({ provider_runs = model.provider_runs }, model)
+local analysis_lines = details.lines({
+  provider_runs = model.provider_runs,
+  performance = model.performance,
+}, model)
+assert(contains(analysis_lines, "First       17 ms"))
 assert(contains(analysis_lines, "State       Completed"))
 assert(contains(analysis_lines, "Duration    42 ms"))
 assert(contains(analysis_lines, "State       Retrying"))
@@ -319,6 +324,11 @@ equal(
   rendered.details[source_line].provider_runs,
   model.provider_runs,
   "the source affordance should expose provider lifecycle details"
+)
+equal(
+  rendered.details[source_line].performance,
+  model.performance,
+  "the source affordance should expose first-result timing"
 )
 
 local queued_model = vim.deepcopy(model)

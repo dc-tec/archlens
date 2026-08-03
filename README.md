@@ -116,10 +116,11 @@ help view replaces it. Closing the window returns focus to the ArchLens pane.
 
 `Sources [?]` lists the providers that contributed to the view. `Analysis [?]`
 appears while providers are active or when a provider ends with an exceptional
-outcome. Its details show the state, elapsed time, duration, retry delay, and
-message for each provider. Completed providers do not leave a persistent status
-line. `Results [?]` reports filters, search limits, and partial-analysis
-caveats. Its details show each complete message.
+outcome. Its details show the time to the first useful relationship and the
+state, elapsed time, duration, retry delay, and message for each provider.
+Completed providers do not leave a persistent status line. `Results [?]`
+reports filters, search limits, and partial-analysis caveats. Its details show
+each complete message.
 
 Language-server calls, references, implementations, and type hierarchies are
 semantic relationships. ast-grep results are structural candidates. When
@@ -299,6 +300,18 @@ entrypoints can also be run directly, for example:
 ```sh
 nvim --headless -u NONE --noplugin -i NONE -l tests/run.lua
 ```
+
+Run the local performance report with:
+
+```sh
+nix run .#benchmark
+```
+
+The report measures the first useful Tree-sitter relationship for the Go,
+Rust, Nix, and OCaml fixtures and the cost of rendering a bounded large result
+set. Set `ARCHLENS_BENCHMARK_ITERATIONS` to change the default of 50 samples.
+Compare results on the same machine; the report has no timing threshold and is
+not part of CI.
 
 ## License
 

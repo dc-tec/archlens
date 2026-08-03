@@ -28,7 +28,34 @@ local function run()
   local model = require("archlens.model")
   local graph = require("archlens.graph")
   local render = require("archlens.render")
+  local performance = require("archlens.performance")
   local view = require("archlens.view")
+
+  local current_time = 100
+  local measurement = performance.start(function()
+    return current_time
+  end)
+  current_time = 112
+  performance.observe(measurement, { sections = {} })
+  assert_equal(
+    performance.snapshot(measurement),
+    {},
+    "status-only renders should not count as a useful relationship"
+  )
+  current_time = 125
+  performance.observe(measurement, { sections = { { rows = { { id = "first" } } } } })
+  assert_equal(
+    performance.snapshot(measurement),
+    { first_result_ms = 25 },
+    "the first relationship should record elapsed monotonic time"
+  )
+  current_time = 150
+  performance.observe(measurement, { sections = { { rows = { { id = "later" } } } } })
+  assert_equal(
+    performance.snapshot(measurement),
+    { first_result_ms = 25 },
+    "later renders should not replace the first-result measurement"
+  )
 
   local position = { line = 4, character = 3 }
   local symbols = {

@@ -29,14 +29,12 @@ languages.
 ArchLens should remain predictable as language servers and other analysis
 sources start, finish, fail, or become unavailable.
 
-Areas of focus include:
+Remaining areas of focus include:
 
-- Clearer provider states, including queued, running, retrying, completed,
-  timed-out, and unavailable analysis
-- Reliable cancellation, refresh, and stale-result handling
-- Performance measurements for initial results and provider completion
-- Broader testing across representative projects and language-server states
-- Continuous integration and a documented release process
+- Measuring the time to the first useful relationship
+- Dogfooding across representative projects, including cold language servers,
+  refreshes, cancellations, and degraded states
+- A documented release process
 
 ### Context and navigation
 
@@ -45,11 +43,11 @@ not only list individual relationships.
 
 Possible improvements include:
 
-- Clearer navigation history and exploration paths
-- A pinned focus alongside a mode that follows the source cursor
+- A clearer indication of the current exploration path and available back
+  history
+- An optional mode that follows the source cursor while retaining the current
+  pinned behavior
 - Relevance ordering that preserves lower-confidence evidence
-- Compact summaries where they reduce scanning
-- Inspectable progress and omissions without persistent interface noise
 
 ## Longer-term direction
 

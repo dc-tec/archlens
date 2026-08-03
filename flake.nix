@@ -22,7 +22,6 @@
       systems = [
         "aarch64-darwin"
         "aarch64-linux"
-        "x86_64-darwin"
         "x86_64-linux"
       ];
 
@@ -34,10 +33,25 @@
           ...
         }:
         let
+          archlensSource = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./LICENSE
+              ./doc
+              ./lua
+              ./plugin
+            ];
+          };
           archlens = pkgs.vimUtils.buildVimPlugin {
             pname = "archlens.nvim";
             version = "0.1.0-dev";
-            src = ./.;
+            src = archlensSource;
+            meta = {
+              description = "Human-first architectural relationship lens for Neovim";
+              homepage = "https://github.com/dc-tec/archlens";
+              license = lib.licenses.asl20;
+              platforms = [ system ];
+            };
           };
           archlensConfig = {
             ast_grep.command = lib.getExe pkgs.ast-grep;

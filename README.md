@@ -1,39 +1,55 @@
 # archlens.nvim
 
 ArchLens is a Neovim side pane for exploring the code around the symbol under
-your cursor. It combines local structure and project-level relationships in a
+your cursor. It combines local structure with project-level relationships in a
 bounded, navigable view.
 
-It does not require an LLM, a remote service, or a separate project index.
+No LLM, hosted service, or persistent project index is required.
 
 > [!NOTE]
 > ArchLens is experimental. Its interface and language support may change.
-> Neovim 0.12 or newer is required.
+
+![ArchLens showing relationships around a Go function](docs/assets/overview.png)
 
 ## Approach
 
-ArchLens starts at the symbol under your cursor. Tree-sitter provides local
-structure, LSP adds semantic relationships, and ast-grep searches the project
-for related patterns. Results are assembled on demand without a separate
-project index.
+ArchLens follows the current symbol instead of building a permanent model of
+the repository. Tree-sitter provides immediate file structure, an attached LSP
+adds semantic relationships, and ast-grep finds structural candidates across
+the project. Results appear as each provider completes. Each relationship is
+labeled with its source.
 
-Module dependencies and dependents use a bounded in-memory project scan. The
-scan is cached while you navigate the project and rebuilt when ArchLens is
-refreshed; it does not write an index to disk or start language servers for
-scanned files. Section anchors show which file or module the relationship uses.
+Module dependencies and dependents come from a bounded in-memory scan. The scan
+is cached while you navigate and rebuilt when ArchLens is refreshed. It does
+not write an index to disk or start language servers for scanned files.
 
-Test and configuration uses are grouped by their enclosing function or module.
-Expanding a group keeps each exact use site available for navigation.
+Test and configuration references are grouped by their enclosing function or
+module. Each exact use remains available when a group is expanded. Filtered and
+truncated relationships are reported instead of silently disappearing.
 
-Local Tree-sitter structure is rendered immediately. LSP and ast-grep results
-are merged into the open pane as they arrive, while the pane identifies any
-providers that are still pending.
+Press `?` on a relationship to inspect its direction, anchor, provider method,
+evidence class, and retained occurrence sites without changing navigation
+state.
 
-Each source is optional. ArchLens shows the relationships it can find, labels
-their source, and reports missing or truncated results. It provides navigable
-context around the current symbol rather than an exhaustive project graph.
-Relationship details expose the direction, anchor, provider method, evidence
-class, and retained occurrence sites without changing navigation state.
+![ArchLens relationship evidence for a Rust reference](docs/assets/relationship-details.png)
+
+## Requirements
+
+ArchLens requires Neovim 0.12 or newer. It uses whichever of these sources are
+available:
+
+- A Tree-sitter parser provides local structure and language-specific module
+  analysis.
+- An attached LSP provides semantic definitions, references, implementations,
+  and call or type hierarchies when supported by the server.
+- [ast-grep](https://ast-grep.github.io/) provides project-wide structural
+  candidates.
+- [ripgrep](https://github.com/BurntSushi/ripgrep) provides reverse module
+  lookup.
+
+If a source is unavailable, ArchLens leaves out those relationships and
+continues with the rest. Run `:checkhealth archlens` from a source buffer to see
+what is available for that file.
 
 ## Installation
 
@@ -52,35 +68,31 @@ With lazy.nvim:
 }
 ```
 
-With Nix or Nixvim, add the flake input:
+Install `ast-grep` and `rg` on Neovim's `PATH` to enable structural search and
+reverse module lookup.
+
+With Nixvim, add the flake input:
 
 ```nix
 inputs.archlens.url = "github:dc-tec/archlens";
 ```
 
-Then add the package to a Nixvim module:
+Then add the plugin and optional tools to your Nixvim module:
 
 ```nix
 {
   extraPlugins = [ inputs.archlens.packages.${pkgs.system}.default ];
+  extraPackages = [ pkgs.ast-grep pkgs.ripgrep ];
 }
 ```
 
-Ripgrep enables reverse module analysis. The rest of ArchLens remains available
-without it, and the pane reports when that analysis cannot run.
-
 ## Usage
 
-Commands:
+ArchLens does not install a global key mapping. It provides three commands:
 
 - `:ArchLensHere` opens or refreshes the pane for the symbol under the cursor.
 - `:ArchLensRefresh` refreshes the open pane.
 - `:ArchLensClose` closes it.
-
-ArchLens does not install a global key mapping.
-
-Run `:checkhealth archlens` from a source buffer to inspect the project root
-and available analysis providers.
 
 Inside the pane:
 
@@ -93,8 +105,8 @@ Inside the pane:
 - `?` explains the selected relationship, section, or context group.
 - `r` refreshes the view; `q` closes it.
 
-External relationships are hidden and result sets are bounded by default. The
-pane reports omissions.
+Result sets are bounded, and external relationships are hidden by default. The
+pane reports pending providers, omissions, timeouts, and unavailable analysis.
 
 ## Configuration
 
@@ -103,7 +115,7 @@ still evolving; current options and defaults live in
 [`lua/archlens/config.lua`](lua/archlens/config.lua).
 
 Vendored and generated relationships are hidden by default. They can be
-included, or additional project-relative path prefixes can be excluded:
+included, and additional project-relative path prefixes can be excluded:
 
 ```lua
 require("archlens").setup({
@@ -119,8 +131,8 @@ require("archlens").setup({
 
 [`lua/archlens/adapters.lua`](lua/archlens/adapters.lua) is the source of truth
 for language behavior. An adapter maps Neovim filetypes to a canonical language
-and can define Tree-sitter symbols and project markers, an ast-grep parser and
-query, or both.
+and can define Tree-sitter symbols and project markers, module analysis, an
+ast-grep parser and query, or a combination of them.
 
 Additional adapters can be registered before ArchLens is used:
 
@@ -136,21 +148,25 @@ require("archlens.adapters").register("zig", {
 })
 ```
 
-Relationship providers exchange a focused graph defined in
-[`lua/archlens/graph.lua`](lua/archlens/graph.lua). Section names, ordering, and
-direction live in [`lua/archlens/relations.lua`](lua/archlens/relations.lua), so
-new relationship types do not need orchestration or renderer branches.
-
 ## Development
 
-Run the source tests with Neovim:
+Relationship providers exchange the focused graph defined in
+[`lua/archlens/graph.lua`](lua/archlens/graph.lua). Section names, ordering, and
+direction live in [`lua/archlens/relations.lua`](lua/archlens/relations.lua), so
+new relationship kinds do not require orchestration or renderer branches.
+
+Run the complete package, unit, integration, and formatting checks with:
+
+```sh
+nix flake check
+```
+
+`nix develop` provides the development toolchain. Individual headless test
+entrypoints can also be run directly, for example:
 
 ```sh
 nvim --headless -u NONE --noplugin -i NONE -l tests/run.lua
 ```
-
-`nix flake check` builds the plugin and runs the integration tests. `nix
-develop` provides the development toolchain.
 
 ## License
 

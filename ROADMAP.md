@@ -24,18 +24,6 @@ languages.
 
 ## Near-term direction
 
-### Reliability and clarity
-
-ArchLens should remain predictable as language servers and other analysis
-sources start, finish, fail, or become unavailable.
-
-Remaining areas of focus include:
-
-- Measuring the time to the first useful relationship
-- Dogfooding across representative projects, including cold language servers,
-  refreshes, cancellations, and degraded states
-- A documented release process
-
 ### Context and navigation
 
 The pane should communicate how the current focus fits into its surroundings,

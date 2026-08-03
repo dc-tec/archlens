@@ -313,6 +313,8 @@ set. Set `ARCHLENS_BENCHMARK_ITERATIONS` to change the default of 50 samples.
 Compare results on the same machine; the report has no timing threshold and is
 not part of CI.
 
+See [RELEASING.md](RELEASING.md) for the release procedure.
+
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).

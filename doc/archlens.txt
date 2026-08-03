@@ -55,7 +55,7 @@ f               Focus a relationship and add the previous symbol to history.
 <Space>, za     Toggle a section or context group.
 zM              Collapse every visible section.
 zR              Expand every visible section and context group.
-?               Inspect direction, location, and provider evidence.
+?               Inspect relationships or provider lifecycle and timing.
 r               Refresh the current focus.
 q               Close ArchLens.
 
@@ -192,7 +192,8 @@ PROVIDER EXTENSIONS                                       *archlens-providers*
 
 Built-in and custom project-analysis providers share one ordered registry.
 A provider decides whether it applies, starts its work, calls `done` once with
-a graph delta, and returns a cancellation function: >lua
+a graph delta, and returns a cancellation function. It may use `report` to
+publish a running or retrying state: >lua
 
     local graph = require("archlens.graph")
 
@@ -204,8 +205,9 @@ a graph delta, and returns a cancellation function: >lua
         local options = config.providers.ownership or {}
         return options.enabled == true
       end,
-      start = function(context, bufnr, config, done)
+      start = function(context, bufnr, config, done, report)
         local result = graph.delta()
+        -- Optional: report("retrying", { retry_delay_ms = 1000 })
         -- Add canonical graph edges, then complete the provider.
         done(result)
         return function() end
@@ -215,6 +217,9 @@ a graph delta, and returns a cancellation function: >lua
 
 Provider options belong under `providers.<id>`. Register relationship kinds
 through `require("archlens.relations").register()` before returning edges.
+The optional `report` callback accepts `"running"` or `"retrying"`; retry
+metadata may contain `retry_delay_ms` and a short `message`. ArchLens records
+queued, completed, and failed states around the provider call.
 
 Every applicable attached LSP contributes location-based relationships.
 Provider evidence remains separate when clients return the same row. Opaque

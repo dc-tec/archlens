@@ -29,7 +29,9 @@ truncated relationships are reported instead of silently disappearing.
 
 Press `?` on a relationship to inspect its direction, anchor, provider methods,
 evidence classes, and retained occurrence sites without changing navigation
-state. Contributions from multiple providers remain independently visible.
+state. The provider summary and active-analysis line expose lifecycle state,
+duration, and retry details. Contributions from multiple providers remain
+independently visible.
 
 ![ArchLens relationship evidence for a Rust reference](docs/assets/relationship-details.png)
 
@@ -106,11 +108,13 @@ Inside the pane:
 - `]s` and `[s` move between sections.
 - `<Space>` or `za` toggles a section or context group.
 - `zM` and `zR` collapse or expand the complete view.
-- `?` explains the selected relationship, section, or context group.
+- `?` explains the selected relationship, section, context group, or analysis
+  status.
 - `r` refreshes the view; `q` closes it.
 
 Result sets are bounded, and external relationships are hidden by default. The
-pane reports pending providers, omissions, timeouts, and unavailable analysis.
+pane reports active provider states, omissions, timeouts, and unavailable
+analysis.
 
 ## Configuration
 
@@ -190,8 +194,9 @@ require("archlens.providers").register("ownership", {
     local options = config.providers.ownership or {}
     return options.enabled == true
   end,
-  start = function(context, bufnr, config, done)
+  start = function(context, bufnr, config, done, report)
     local result = graph.delta()
+    -- Optional: report("retrying", { retry_delay_ms = 1000 })
     -- Add canonical graph edges, then complete the provider.
     done(result)
     return function() end
@@ -202,6 +207,10 @@ require("archlens.providers").register("ownership", {
 Register new relationship kinds through
 [`lua/archlens/relations.lua`](lua/archlens/relations.lua). Provider-specific
 options belong under `providers.<id>`.
+
+The optional `report` callback accepts `"running"` or `"retrying"`. A retry may
+include `retry_delay_ms` and a short `message`. ArchLens records queued,
+completed, and failed states around the provider call.
 
 When more than one attached LSP supports location-based relationships,
 ArchLens queries each client and keeps their evidence separate. Opaque call

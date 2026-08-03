@@ -29,6 +29,7 @@ local M = {}
 ---@field edges ArchLensGraphEdge[]
 ---@field errors string[]
 ---@field notes string[]
+---@field note_records { message: string, summary?: string, severity?: "info"|"warn"|"error" }[]
 ---@field omitted table<string, integer>
 ---@field contributors { id: string, label: string }[]
 ---@field pending { id: string, label: string }[]
@@ -50,6 +51,12 @@ local valid_provider_states = {
   running = true,
   timed_out = true,
   unavailable = true,
+}
+
+local valid_note_severities = {
+  error = true,
+  info = true,
+  warn = true,
 }
 
 local pending_provider_states = {
@@ -355,6 +362,7 @@ function M.delta()
     edges = {},
     errors = {},
     notes = {},
+    note_records = {},
     omitted = {},
     contributors = {},
     pending = {},
@@ -401,9 +409,31 @@ function M.add_error(target, message)
   end
 end
 
-function M.add_note(target, message)
+function M.add_note(target, message, metadata)
   if type(message) == "string" and message ~= "" then
-    target.notes[#target.notes + 1] = message
+    if metadata then
+      assert(type(metadata) == "table", "note metadata must be a table")
+      assert(
+        metadata.summary == nil or (type(metadata.summary) == "string" and metadata.summary ~= ""),
+        "note summary must be a non-empty string"
+      )
+      assert(
+        metadata.severity == nil or valid_note_severities[metadata.severity],
+        "unsupported note severity: " .. tostring(metadata.severity)
+      )
+      assert(
+        metadata.severity == nil or metadata.summary ~= nil,
+        "note severity requires a summary"
+      )
+    end
+    local index = #target.notes + 1
+    target.notes[index] = message
+    target.note_records = target.note_records or {}
+    target.note_records[index] = {
+      message = message,
+      summary = metadata and metadata.summary or nil,
+      severity = metadata and metadata.severity or nil,
+    }
   end
 end
 
@@ -479,7 +509,11 @@ function M.merge(target, delta)
     M.add_edge(target, edge)
   end
   vim.list_extend(target.errors, delta.errors or {})
-  vim.list_extend(target.notes, delta.notes or {})
+  for index, note in ipairs(delta.notes or {}) do
+    local record = delta.note_records and delta.note_records[index]
+    local metadata = record and record.message == note and record or nil
+    M.add_note(target, note, metadata)
+  end
   for kind, count in pairs(delta.omitted or {}) do
     M.add_omitted(target, kind, count)
   end

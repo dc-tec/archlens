@@ -184,10 +184,8 @@ local function configure_buffer(session, actions)
     end
     local line = vim.api.nvim_win_get_cursor(session.window)[1]
     local selection = session.rendered.details and session.rendered.details[line]
-    if selection then
-      details.open(selection, session.model)
-    end
-  end, "ArchLens relationship details")
+    details.open(selection or { help = true }, session.model)
+  end, "ArchLens details or help")
   local function toggle_section()
     local target = target_at_cursor(session)
     if target and target.action == "expand" then

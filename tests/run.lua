@@ -175,12 +175,19 @@ local function run()
     contains(mapped.notes, "1 external relationship hidden."),
     "hidden external calls should be explicit"
   )
+  assert_equal(mapped.result.parts, { { label = "1 filtered", severity = "info" } })
+  assert_equal(mapped.result.severity, "info", "filter-only summaries should stay informational")
 
   local scoped_graph = graph.new(context)
   add_outgoing(scoped_graph, "Vendored", "file:///workspace/vendor/example/client.go", 2)
   add_outgoing(scoped_graph, "Generated", "file:///workspace/internal/zz_generated.client.go", 3)
   add_outgoing(scoped_graph, "Excluded", "file:///workspace/internal/legacy/client.go", 4)
   add_outgoing(scoped_graph, "Project", "file:///workspace/internal/client.go", 5)
+  graph.add_note(
+    scoped_graph,
+    "Project module discovery reached the 2000-candidate limit; module-dependent results may be incomplete.",
+    { summary = "module scan limited", severity = "warn" }
+  )
   local scoped = model.build(context, scoped_graph, {
     filters = { exclude = { "internal/legacy" } },
   })
@@ -189,6 +196,29 @@ local function run()
   assert(contains(scoped.notes, "1 vendored relationship hidden."))
   assert(contains(scoped.notes, "1 generated relationship hidden."))
   assert(contains(scoped.notes, "1 excluded relationship hidden."))
+  assert_equal(scoped.result.parts, {
+    { label = "module scan limited", severity = "warn" },
+    { label = "3 filtered", severity = "info" },
+  })
+  assert_equal(scoped.result.severity, "warn")
+
+  local duplicate_note_graph = graph.new(context)
+  graph.add_note(
+    duplicate_note_graph,
+    "same provider note",
+    { summary = "benign duplicate", severity = "info" }
+  )
+  graph.add_note(
+    duplicate_note_graph,
+    "same provider note",
+    { summary = "warning retained", severity = "warn" }
+  )
+  local duplicate_note_model = model.build(context, duplicate_note_graph, {})
+  assert_equal(duplicate_note_model.result.parts, {
+    { label = "warning retained", severity = "warn" },
+    { label = "benign duplicate", severity = "info" },
+  }, "duplicate note text should retain warning metadata regardless of arrival order")
+  assert_equal(duplicate_note_model.result.severity, "warn")
 
   local included_scope = model.build(context, scoped_graph, {
     filters = {

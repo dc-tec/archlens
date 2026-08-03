@@ -116,8 +116,12 @@ local function run()
     "secondary section rows should stay hidden until requested"
   )
   assert(
-    contains(rendered.lines, "zM/zR collapse/expand all"),
-    "the footer should advertise whole-view controls"
+    contains(rendered.lines, "? help · <CR> open · <Space> toggle · f focus"),
+    "the footer should keep only primary controls visible"
+  )
+  assert(
+    not contains(rendered.lines, "zM/zR collapse/expand all"),
+    "advanced controls should move to contextual help"
   )
 
   local source_window = vim.api.nvim_get_current_win()

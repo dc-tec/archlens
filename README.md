@@ -46,7 +46,10 @@ state. The `Sources [?]` and `Analysis [?]` lines expose lifecycle state,
 duration, and retry details. Active provider names remain visible when they
 fit; at narrower widths ordinary states are summarized by count while
 failures, timeouts, unavailability, cancellation, and retries take priority.
-Contributions from multiple providers remain independently visible.
+`Results [?]` compacts filtering, bounds, and provider caveats into one line;
+its details retain every exact message. Pressing `?` elsewhere opens the full
+pane key reference. Contributions from multiple providers remain independently
+visible.
 
 ![ArchLens relationship evidence for a Rust reference](docs/assets/relationship-details.png)
 
@@ -123,13 +126,13 @@ Inside the pane:
 - `]s` and `[s` move between sections.
 - `<Space>` or `za` toggles a section or context group.
 - `zM` and `zR` collapse or expand the complete view.
-- `?` explains the selected relationship, section, context group, or analysis
-  status.
+- `?` explains the selected relationship, section, context group, analysis
+  status, or result summary; elsewhere it opens the complete key reference.
 - `r` refreshes the view; `q` closes it.
 
 Result sets are bounded, and external relationships are hidden by default. The
-pane reports active provider states, omissions, timeouts, and unavailable
-analysis.
+pane reports active provider states and keeps a compact, inspectable summary of
+filtering, omissions, timeouts, and unavailable analysis.
 
 ## Configuration
 

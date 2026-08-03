@@ -76,6 +76,23 @@ local model = {
     },
   },
   sections = { section },
+  notes = {
+    "5 vendored relationships hidden.",
+    "3 external relationships hidden.",
+    "Project module discovery reached the 2000-candidate limit; module-dependent results may be incomplete.",
+  },
+  result = {
+    parts = {
+      { label = "module scan limited", severity = "warn" },
+      { label = "8 filtered", severity = "info" },
+    },
+    notes = {
+      "5 vendored relationships hidden.",
+      "3 external relationships hidden.",
+      "Project module discovery reached the 2000-candidate limit; module-dependent results may be incomplete.",
+    },
+    severity = "warn",
+  },
 }
 
 local details = require("archlens.details")
@@ -85,6 +102,22 @@ assert(contains(analysis_lines, "Duration    42 ms"))
 assert(contains(analysis_lines, "State       Retrying"))
 assert(contains(analysis_lines, "Elapsed     1.2 s"))
 assert(contains(analysis_lines, "Retry       in 3.0 s"))
+
+local result_lines = details.lines({ result = model.result }, model)
+assert(contains(result_lines, "Summary     module scan limited · 8 filtered"))
+assert(contains(result_lines, "  • 5 vendored relationships hidden."))
+assert(contains(result_lines, "  • 3 external relationships hidden."))
+assert(
+  contains(
+    result_lines,
+    "  • Project module discovery reached the 2000-candidate limit; module-dependent results may be incomplete."
+  )
+)
+
+local help_lines = details.lines({ help = true }, model)
+assert(contains(help_lines, "ArchLens keys"))
+assert(contains(help_lines, "zM, zR          Collapse or expand the complete view"))
+assert(contains(help_lines, "?               Inspect the current line, or show this help"))
 
 local section_lines = details.lines({ section = section }, model)
 assert(contains(section_lines, "Direction   Incoming — related item → focus"))
@@ -186,13 +219,59 @@ local render = require("archlens.render")
 local rendered = render.build(model, { width = 80 })
 assert(contains(rendered.lines, "Sources [?]: gopls · Tree-sitter · ast-grep"))
 assert(contains(rendered.lines, "Analysis [?]: ast-grep retrying"))
+assert(contains(rendered.lines, "Results [?]: module scan limited · 8 filtered"))
+assert(contains(rendered.lines, "? help · <CR> open · <Space> toggle · f focus"))
+assert(not contains(rendered.lines, "5 vendored relationships hidden."))
+local default_width_rendered = render.build(model, { width = 56 })
+assert(
+  contains(default_width_rendered.lines, "Results [?]: module scan limited · 8 filtered"),
+  "the important result summary should fit the default pane width"
+)
+assert(
+  contains(default_width_rendered.lines, "? help · <CR> open · <Space> toggle · f focus"),
+  "the primary footer should fit the default pane width"
+)
+local priority_model = vim.deepcopy(model)
+priority_model.result = {
+  parts = {
+    { label = "2 provider issues", severity = "error" },
+    { label = "module scan limited", severity = "warn" },
+    { label = "123 filtered", severity = "info" },
+  },
+  notes = model.notes,
+  severity = "error",
+}
+for _, width in ipairs({ 30, 36, 56 }) do
+  local narrow = render.build(priority_model, { width = width })
+  local narrow_result = vim.iter(narrow.lines):find(function(line)
+    return vim.startswith(line, "Results [?]:")
+  end)
+  local narrow_footer = narrow.lines[#narrow.lines]
+  assert(
+    narrow_result and narrow_result:find("provider issue", 1, true),
+    "error summaries should survive truncation at width " .. width
+  )
+  assert(
+    vim.startswith(narrow_footer, "? help"),
+    "keyboard help should remain discoverable at width " .. width
+  )
+  if width == 56 then
+    assert(
+      narrow_result:find("module scan limited", 1, true),
+      "warnings should remain visible after errors at the default width"
+    )
+  end
+end
 local section_line
 local analysis_line
+local result_line
 local row_line
 local row_location_line
 for line, selection in pairs(rendered.details) do
   if selection.provider_runs then
     analysis_line = analysis_line or line
+  elseif selection.result then
+    result_line = line
   elseif selection.row == section.rows[1] then
     if rendered.targets[line] then
       row_line = line
@@ -204,6 +283,7 @@ for line, selection in pairs(rendered.details) do
   end
 end
 assert(analysis_line, "provider lifecycle and timing should be inspectable")
+assert(result_line, "the compact result summary should expose exact notices")
 assert(section_line, "section headings should be inspectable")
 assert(row_line, "relationship rows should be inspectable")
 assert(row_location_line, "row location lines should inspect the same relationship")
@@ -321,6 +401,28 @@ assert(
   "closing details should dismiss only the float"
 )
 assert(vim.api.nvim_win_is_valid(main_window), "closing details must leave ArchLens open")
+
+vim.api.nvim_set_current_win(main_window)
+vim.api.nvim_win_set_cursor(main_window, { 1, 0 })
+inspect_mapping.callback()
+local help_window = vim.api.nvim_get_current_win()
+local help_buffer = vim.api.nvim_get_current_buf()
+assert(help_window ~= main_window, "ordinary lines should open keyboard help")
+assert(
+  contains(vim.api.nvim_buf_get_lines(help_buffer, 0, -1, false), "ArchLens keys"),
+  "keyboard help should retain the complete pane reference"
+)
+local help_close_mapping
+for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(help_buffer, "n")) do
+  if mapping.lhs == "q" then
+    help_close_mapping = mapping
+    break
+  end
+end
+assert(help_close_mapping and help_close_mapping.callback, "keyboard help should be closeable")
+help_close_mapping.callback()
+assert(not vim.api.nvim_win_is_valid(help_window), "closing help should leave only the pane")
+assert(vim.api.nvim_win_is_valid(main_window), "closing help must leave ArchLens open")
 
 vim.api.nvim_win_close(main_window, true)
 if vim.api.nvim_win_is_valid(source_window) then

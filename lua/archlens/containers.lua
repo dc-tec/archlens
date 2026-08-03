@@ -144,7 +144,8 @@ function M.enrich(delta, context, options, callback)
         "%d relationship%s grouped by file because the context limit was reached.",
         file_grouped,
         file_grouped == 1 and " was" or "s were"
-      )
+      ),
+      { summary = "relationship grouping limited", severity = "warn" }
     )
   end
   if #paths == 0 then
@@ -174,7 +175,8 @@ function M.enrich(delta, context, options, callback)
         string.format(
           "Relationship grouping stopped after %d ms; some uses are grouped by file.",
           timeout_ms
-        )
+        ),
+        { summary = "relationship grouping timed out", severity = "warn" }
       )
     end
     callback(delta)

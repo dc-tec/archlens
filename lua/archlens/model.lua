@@ -662,12 +662,39 @@ function M.build(context, snapshot, opts)
     or #grouped.subtypes > 0
 
   local notes = {}
+  local result_parts = {}
+  local result_part_indexes = {}
+  local result_severity = "info"
+  local severity_rank = { info = 1, warn = 2, error = 3 }
+  local filtered_count = 0
+
+  local function add_result_part(label, severity)
+    severity = severity or "info"
+    if label and label ~= "" then
+      local existing = result_part_indexes[label]
+      if existing then
+        if severity_rank[severity] > severity_rank[existing.severity] then
+          existing.severity = severity
+        end
+      else
+        local part = { label = label, severity = severity, order = #result_parts + 1 }
+        result_parts[#result_parts + 1] = part
+        result_part_indexes[label] = part
+      end
+    end
+    if severity_rank[severity] > severity_rank[result_severity] then
+      result_severity = severity
+    end
+  end
+
   if context.configuration and not context.client_id and not resolving_lsp then
     notes[#notes + 1] =
       "Configuration uses require an active language server with project reference support."
+    add_result_part("configuration uses unavailable", "warn")
   elseif context.file_fallback and not resolving_lsp then
     notes[#notes + 1] =
       "No symbol could be resolved at this position; semantic relationships were skipped."
+    add_result_part("semantic results unavailable", "warn")
   elseif
     not context.module_context
     and not context.configuration
@@ -679,10 +706,12 @@ function M.build(context, snapshot, opts)
       "%s has no call hierarchy here; other semantic and syntax relationships are used instead.",
       context.client_name or "The attached language server"
     )
+    add_result_part("call hierarchy unavailable", "info")
   end
   for _, hidden_kind in ipairs({ "vendored", "generated", "excluded", "external" }) do
     local count = hidden[hidden_kind]
     if count > 0 then
+      filtered_count = filtered_count + count
       notes[#notes + 1] =
         string.format("%d %s relationship%s hidden.", count, hidden_kind, count == 1 and "" or "s")
     end
@@ -694,12 +723,36 @@ function M.build(context, snapshot, opts)
       structural_omitted,
       structural_omitted == 1 and " was" or "es were"
     )
+    add_result_part(string.format("%d search matches omitted", structural_omitted), "warn")
   end
   for _, error_message in ipairs(snapshot.errors or {}) do
     notes[#notes + 1] = error_message
   end
-  for _, note in ipairs(snapshot.notes or {}) do
+  if #(snapshot.errors or {}) > 0 then
+    add_result_part(
+      string.format("%d provider issue%s", #snapshot.errors, #snapshot.errors == 1 and "" or "s"),
+      "error"
+    )
+  end
+  local unsummarized_notes = 0
+  for index, note in ipairs(snapshot.notes or {}) do
     notes[#notes + 1] = note
+    local record = snapshot.note_records and snapshot.note_records[index]
+    local metadata = record and record.message == note and record or nil
+    if metadata and metadata.summary then
+      add_result_part(metadata.summary, metadata.severity)
+    else
+      unsummarized_notes = unsummarized_notes + 1
+      if metadata and metadata.severity then
+        add_result_part(nil, metadata.severity)
+      end
+    end
+  end
+  if unsummarized_notes > 0 then
+    add_result_part(
+      string.format("%d notice%s", unsummarized_notes, unsummarized_notes == 1 and "" or "s"),
+      "info"
+    )
   end
 
   local sections = {}
@@ -735,6 +788,7 @@ function M.build(context, snapshot, opts)
     end
   end
   if section_hidden_count > 0 then
+    filtered_count = filtered_count + section_hidden_count
     notes[#notes + 1] = string.format(
       "%d relationship%s hidden by section policy.",
       section_hidden_count,
@@ -743,6 +797,18 @@ function M.build(context, snapshot, opts)
   end
   if #sections == 0 and #notes == 0 and #pending_providers == 0 then
     notes[#notes + 1] = "No local or project relationships were returned."
+    add_result_part("no relationships found", "info")
+  end
+  if filtered_count > 0 then
+    add_result_part(string.format("%d filtered", filtered_count), "info")
+  end
+  table.sort(result_parts, function(left, right)
+    local left_rank = severity_rank[left.severity]
+    local right_rank = severity_rank[right.severity]
+    return left_rank == right_rank and left.order < right.order or left_rank > right_rank
+  end)
+  for _, part in ipairs(result_parts) do
+    part.order = nil
   end
 
   local providers = vim.tbl_map(function(contributor)
@@ -755,6 +821,11 @@ function M.build(context, snapshot, opts)
     focus = context,
     sections = sections,
     notes = notes,
+    result = #notes > 0 and {
+      parts = result_parts,
+      notes = notes,
+      severity = result_severity,
+    } or nil,
     providers = providers,
     provider_activity = provider_activity(runs),
     provider_runs = runs,

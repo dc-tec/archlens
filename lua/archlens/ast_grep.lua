@@ -7,9 +7,9 @@ local M = {}
 
 M.default_globs = {}
 
-local function empty(note)
+local function empty(note, summary, severity)
   local result = graph.delta()
-  graph.add_note(result, note)
+  graph.add_note(result, note, summary and { summary = summary, severity = severity } or nil)
   return result
 end
 
@@ -138,7 +138,7 @@ function M.relationships(context, options, callback)
   local provider = adapter and adapter.ast_grep
   local language = provider and provider.language
   if not language then
-    callback(empty(provider and provider.unsupported_note))
+    callback(empty(provider and provider.unsupported_note, "structural search unavailable", "info"))
     return function() end
   end
   if not usable_name(context.name, options.min_name_length) then
@@ -148,7 +148,13 @@ function M.relationships(context, options, callback)
 
   local command = options.command or "ast-grep"
   if not executable(command) then
-    callback(empty("ast-grep is unavailable; structural project matches were skipped."))
+    callback(
+      empty(
+        "ast-grep is unavailable; structural project matches were skipped.",
+        "structural search unavailable",
+        "warn"
+      )
+    )
     return function() end
   end
   local root = context.root_dir or (context.path and vim.fs.dirname(context.path))
@@ -190,7 +196,9 @@ function M.relationships(context, options, callback)
     then
       finish(
         empty(
-          string.format("ast-grep search failed: %s", vim.trim(result.stderr or "unknown error"))
+          string.format("ast-grep search failed: %s", vim.trim(result.stderr or "unknown error")),
+          "structural search failed",
+          "error"
         )
       )
       return
@@ -230,7 +238,13 @@ function M.relationships(context, options, callback)
       return
     end
     pcall(process.kill, process, 15)
-    finish(empty(string.format("ast-grep search exceeded %d ms and was stopped.", timeout_ms)))
+    finish(
+      empty(
+        string.format("ast-grep search exceeded %d ms and was stopped.", timeout_ms),
+        "structural search timed out",
+        "warn"
+      )
+    )
   end, timeout_ms)
 
   return function()

@@ -55,7 +55,7 @@ f               Focus a relationship and add the previous symbol to history.
 <Space>, za     Toggle a section or context group.
 zM              Collapse every visible section.
 zR              Expand every visible section and context group.
-?               Inspect relationships or provider lifecycle and timing.
+?               Inspect the current line, or show the complete pane help.
 r               Refresh the current focus.
 q               Close ArchLens.
 
@@ -65,6 +65,11 @@ The details window opened by `?` closes with `q`, `<Esc>`, or `?`.
 opened with `?`. Active provider names remain visible when they fit. At
 narrower widths ordinary running and queued work is summarized by count;
 failures, timeouts, unavailability, cancellation, and retries take priority.
+
+`Results [?]` compacts relationship filtering, provider caveats, and bounded
+analysis into one line. Its details retain each exact message. The persistent
+footer shows only primary controls; press `?` on an ordinary line for the
+complete pane key reference.
 
 Semantic references covered by incoming-call occurrences are folded into the
 caller row and remain inspectable with `?`. Non-call references stay separate.

@@ -171,7 +171,8 @@ function M.relationships(context, bufnr, callback, options)
     if context.configuration then
       graph.add_note(
         result,
-        "Configuration uses require an active language server with project reference support."
+        "Configuration uses require an active language server with project reference support.",
+        { summary = "configuration uses unavailable", severity = "warn" }
       )
     end
     callback(result)
@@ -240,10 +241,14 @@ function M.relationships(context, bufnr, callback, options)
         local item, candidates = select_type_item(value, context, client, bufnr)
         if item then
           if #candidates > 1 then
-            result.notes[#result.notes + 1] = string.format(
-              "Type hierarchy preparation returned %d candidates; using %s.",
-              #candidates,
-              item.name
+            graph.add_note(
+              result,
+              string.format(
+                "Type hierarchy preparation returned %d candidates; using %s.",
+                #candidates,
+                item.name
+              ),
+              { summary = "type hierarchy ambiguous", severity = "info" }
             )
           end
           enqueue(type_requests(item))
@@ -293,9 +298,13 @@ function M.relationships(context, bufnr, callback, options)
           end
         end
         if spec.key == "references" and context.configuration and #locations == 0 then
-          result.notes[#result.notes + 1] = string.format(
-            "%s returned no configuration uses for this field.",
-            context.client_name or "The language server"
+          graph.add_note(
+            result,
+            string.format(
+              "%s returned no configuration uses for this field.",
+              context.client_name or "The language server"
+            ),
+            { summary = "no configuration uses", severity = "info" }
           )
         end
       elseif spec.key == "incoming" or spec.key == "outgoing" then
@@ -376,7 +385,8 @@ function M.relationships(context, bufnr, callback, options)
       string.format(
         "%s does not support project references for configuration fields.",
         context.client_name or client.name
-      )
+      ),
+      { summary = "configuration uses unavailable", severity = "warn" }
     )
   end
   local supports_type_hierarchy = not context.file_fallback

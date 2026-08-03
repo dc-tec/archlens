@@ -222,6 +222,14 @@ assert(
   table.concat(discovery_limited.notes, "\n"):find("candidate limit", 1, true),
   "the raw candidate bound should report unexamined files"
 )
+local has_limited_summary = false
+for _, record in ipairs(discovery_limited.note_records or {}) do
+  if record.summary == "module scan limited" and record.severity == "warn" then
+    has_limited_summary = true
+    break
+  end
+end
+assert(has_limited_summary, "module scan bounds should expose a compact warning summary")
 
 local cancelled = false
 local cancel_options = vim.tbl_deep_extend("force", {}, options, { max_index_files = 7 })

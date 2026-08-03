@@ -229,7 +229,8 @@ function M.relationships(context, bufnr, options, callback)
           "%d module dependency target%s could not be resolved.",
           unresolved,
           unresolved == 1 and "" or "s"
-        )
+        ),
+        { summary = "module dependencies incomplete", severity = "warn" }
       )
     end
     if requires_lsp > 0 then
@@ -240,7 +241,8 @@ function M.relationships(context, bufnr, options, callback)
           requires_lsp,
           requires_lsp == 1 and "" or "s",
           requires_lsp == 1 and "s" or ""
-        )
+        ),
+        { summary = "module dependencies need LSP", severity = "warn" }
       )
     end
     if omitted_imports > 0 then
@@ -250,7 +252,8 @@ function M.relationships(context, bufnr, options, callback)
           "%d visible module dependenc%s omitted by the dependency limit.",
           omitted_imports,
           omitted_imports == 1 and "y" or "ies"
-        )
+        ),
+        { summary = "module results limited", severity = "warn" }
       )
     end
     if omitted_sites > 0 then
@@ -260,7 +263,8 @@ function M.relationships(context, bufnr, options, callback)
           "%d module dependency declaration%s omitted by the scan limit.",
           omitted_sites,
           omitted_sites == 1 and "" or "s"
-        )
+        ),
+        { summary = "module scan limited", severity = "warn" }
       )
     end
   end
@@ -356,7 +360,8 @@ function M.relationships(context, bufnr, options, callback)
       add_notes()
       graph.add_note(
         result,
-        string.format("Module dependency resolution exceeded %d ms and was stopped.", timeout_ms)
+        string.format("Module dependency resolution exceeded %d ms and was stopped.", timeout_ms),
+        { summary = "module resolution timed out", severity = "warn" }
       )
       callback(result)
     end, timeout_ms)

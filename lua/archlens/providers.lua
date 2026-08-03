@@ -114,7 +114,8 @@ local function explain_empty_semantic_result(result, context, metadata, retried)
       context.client_name or "The language server",
       retried and " after one cold-start retry" or "",
       suffix
-    )
+    ),
+    { summary = "no semantic relationships", severity = "info" }
   )
 end
 

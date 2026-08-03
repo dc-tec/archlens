@@ -88,7 +88,7 @@ graph.add_edge(
   })
 )
 graph.add_error(delta, "provider error")
-graph.add_note(delta, "provider note")
+graph.add_note(delta, "provider note", { summary = "provider limited", severity = "warn" })
 graph.add_omitted(delta, "structural", 2)
 graph.add_contributor(delta, "lsp:7", "gopls")
 graph.add_contributor(delta, "ast_grep", "ast-grep")
@@ -98,6 +98,9 @@ equal(snapshot.edges[2].target.location.range, location(4, 5, 12).range)
 equal(snapshot.edges[2].target.location.full_range, location(4).range)
 equal(snapshot.errors, { "provider error" })
 equal(snapshot.notes, { "provider note" })
+equal(snapshot.note_records, {
+  { message = "provider note", summary = "provider limited", severity = "warn" },
+})
 equal(snapshot.omitted, { structural = 2 })
 equal(snapshot.contributors, {
   { id = "lsp:7", label = "gopls" },
@@ -109,6 +112,45 @@ local second_delta = graph.delta()
 graph.add_omitted(second_delta, "structural", 3)
 graph.merge(snapshot, second_delta)
 equal(snapshot.omitted, { structural = 5 }, "omitted counts should accumulate across providers")
+
+local duplicate_notes = graph.new(context)
+local warning_note = graph.delta()
+graph.add_note(warning_note, "same message", { summary = "warning retained", severity = "warn" })
+local informational_note = graph.delta()
+graph.add_note(
+  informational_note,
+  "same message",
+  { summary = "benign duplicate", severity = "info" }
+)
+graph.merge(duplicate_notes, warning_note)
+graph.merge(duplicate_notes, informational_note)
+equal(duplicate_notes.notes, { "same message", "same message" })
+equal(duplicate_notes.note_records, {
+  { message = "same message", summary = "warning retained", severity = "warn" },
+  { message = "same message", summary = "benign duplicate", severity = "info" },
+}, "same-text notes should preserve metadata by occurrence")
+
+local reverse_duplicate_notes = graph.new(context)
+graph.merge(reverse_duplicate_notes, informational_note)
+graph.merge(reverse_duplicate_notes, warning_note)
+equal(reverse_duplicate_notes.note_records, {
+  { message = "same message", summary = "benign duplicate", severity = "info" },
+  { message = "same message", summary = "warning retained", severity = "warn" },
+}, "note completion order should not overwrite duplicate metadata")
+
+local legacy_note = graph.delta()
+legacy_note.note_records = nil
+legacy_note.notes = { "legacy provider note" }
+graph.merge(duplicate_notes, legacy_note)
+equal(duplicate_notes.note_records[#duplicate_notes.note_records], {
+  message = "legacy provider note",
+}, "legacy string-only notes should remain mergeable")
+
+local invalid_note = graph.delta()
+local valid_metadata = pcall(graph.add_note, invalid_note, "invalid", { severity = "fatal" })
+equal(valid_metadata, false, "unsupported note metadata should fail")
+equal(invalid_note.notes, {}, "invalid metadata should not partially append a note")
+equal(invalid_note.note_records, {}, "invalid metadata should not partially append a record")
 
 graph.set_pending(snapshot, {
   { id = "lsp", label = "gopls" },

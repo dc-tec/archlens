@@ -163,9 +163,50 @@ local function provider_lines(runs)
   return lines
 end
 
+local function result_lines(result)
+  local lines = { "Results", "───────" }
+  if result.parts and #result.parts > 0 then
+    local labels = vim.tbl_map(function(part)
+      return type(part) == "table" and part.label or part
+    end, result.parts)
+    append(lines, "Summary", table.concat(labels, " · "))
+  end
+  if result.notes and #result.notes > 0 then
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "Details"
+    for _, note in ipairs(result.notes) do
+      lines[#lines + 1] = "  • " .. note
+    end
+  end
+  return lines
+end
+
+local function help_lines()
+  return {
+    "ArchLens keys",
+    "─────────────",
+    "<CR>            Open an item or toggle a section or context group",
+    "f               Focus an item and retain the previous focus in history",
+    "<BS>, h         Return to the previous focus",
+    "<Tab>, <S-Tab>  Move to the next or previous actionable row",
+    "]s, [s          Move to the next or previous section",
+    "<Space>, za     Toggle a section or context group",
+    "zM, zR          Collapse or expand the complete view",
+    "?               Inspect the current line, or show this help",
+    "r               Refresh the current focus",
+    "q               Close ArchLens",
+  }
+end
+
 function M.lines(selection, model)
+  if selection and selection.help then
+    return help_lines()
+  end
   if selection and selection.provider_runs then
     return provider_lines(selection.provider_runs)
+  end
+  if selection and selection.result then
+    return result_lines(selection.result)
   end
   local section = selection and selection.section
   if not section then
@@ -280,7 +321,7 @@ function M.open(selection, model)
     height = height,
     border = "rounded",
     style = "minimal",
-    title = " ArchLens details ",
+    title = selection and selection.help and " ArchLens help " or " ArchLens details ",
     title_pos = "center",
   })
   vim.wo[window].wrap = true

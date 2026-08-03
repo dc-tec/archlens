@@ -377,12 +377,22 @@ local function notify(index)
   end
 end
 
+local function add_index_note(index, message, summary, severity)
+  index.notes[#index.notes + 1] = message
+  index.note_records[#index.note_records + 1] = {
+    message = message,
+    summary = summary,
+    severity = severity,
+  }
+end
+
 local function build_index(cache_key, root, specs, by_extension, filters, options)
   local index = {
     root = root,
     ready = false,
     reverse = {},
     notes = {},
+    note_records = {},
     subscribers = {},
   }
   indexes[cache_key] = index
@@ -408,9 +418,14 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
       return
     end
     cancel_enumeration()
-    index.notes[#index.notes + 1] = string.format(
-      "Project module scan stopped after %d ms; module-dependent results may be incomplete.",
-      options.timeout_ms
+    add_index_note(
+      index,
+      string.format(
+        "Project module scan stopped after %d ms; module-dependent results may be incomplete.",
+        options.timeout_ms
+      ),
+      "module scan limited",
+      "warn"
     )
     finish()
   end
@@ -427,37 +442,57 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         return
       end
       if err then
-        index.notes[#index.notes + 1] = "Project module scan failed: " .. err
+        add_index_note(index, "Project module scan failed: " .. err, "module scan failed", "error")
         finish()
         return
       end
       local files, omitted, oversized, unexamined =
         visible_files(root, paths, by_extension, filters, options)
       if enumeration_limited then
-        index.notes[#index.notes + 1] = string.format(
-          "Project module discovery reached the %d-candidate limit; module-dependent results may be incomplete.",
-          options.max_candidate_files
+        add_index_note(
+          index,
+          string.format(
+            "Project module discovery reached the %d-candidate limit; module-dependent results may be incomplete.",
+            options.max_candidate_files
+          ),
+          "module scan limited",
+          "warn"
         )
       end
       if unexamined > 0 then
-        index.notes[#index.notes + 1] = string.format(
-          "%d module source candidate%s not examined by the discovery limit.",
-          unexamined,
-          unexamined == 1 and " was" or "s were"
+        add_index_note(
+          index,
+          string.format(
+            "%d module source candidate%s not examined by the discovery limit.",
+            unexamined,
+            unexamined == 1 and " was" or "s were"
+          ),
+          "module scan limited",
+          "warn"
         )
       end
       if omitted > 0 then
-        index.notes[#index.notes + 1] = string.format(
-          "%d module source file%s omitted by the project module scan limit.",
-          omitted,
-          omitted == 1 and "" or "s"
+        add_index_note(
+          index,
+          string.format(
+            "%d module source file%s omitted by the project module scan limit.",
+            omitted,
+            omitted == 1 and "" or "s"
+          ),
+          "module scan limited",
+          "warn"
         )
       end
       if oversized > 0 then
-        index.notes[#index.notes + 1] = string.format(
-          "%d oversized module source file%s skipped.",
-          oversized,
-          oversized == 1 and "" or "s"
+        add_index_note(
+          index,
+          string.format(
+            "%d oversized module source file%s skipped.",
+            oversized,
+            oversized == 1 and "" or "s"
+          ),
+          "module scan limited",
+          "warn"
         )
       end
 
@@ -485,10 +520,15 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
           vim.schedule(parse_batch)
         else
           if parse_errors > 0 then
-            index.notes[#index.notes + 1] = string.format(
-              "%d module source file%s could not be parsed.",
-              parse_errors,
-              parse_errors == 1 and "" or "s"
+            add_index_note(
+              index,
+              string.format(
+                "%d module source file%s could not be parsed.",
+                parse_errors,
+                parse_errors == 1 and "" or "s"
+              ),
+              "module scan incomplete",
+              "warn"
             )
           end
           finish()
@@ -556,8 +596,8 @@ end
 
 local function materialize(index, context, target_path, keys, anchor_label, options)
   local result = graph.delta()
-  for _, note in ipairs(index.notes) do
-    graph.add_note(result, note)
+  for index_number, note in ipairs(index.notes) do
+    graph.add_note(result, note, index.note_records[index_number])
   end
   local importers = {}
   for _, key in ipairs(keys) do
@@ -590,7 +630,8 @@ local function materialize(index, context, target_path, keys, anchor_label, opti
         "%d module dependent%s omitted by the dependent limit.",
         omitted,
         omitted == 1 and "" or "s"
-      )
+      ),
+      { summary = "module results limited", severity = "warn" }
     )
   end
   return result
@@ -641,7 +682,10 @@ function M.relationships(context, bufnr, options, callback)
   if #keys == 0 then
     local result = graph.delta()
     if key_error then
-      graph.add_note(result, "Reverse module matching unavailable: " .. key_error .. ".")
+      graph.add_note(result, "Reverse module matching unavailable: " .. key_error .. ".", {
+        summary = "module matching unavailable",
+        severity = "warn",
+      })
     end
     callback(result)
     return function() end

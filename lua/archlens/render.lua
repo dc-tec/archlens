@@ -312,15 +312,34 @@ function M.build(model, opts)
     end
   end
 
-  for _, note in ipairs(model.notes or {}) do
+  local result = model.result
+  if not result and model.notes and #model.notes > 0 then
+    result = {
+      parts = { string.format("%d notice%s", #model.notes, #model.notes == 1 and "" or "s") },
+      notes = model.notes,
+      severity = "info",
+    }
+  end
+  if result and result.notes and #result.notes > 0 then
     add("")
-    add(note, nil, "DiagnosticHint")
+    local result_highlights = {
+      error = "DiagnosticError",
+      info = "DiagnosticHint",
+      warn = "DiagnosticWarn",
+    }
+    local result_labels = vim.tbl_map(function(part)
+      return type(part) == "table" and part.label or part
+    end, result.parts or {})
+    add(
+      "Results [?]: " .. table.concat(result_labels, " · "),
+      nil,
+      result_highlights[result.severity] or "DiagnosticHint",
+      { result = result }
+    )
   end
 
   add("")
-  add("<CR> open  f focus  <BS> back  <Tab> next", nil, "Comment")
-  add("<Space> toggle  [s/]s sections  ? details", nil, "Comment")
-  add("zM/zR collapse/expand all  r refresh  q close", nil, "Comment")
+  add("? help · <CR> open · <Space> toggle · f focus", nil, "Comment")
 
   return {
     lines = lines,

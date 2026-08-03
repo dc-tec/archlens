@@ -9,7 +9,7 @@ No LLM, hosted service, or persistent project index is required.
 > [!NOTE]
 > ArchLens is experimental. Its interface and language support may change.
 
-![ArchLens exploring Go type relationships and following the source cursor](docs/assets/archlens-demo.gif)
+![ArchLens exploring callers and navigating between Go functions](docs/assets/archlens-function-demo.gif)
 
 ## Approach
 
@@ -204,6 +204,8 @@ For a type focus, `Members` contains the children found by Tree-sitter.
 Language adapters can present type hierarchy relationships with language terms.
 For example, Go interfaces distinguish satisfied contracts, extended
 interfaces, and concrete implementations.
+
+![ArchLens exploring Go type relationships and following the source cursor](docs/assets/archlens-demo.gif)
 
 Module dependencies and dependents use a bounded in-memory scan. ArchLens
 caches the scan while you navigate and rebuilds it when you refresh the pane.

@@ -17,6 +17,8 @@ local M = {}
 ---@field kind string
 ---@field source ArchLensGraphNode
 ---@field target ArchLensGraphNode
+---@field evidence_records { provider: string, method: string, class: string }[]
+--- Compatibility summary derived from evidence_records. Mixed methods or classes are reported as "mixed".
 ---@field evidence { provider: string, method: string, class: string }
 ---@field occurrences table[]
 ---@field position_encoding "utf-8"
@@ -178,6 +180,87 @@ local function validate_evidence(evidence)
   end
 end
 
+local function evidence_key(evidence)
+  return table.concat({ evidence.provider, evidence.method, evidence.class }, "\0")
+end
+
+local function validate_evidence_records(records)
+  assert(type(records) == "table" and #records > 0, "graph edges require evidence records")
+  for _, evidence in ipairs(records) do
+    validate_evidence(evidence)
+  end
+end
+
+---Return independent evidence records, falling back to the compatibility summary for older values.
+---@param value table
+---@return table[]
+function M.evidence_records(value)
+  if type(value) ~= "table" then
+    return {}
+  end
+  if type(value.evidence_records) == "table" and #value.evidence_records > 0 then
+    return vim.deepcopy(value.evidence_records)
+  end
+  if type(value.evidence) == "table" then
+    return { vim.deepcopy(value.evidence) }
+  end
+  return {}
+end
+
+---Build the compact evidence value used by existing row badges and consumers.
+---@param records table[]
+---@return table
+function M.evidence_summary(records)
+  validate_evidence_records(records)
+  local providers = {}
+  local provider_seen = {}
+  local methods = {}
+  local classes = {}
+  for _, evidence in ipairs(records) do
+    for provider in evidence.provider:gmatch("[^+]+") do
+      if not provider_seen[provider] then
+        providers[#providers + 1] = provider
+        provider_seen[provider] = true
+      end
+    end
+    methods[evidence.method] = true
+    classes[evidence.class] = true
+  end
+  local method = next(methods)
+  if next(methods, method) then
+    method = "mixed"
+  end
+  local class = next(classes)
+  if next(classes, class) then
+    class = "mixed"
+  end
+  return {
+    provider = table.concat(providers, "+"),
+    method = method,
+    class = class,
+  }
+end
+
+---Merge unique evidence contributions while preserving first-seen provider order for badges.
+---@param target table[]
+---@param source table[]
+function M.merge_evidence(target, source)
+  validate_evidence_records(target)
+  validate_evidence_records(source)
+  local seen = {}
+  for _, evidence in ipairs(target) do
+    seen[evidence_key(evidence)] = true
+  end
+  for _, evidence in ipairs(source) do
+    local key = evidence_key(evidence)
+    if not seen[key] then
+      target[#target + 1] = vim.deepcopy(evidence)
+      seen[key] = true
+    end
+  end
+  return target
+end
+
 local function validate_presentation(presentation)
   if presentation == nil then
     return
@@ -220,6 +303,7 @@ function M.edge(kind, source, target, evidence, fields)
     source = source,
     target = target,
     evidence = vim.deepcopy(evidence),
+    evidence_records = { vim.deepcopy(evidence) },
   })
   edge.occurrences = edge.occurrences or {}
   edge.position_encoding = edge.position_encoding or "utf-8"
@@ -264,7 +348,9 @@ function M.add_edge(target, edge)
   assert(type(edge) == "table" and relations.get(edge.kind), "invalid graph edge")
   assert(type(edge.source) == "table" and type(edge.target) == "table", "graph edges require nodes")
   assert(edge.position_encoding == "utf-8", "graph edges must use UTF-8 byte columns")
-  validate_evidence(edge.evidence)
+  edge.evidence_records = M.evidence_records(edge)
+  validate_evidence_records(edge.evidence_records)
+  edge.evidence = M.evidence_summary(edge.evidence_records)
   validate_presentation(edge.presentation)
   validate_canonical(edge, "edge")
   if target.focus then

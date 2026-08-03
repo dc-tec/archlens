@@ -357,6 +357,18 @@ local function run()
     method = "textDocument/implementation",
     class = "semantic",
   }, "implementation provenance should remain semantic and provider-specific")
+  assert_equal(implementation_section.rows[1].evidence_records, {
+    {
+      provider = "gopls",
+      method = "textDocument/implementation",
+      class = "semantic",
+    },
+    {
+      provider = "other-lsp",
+      method = "textDocument/implementation",
+      class = "semantic",
+    },
+  }, "duplicate semantic providers should retain independent evidence")
   assert_equal(
     #implementation_section.rows[1].occurrences,
     1,
@@ -457,6 +469,28 @@ local function run()
     reference_section.rows[1].evidence.provider,
     "gopls+ast-grep",
     "matching structural evidence should corroborate the semantic row"
+  )
+  assert_equal(reference_section.rows[1].evidence, {
+    provider = "gopls+ast-grep",
+    method = "mixed",
+    class = "mixed",
+  }, "compatibility evidence should report mixed corroboration honestly")
+  assert_equal(reference_section.rows[1].evidence_records, {
+    {
+      provider = "gopls",
+      method = "textDocument/references",
+      class = "semantic",
+    },
+    {
+      provider = "ast-grep",
+      method = "structural",
+      class = "structural",
+    },
+  }, "semantic and structural evidence should remain independently inspectable")
+  assert_equal(
+    reference_section.rows[1].id,
+    "references:textDocument/references:" .. graph.location_key(reference_section.rows[1].location),
+    "corroboration should not change navigation row ids"
   )
   assert_equal(
     #structural_section.rows,

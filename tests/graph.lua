@@ -56,6 +56,15 @@ equal(snapshot.edges[1].evidence, {
   method = "children",
   class = "syntax",
 })
+equal(
+  snapshot.edges[1].evidence_records,
+  { {
+    provider = "Tree-sitter",
+    method = "children",
+    class = "syntax",
+  } },
+  "single-provider call sites should seed canonical evidence records"
+)
 equal(snapshot.edges[1].occurrences, {}, "graph edges should always expose occurrence arrays")
 equal(snapshot.contributors, {
   { id = "lsp:7", label = "gopls" },
@@ -202,6 +211,15 @@ for _, invalid in ipairs({
       method = "test",
       class = "semantic",
     }, { position_encoding = "utf-16" })
+  end,
+  function()
+    local malformed = graph.edge("implementations", snapshot.focus, implementation, {
+      provider = "test",
+      method = "test",
+      class = "semantic",
+    })
+    malformed.evidence_records[1].method = nil
+    graph.add_edge(graph.delta(), malformed)
   end,
   function()
     local malformed = graph.edge("implementations", snapshot.focus, implementation, {

@@ -95,6 +95,57 @@ assert(contains(structural_lines, "Direction   Incoming — related item → foc
 assert(contains(structural_lines, "Anchor      Focus — IsBlueGreenStrategy"))
 assert(contains(structural_lines, "Confidence  Structural candidate"))
 
+local corroborated = vim.deepcopy(structural)
+corroborated.id = "references"
+corroborated.label = "Referenced across project"
+corroborated.rows[1].evidence = {
+  provider = "rust-analyzer+ast-grep",
+  method = "mixed",
+  class = "mixed",
+}
+corroborated.rows[1].evidence_records = {
+  {
+    provider = "rust-analyzer",
+    method = "textDocument/references",
+    class = "semantic",
+  },
+  {
+    provider = "ast-grep",
+    method = "structural",
+    class = "structural",
+  },
+}
+local corroborated_lines =
+  details.lines({ section = corroborated, row = corroborated.rows[1] }, model)
+assert(contains(corroborated_lines, "Records     2"))
+assert(contains(corroborated_lines, "  ast-grep · structural · structural"))
+assert(contains(corroborated_lines, "  rust-analyzer · textDocument/references · semantic"))
+assert(
+  contains(corroborated_lines, "Confidence  Exact semantic relationship, structurally corroborated")
+)
+local ast_index = vim.fn.index(corroborated_lines, "  ast-grep · structural · structural")
+local rust_index =
+  vim.fn.index(corroborated_lines, "  rust-analyzer · textDocument/references · semantic")
+assert(
+  ast_index >= 0 and ast_index < rust_index,
+  "evidence contributions should sort deterministically"
+)
+
+local semantic = vim.deepcopy(corroborated)
+semantic.rows[1].evidence = {
+  provider = "rust-analyzer+secondary-lsp",
+  method = "textDocument/references",
+  class = "semantic",
+}
+semantic.rows[1].evidence_records[2] = {
+  provider = "secondary-lsp",
+  method = "textDocument/references",
+  class = "semantic",
+}
+local semantic_lines = details.lines({ section = semantic, row = semantic.rows[1] }, model)
+assert(contains(semantic_lines, "Records     2"))
+assert(contains(semantic_lines, "Confidence  Exact semantic relationship"))
+
 local render = require("archlens.render")
 local rendered = render.build(model, { width = 80 })
 local section_line

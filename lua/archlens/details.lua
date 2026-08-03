@@ -1,3 +1,4 @@
+local graph = require("archlens.graph")
 local relations = require("archlens.relations")
 
 local M = {}
@@ -6,15 +7,6 @@ local function append(lines, label, value)
   if value and value ~= "" then
     lines[#lines + 1] = string.format("%-12s%s", label, value)
   end
-end
-
-local function sorted_values(values)
-  local result = {}
-  for value in pairs(values) do
-    result[#result + 1] = value
-  end
-  table.sort(result)
-  return result
 end
 
 local function relative_path(root, uri)
@@ -55,46 +47,58 @@ local function evidence_rows(selection)
   return selection.section and selection.section.rows or {}
 end
 
-local function evidence_summary(rows)
-  local result = {
-    providers = {},
-    methods = {},
-    classes = {},
-  }
+local function evidence_records(rows)
+  local result = {}
+  local seen = {}
   for _, row in ipairs(rows) do
-    local evidence = row.evidence or {}
-    if evidence.provider then
-      result.providers[evidence.provider] = true
-    end
-    if evidence.method then
-      result.methods[evidence.method] = true
-    end
-    if evidence.class then
-      result.classes[evidence.class] = true
+    for _, evidence in ipairs(graph.evidence_records(row)) do
+      local key = table.concat({ evidence.provider, evidence.method, evidence.class }, "\0")
+      if not seen[key] then
+        result[#result + 1] = evidence
+        seen[key] = true
+      end
     end
   end
+  table.sort(result, function(left, right)
+    if left.provider ~= right.provider then
+      return left.provider < right.provider
+    end
+    if left.method ~= right.method then
+      return left.method < right.method
+    end
+    return left.class < right.class
+  end)
   return result
 end
 
-local function confidence(classes)
-  local count = 0
-  local only
-  for class in pairs(classes) do
-    count = count + 1
-    only = class
+local function confidence(records)
+  local classes = {}
+  for _, evidence in ipairs(records) do
+    classes[evidence.class] = true
   end
+  if classes.semantic and classes.structural and not classes.syntax then
+    return "Exact semantic relationship, structurally corroborated"
+  end
+  if classes.semantic and classes.syntax and not classes.structural then
+    return "Exact semantic relationship, syntax corroborated"
+  end
+  if classes.syntax and classes.structural and not classes.semantic then
+    return "Exact syntax relationship, structurally corroborated"
+  end
+  local count = vim.tbl_count(classes)
   if count > 1 then
     return "Mixed evidence"
   end
-  if only == "structural" then
+  if classes.structural then
     return "Structural candidate"
   end
-  if only == "semantic" then
+  if classes.semantic then
     return "Exact semantic relationship"
   end
-  if only == "syntax" then
+  if classes.syntax then
     return "Exact syntax relationship"
   end
+  local only = next(classes)
   if only then
     return "Provider-defined (" .. only .. ")"
   end
@@ -126,7 +130,7 @@ function M.lines(selection, model)
   local relation = relations.get(section.id)
   local root = model and model.focus and model.focus.root_dir
   local rows = evidence_rows(selection)
-  local evidence = evidence_summary(rows)
+  local records = evidence_records(rows)
   local lines = { section.label, string.rep("─", math.min(vim.fn.strchars(section.label), 24)) }
 
   if relation then
@@ -163,16 +167,21 @@ function M.lines(selection, model)
     append(lines, "Items", tostring(#rows))
   end
 
-  local providers = sorted_values(evidence.providers)
-  local methods = sorted_values(evidence.methods)
-  local classes = sorted_values(evidence.classes)
-  if #providers > 0 or #methods > 0 or #classes > 0 then
+  if #records > 0 then
     lines[#lines + 1] = ""
     lines[#lines + 1] = "Evidence"
-    append(lines, #providers == 1 and "Provider" or "Providers", table.concat(providers, ", "))
-    append(lines, #methods == 1 and "Method" or "Methods", table.concat(methods, ", "))
-    append(lines, #classes == 1 and "Class" or "Classes", table.concat(classes, ", "))
-    append(lines, "Confidence", confidence(evidence.classes))
+    if #records == 1 then
+      append(lines, "Provider", records[1].provider)
+      append(lines, "Method", records[1].method)
+      append(lines, "Class", records[1].class)
+    else
+      append(lines, "Records", tostring(#records))
+      for _, evidence in ipairs(records) do
+        lines[#lines + 1] =
+          string.format("  %s · %s · %s", evidence.provider, evidence.method, evidence.class)
+      end
+    end
+    append(lines, "Confidence", confidence(records))
   end
 
   local occurrences = occurrence_locations(rows, root)

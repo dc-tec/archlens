@@ -208,22 +208,10 @@ local function row_from_edge(edge, relation, context, cache)
     position_encoding = node.position_encoding or edge.position_encoding or "utf-8",
     resolve_on_focus = node.resolve_on_focus == true,
     evidence = vim.deepcopy(edge.evidence),
+    evidence_records = graph.evidence_records(edge),
     occurrences = vim.deepcopy(edge.occurrences or {}),
     presentation = vim.deepcopy(edge.presentation),
   }
-end
-
-local function add_provider(evidence, provider)
-  local present = {}
-  for value in evidence.provider:gmatch("[^+]+") do
-    present[value] = true
-  end
-  for value in provider:gmatch("[^+]+") do
-    if not present[value] then
-      evidence.provider = evidence.provider .. "+" .. value
-      present[value] = true
-    end
-  end
 end
 
 local function occurrence_key(occurrence)
@@ -240,7 +228,9 @@ local function occurrence_key(occurrence)
 end
 
 local function merge_row(target, source)
-  add_provider(target.evidence, source.evidence.provider)
+  target.evidence_records =
+    graph.merge_evidence(graph.evidence_records(target), graph.evidence_records(source))
+  target.evidence = graph.evidence_summary(target.evidence_records)
   local seen = {}
   for _, occurrence in ipairs(target.occurrences or {}) do
     seen[occurrence_key(occurrence)] = true
@@ -401,7 +391,7 @@ local function normalize_edges(snapshot, context, filters)
           semantic = corroborated[graph.line_key(row.location)]
         end
         if semantic then
-          add_provider(semantic.evidence, row.evidence.provider)
+          merge_row(semantic, row)
         else
           remaining[#remaining + 1] = row
         end

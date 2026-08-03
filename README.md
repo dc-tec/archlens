@@ -1,81 +1,86 @@
 # archlens.nvim
 
-ArchLens is a Neovim side pane for exploring the code around the symbol under
-your cursor. It combines local structure with project-level relationships in a
-bounded, navigable view.
+ArchLens displays code relationships for the symbol under your cursor in a
+Neovim side pane. It combines local structure, semantic relationships, and
+project-wide structural matches in a bounded view next to your source buffer.
 
-No LLM, hosted service, or persistent project index is required.
+ArchLens analyzes code on demand. It does not require an LLM, a hosted service,
+or a persistent project index.
 
 > [!NOTE]
 > ArchLens is experimental. Its interface and language support may change.
 
 ![ArchLens exploring callers and navigating between Go functions](docs/assets/archlens-function-demo.gif)
 
-## Approach
+## How ArchLens works
 
-ArchLens analyzes the symbol under the cursor and its surrounding file context.
-It builds no repository-wide graph.
+When you open the pane, ArchLens resolves the symbol under your cursor and
+collects relationships from Tree-sitter, attached language servers, ast-grep,
+and ripgrep when they are available.
 
-Tree-sitter adds declarations, members, and module syntax. Attached language
-servers add calls, references, implementations, and type hierarchies. ast-grep
-adds structural matches. ripgrep finds files for reverse module lookup.
-ArchLens adds results as each provider completes and records the source of each
-relationship.
+Results appear as each source completes. Each relationship records its source,
+method, and evidence class.
 
-ArchLens limits project searches and visible rows. It hides external,
-generated, and vendored results by default. The pane reports filtered and
-omitted results. Within a section, it places exact and corroborated evidence
-before provider-defined and structural candidates, then prefers nearby files.
-Lower-ranked relationships remain available when you expand the section.
+ArchLens bounds project searches, provider output, and visible rows. By
+default, it filters external, generated, and vendored paths. The pane reports
+filtered or omitted results and warns when a limit might make the analysis
+incomplete.
 
-The graph uses language-neutral relationship types. Language adapters change
-labels and row presentation for language-specific concepts such as Go
-interfaces and Rust traits.
+Within each section, ArchLens ranks exact and corroborated evidence before
+provider-defined and structural candidates. It then prefers nearby files.
+Expand a section to view lower-ranked results.
+
+The relationship graph is language-neutral. Language adapters define
+language-specific analysis and presentation, such as Go interface roles and
+Rust trait implementations.
 
 ## Requirements
 
-ArchLens requires Neovim 0.12 or newer. It uses whichever of these sources are
-available:
+ArchLens requires Neovim 0.12 or later. Configure any of these optional
+analysis sources:
 
-- A Tree-sitter parser provides local structure and language-specific module
-  analysis.
-- An attached LSP provides semantic definitions, references, implementations,
-  and call or type hierarchies when supported by the server.
-- [ast-grep](https://ast-grep.github.io/) provides project-wide structural
-  candidates.
-- [ripgrep](https://github.com/BurntSushi/ripgrep) provides reverse module
-  lookup.
+| Source                                           | Requirement                     | Provides                                                          |
+| ------------------------------------------------ | ------------------------------- | ----------------------------------------------------------------- |
+| Tree-sitter                                      | A parser for the current buffer | Local symbols, members, and module syntax                         |
+| LSP                                              | An attached language server     | Semantic calls, references, implementations, and type hierarchies |
+| [ast-grep](https://ast-grep.github.io/)          | `ast-grep` on Neovim's `PATH`   | Project-wide structural matches                                   |
+| [ripgrep](https://github.com/BurntSushi/ripgrep) | `rg` on Neovim's `PATH`         | Reverse module lookup                                             |
 
-If a source is unavailable, ArchLens leaves out those relationships and
-continues with the rest. Run `:checkhealth archlens` from a source buffer to
-inspect the selected project root, Tree-sitter parser and adapter, attached LSP
-capabilities, ast-grep, and ripgrep. The pane reports provider-specific runtime
-failures in its analysis and result details.
+If a source is unavailable, ArchLens omits its relationships and continues with
+the remaining sources.
 
-### Language capabilities
+Run `:checkhealth archlens` from a source buffer to inspect the selected
+project root, Tree-sitter parser and adapter, attached LSP capabilities,
+ast-grep, and ripgrep. To inspect a provider failure, open the pane and press
+`?` on the `Analysis` or `Results` line.
 
-ArchLens sends the same language-neutral relationship requests to each attached
-language server. Available results depend on the methods advertised by the
-server. Built-in adapters add the following language-specific analysis:
+### Built-in language support
 
-| Language                 | Built-in analysis                                                                                    |
-| ------------------------ | ---------------------------------------------------------------------------------------------------- |
-| Go                       | Tree-sitter symbols and modules, ast-grep candidates, and Go interface relationship presentation     |
-| Rust                     | Tree-sitter symbols and modules, ast-grep candidates, and Rust implementation presentation           |
-| Nix                      | Tree-sitter bindings and module imports, plus ast-grep candidates                                    |
-| OCaml (`.ml` and `.mli`) | Tree-sitter symbols, module relationships, and member presentation; ast-grep has no OCaml parser     |
-| JavaScript and JSX       | ast-grep candidates                                                                                  |
-| TypeScript and TSX       | ast-grep candidates                                                                                  |
-| Lua                      | ast-grep candidates                                                                                  |
-| Python                   | ast-grep candidates                                                                                  |
+ArchLens sends the same language-neutral requests to every attached language
+server. The available semantic relationships depend on the methods that each
+server advertises.
 
-Languages without a built-in adapter can still expose semantic relationships
-through an attached LSP. Register an adapter to add local structure, module
-analysis, structural search, or language-specific presentation.
+Built-in adapters provide the following additional analysis:
 
-## Installation
+| Language                 | Built-in analysis                                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| Go                       | Tree-sitter symbols and modules, ast-grep matches, and Go interface presentation                              |
+| Rust                     | Tree-sitter symbols and modules, ast-grep matches, and Rust implementation presentation                       |
+| Nix                      | Tree-sitter bindings and module imports, plus ast-grep matches                                                |
+| OCaml (`.ml` and `.mli`) | Tree-sitter symbols, module relationships, and member presentation; ast-grep does not provide an OCaml parser |
+| JavaScript and JSX       | ast-grep matches                                                                                              |
+| TypeScript and TSX       | ast-grep matches                                                                                              |
+| Lua                      | ast-grep matches                                                                                              |
+| Python                   | ast-grep matches                                                                                              |
 
-With lazy.nvim:
+For a language without a built-in adapter, an attached language server can
+still provide semantic relationships. Register an adapter to add local
+structure, module analysis, structural search, or language-specific
+presentation.
+
+## Install ArchLens
+
+### lazy.nvim
 
 ```lua
 {
@@ -90,10 +95,12 @@ With lazy.nvim:
 }
 ```
 
-Install `ast-grep` and `rg` on Neovim's `PATH` to enable structural search and
-reverse module lookup.
+Install `ast-grep` and `rg` on Neovim's `PATH` if you want structural search
+and reverse module lookup.
 
-With Nixvim, add the flake input:
+### Nixvim
+
+Add the ArchLens flake input:
 
 ```nix
 inputs.archlens = {
@@ -103,16 +110,19 @@ inputs.archlens = {
 };
 ```
 
-Pass the package to your Nixvim module, for example through
+The flake publishes packages for `aarch64-darwin`, `aarch64-linux`, and
+`x86_64-linux`.
+
+Pass the package to your Nixvim module. For example, with
 `makeNixvimWithModule`:
 
 ```nix
 extraSpecialArgs.archlens = inputs.archlens.packages.${system}.default;
 ```
 
-Then install and configure the plugin in that module. ArchLens does not have a
-native Nixvim option module, but `lib.generators.toLua` lets the module keep its
-configuration in Nix:
+ArchLens does not provide a native Nixvim option module. You can keep its
+configuration in Nix by converting an attribute set with
+`lib.generators.toLua`:
 
 ```nix
 {
@@ -160,92 +170,105 @@ in
 }
 ```
 
-## Usage
+## Use ArchLens
 
-ArchLens does not install a global key mapping. It provides three commands:
+ArchLens does not define a global key mapping. It provides these commands:
 
-- `:ArchLensHere` opens or refreshes the pane for the symbol under the cursor.
-- `:ArchLensRefresh` refreshes the open pane.
-- `:ArchLensClose` closes it.
+| Command            | Action                                                                  |
+| ------------------ | ----------------------------------------------------------------------- |
+| `:ArchLensHere`    | Open the pane for the symbol under the cursor, or refresh the open pane |
+| `:ArchLensRefresh` | Refresh the current focus                                               |
+| `:ArchLensClose`   | Close the pane                                                          |
 
-Use `:help archlens` for the complete command, mapping, and configuration
+The following keys are available in the pane:
+
+| Key                   | Action                                                                                                      |
+| --------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `<CR>`                | Open a relationship, or toggle a section or context group                                                   |
+| `f`                   | Focus the selected relationship and add the current symbol to navigation history                            |
+| `F`                   | Toggle source-cursor following; pinned exploration is the default                                           |
+| `<BS>` or `h`         | Return to the previous focus                                                                                |
+| `<Tab>` and `<S-Tab>` | Move between actionable rows                                                                                |
+| `]s` and `[s`         | Move between sections                                                                                       |
+| `<Space>` or `za`     | Toggle a section or context group                                                                           |
+| `zM` and `zR`         | Collapse or expand the complete view                                                                        |
+| `?`                   | Explain the selected row, section, status line, or summary; on other lines, show the complete key reference |
+| `r`                   | Refresh the current focus                                                                                   |
+| `q`                   | Close the pane                                                                                              |
+
+Run `:help archlens` for the complete command, mapping, and configuration
 reference.
 
-Inside the pane:
+## Interpret the pane
 
-- `<CR>` opens a relationship, or toggles the selected section or context group.
-- `f` focuses a relationship and adds the previous symbol to navigation history.
-- `F` toggles source-cursor following. Pinned exploration remains the default.
-- `<BS>` or `h` returns to the previous focus.
-- `<Tab>` and `<S-Tab>` move between actionable rows.
-- `]s` and `[s` move between sections.
-- `<Space>` or `za` toggles a section or context group.
-- `zM` and `zR` collapse or expand the complete view.
-- `?` explains the selected relationship, section, context group, analysis
-  status, or result summary; elsewhere it opens the complete key reference.
-- `r` refreshes the view; `q` closes it.
+ArchLens uses four inspectable status lines:
 
-## Interpret results
+| Line           | Meaning                                                               |
+| -------------- | --------------------------------------------------------------------- |
+| `Sources [?]`  | Sources that contributed relationships to the current view            |
+| `Analysis [?]` | Active providers and providers that ended with an exceptional outcome |
+| `Path [?]`     | Previous and current focuses in the bounded navigation history        |
+| `Results [?]`  | Filters, search limits, omissions, and partial-analysis warnings      |
 
-Each relationship row shows the provider that produced it. Press `?` on a row
-to view its direction, location, provider method, evidence class, and retained
-occurrences. ArchLens keeps one details window open. Opening another details or
-help view replaces it. Closing the window returns focus to the ArchLens pane.
+Press `?` on a status line to view its complete details. The `Analysis` details
+include the time to the first useful relationship and each provider's state,
+elapsed time, duration, retry delay, and message. Completed providers do not
+leave a persistent status line.
 
-`Sources [?]` lists the providers that contributed to the view. `Analysis [?]`
-appears while providers are active or when a provider ends with an exceptional
-outcome. Its details show the time to the first useful relationship and the
-state, elapsed time, duration, retry delay, and message for each provider.
-Completed providers do not leave a persistent status line. `Results [?]`
-reports filters, search limits, and partial-analysis caveats. Its details show
-each complete message.
+ArchLens keeps one details window open. Opening another details or help view
+replaces it. When you close the window, focus returns to the ArchLens pane.
 
-After you focus a relationship, `Path [?]` shows the previous and current
-focus. Press `?` on that line to inspect the complete bounded path. ArchLens
-keeps up to 32 previous focuses. Back navigation and manual focus use pinned
-mode.
+### Navigate between focuses
 
-Cursor following is optional. Press `F` to follow the symbol under the cursor
-in the tracked source window. ArchLens debounces cursor movement, skips repeated
-positions within the same symbol, and does not add automatic changes to back
-history. Press `f`, `<BS>`, or `h` to return to pinned exploration.
+Press `f` on a relationship to analyze that target. ArchLens adds the current
+symbol to a bounded navigation history. The `Path [?]` line appears after the
+first focus change, and its details show the complete path. ArchLens retains up
+to 32 previous focuses.
+
+Press `F` to follow the symbol under the cursor in the tracked source window.
+ArchLens debounces cursor movement, ignores repeated positions within the same
+symbol, and does not add automatic changes to navigation history. Press `f`,
+`<BS>`, or `h` to return to pinned exploration.
+
+### Evaluate relationship evidence
 
 Language-server calls, references, implementations, and type hierarchies are
 semantic relationships. ast-grep results are structural candidates. When
-semantic usage is available, ArchLens collapses unmatched structural matches.
-Expand the section to inspect them.
+semantic usage is available, ArchLens starts unmatched structural candidates
+collapsed. Expand the section to inspect them.
 
 If a semantic reference identifies an incoming call occurrence, ArchLens adds
-the reference evidence to the caller row. The details window shows the call and
-reference methods and the retained call sites. Other references remain in a
-separate section.
+the reference evidence to the caller row. Press `?` on the row to inspect the
+call method, reference method, and retained call sites. Other references remain
+in a separate section.
 
 ArchLens groups test and configuration references by their enclosing function
-or module. Expand a group to view each exact use.
+or module. Expand a group to inspect each exact use.
 
-For a type focus, `Members` contains the children found by Tree-sitter.
-Language adapters can present type hierarchy relationships with language terms.
-For example, Go interfaces distinguish satisfied contracts, extended
+For a type focus, `Members` contains children found by Tree-sitter. Language
+adapters can present type hierarchy relationships with language-specific terms.
+For example, the Go adapter distinguishes satisfied contracts, extended
 interfaces, and concrete implementations.
 
 ![ArchLens exploring Go type relationships and following the source cursor](docs/assets/archlens-demo.gif)
 
-Module dependencies resolve bounded import sites from the focused file. Module
-dependents use a bounded in-memory project scan. ArchLens caches that scan while
-you navigate and rebuilds it when you refresh the pane. The scan writes no index
-to disk and starts no language servers for scanned files.
+Module dependencies come from bounded import sites in the focused file. Module
+dependents come from a bounded in-memory project scan. ArchLens caches the scan
+while you navigate and rebuilds it when you refresh the pane. The scan does not
+write an index to disk or start language servers for scanned files.
 
 ![ArchLens relationship evidence for a Rust reference](docs/assets/relationship-details.png)
 
-## Configuration
+## Configure ArchLens
 
-`require("archlens").setup()` works without options. The configuration API is
-still evolving. Use `:help archlens-configuration` for the complete option and
-default reference. [`lua/archlens/config.lua`](lua/archlens/config.lua)
-implements those defaults.
+`require("archlens").setup()` uses the default configuration. The
+configuration API is experimental.
 
-Vendored and generated relationships are hidden by default. They can be
-included, and additional project-relative path prefixes can be excluded:
+Run `:help archlens-configuration` for every option and its default value.
+[`lua/archlens/config.lua`](lua/archlens/config.lua) defines the defaults.
+
+The following example changes cursor following, section policy, and project
+filters:
 
 ```lua
 require("archlens").setup({
@@ -270,41 +293,36 @@ require("archlens").setup({
 })
 ```
 
-Set `cursor_follow.enabled` to start `:ArchLensHere` in cursor-follow mode. The
-`F` mapping changes the mode for the current pane. `debounce_ms` controls the
-delay after the latest cursor movement.
+Set `cursor_follow.enabled` to `true` to start `:ArchLensHere` in follow
+mode. The `F` mapping changes the mode for the current pane.
 
-Nearby definitions are collapsed by default. Section and context expansion is
-preserved when the pane is refreshed. Use an empty `default_collapsed` list to
-start regular sections open. Set `collapse_secondary = false` to also keep
-unmatched structural candidates open when semantic usage exists. `max_items` at
-the top level remains the fallback for sections without an override. `hidden`
-removes selected relationship kinds from the model while reporting their count.
-IDs listed in `order` appear first; unlisted relationship kinds retain their
-registry order.
+The `sections` table controls initial collapse state, visibility, ordering, and
+row limits. ArchLens preserves manual expansion state when it refreshes the
+current focus. The top-level `max_items` value applies to any section without
+an override.
 
 If a newly attached language server returns no semantic relationships,
-ArchLens retries once after three seconds. The retry only applies during the
-configured cold-start window and can be disabled through
-`lsp.cold_start_retry.enabled`.
+ArchLens retries once after the configured delay. This retry applies only
+during the cold-start window. Set `lsp.cold_start_retry.enabled` to `false` to
+disable it.
 
-Provider work has separate time, input, and output bounds. Use `imports` and
+Each provider has separate time, input, and output bounds. Use `imports` and
 `imports.inbound` to bound module analysis, `lsp.max_results` and
 `lsp.max_occurrences` to bound semantic responses, `grouping` to bound context
-group detection, and `ast_grep.max_results` and `ast_grep.max_output_bytes` to
-bound structural search. The Vim help reference lists every bound and its
-default.
+group detection, and `ast_grep.max_results` and
+`ast_grep.max_output_bytes` to bound structural search.
 
-## Language adapters
+## Add language support
 
-[`lua/archlens/adapters.lua`](lua/archlens/adapters.lua) manages the adapter
-registry. Built-in language behavior lives under
-[`lua/archlens/adapters/`](lua/archlens/adapters/). Each adapter maps Neovim
-filetypes to a canonical language. It can define Tree-sitter symbols and project
-markers, module analysis, an ast-grep parser and query, and relationship
-presentation.
+[`lua/archlens/adapters.lua`](lua/archlens/adapters.lua) manages the language
+adapter registry. Built-in adapters are in
+[`lua/archlens/adapters/`](lua/archlens/adapters/).
 
-Additional adapters can be registered before ArchLens is used:
+An adapter maps Neovim filetypes to a canonical language. It can define
+Tree-sitter symbols, project root markers, module analysis, an ast-grep
+language and query, and relationship presentation.
+
+Register an adapter before you open ArchLens:
 
 ```lua
 require("archlens.adapters").register("zig", {
@@ -318,25 +336,26 @@ require("archlens.adapters").register("zig", {
 })
 ```
 
-Optional `presentation.section(context, relation, row)` and
+The optional `presentation.section(context, relation, row)` and
 `presentation.row(context, relation, row)` hooks can adapt labels and concise
-row names to language semantics. Section hooks may return `key`, `label`,
-`order`, or `show_kind`; row hooks may return `name` or `kind_name`. A
-presentation key creates an independently collapsible view section while the
-underlying relationship ID, direction, evidence, filtering, and details remain
-canonical. Hooks should treat their inputs as read-only.
+row names to language semantics. A section hook can return `key`, `label`,
+`order`, or `show_kind`. A row hook can return `name` or `kind_name`.
+
+A presentation key creates a separately collapsible section. The underlying
+relationship ID, direction, evidence, filtering, and details remain canonical.
+Treat hook inputs as read-only.
 
 If an adapter callback fails or returns an invalid value, ArchLens reports the
-failure in the result details. Presentation falls back to canonical labels and
-rows. Module analysis retains unaffected relationships and omits results that
+failure in `Results` details. Presentation falls back to canonical labels and
+rows. Module analysis keeps unaffected relationships and omits results that
 depend on the failed callback.
 
-## Provider extensions
+## Add a provider
 
-Project-analysis providers use the same registry as the built-in LSP,
-Tree-sitter module, and ast-grep providers. A provider decides whether it
-applies to the current focus, starts its work, calls `done` once with a graph
-delta and optional terminal outcome, and returns a cancellation function:
+Custom project-analysis providers use the same registry as the built-in LSP,
+module, and ast-grep providers. A provider determines whether it applies to the
+current focus, starts bounded work, calls `done` once, and returns a
+cancellation function.
 
 ```lua
 local graph = require("archlens.graph")
@@ -359,15 +378,15 @@ require("archlens.providers").register("ownership", {
 })
 ```
 
-Register new relationship kinds through
-[`lua/archlens/relations.lua`](lua/archlens/relations.lua). Provider-specific
-options belong under `providers.<id>`.
+Register relationship types through
+[`lua/archlens/relations.lua`](lua/archlens/relations.lua). Store
+provider-specific options under `providers.<id>`.
 
-The optional `report` callback accepts `"running"` or `"retrying"`. A retry may
-include `retry_delay_ms` and a short `message`. ArchLens records queued,
+The optional `report` callback accepts `"running"` or `"retrying"`. A retry
+can include `retry_delay_ms` and a short `message`. ArchLens records queued,
 completed, and start-failure states around the provider call.
 
-Calling `done(result)` marks the provider completed. When the provider can
+Calling `done(result)` marks the provider as completed. If the provider can
 classify another terminal outcome, pass `state` and an optional `message`:
 
 ```lua
@@ -380,47 +399,47 @@ done(result, {
 Terminal states are `completed`, `failed`, `timed_out`, `unavailable`, and
 `cancelled`. ArchLens retains partial graph results for every terminal state.
 Use `unavailable` only when the provider applies but a required dependency or
-capability is unavailable. Disabled or inapplicable providers should not start.
+capability is unavailable. Do not start disabled or inapplicable providers.
 
-When more than one attached LSP supports location-based relationships,
-ArchLens queries each client and keeps their evidence separate. Opaque call
-hierarchy items remain with the client that resolved the focused symbol.
+When multiple attached language servers support location-based relationships,
+ArchLens queries each server and keeps its evidence separate. Opaque call
+hierarchy items remain associated with the server that resolved the focused
+symbol.
 
-## Development
+## Develop ArchLens
 
-Relationship providers exchange the focused graph defined in
-[`lua/archlens/graph.lua`](lua/archlens/graph.lua). Section names, ordering, and
-direction live in [`lua/archlens/relations.lua`](lua/archlens/relations.lua), so
-new relationship kinds do not require orchestration or renderer branches.
+Relationship providers exchange graph deltas defined in
+[`lua/archlens/graph.lua`](lua/archlens/graph.lua). Relationship names,
+ordering, and directions are registered in
+[`lua/archlens/relations.lua`](lua/archlens/relations.lua).
 
-Run the package, unit, integration, formatting, and Lua static-analysis checks
-with:
+Run the package, unit, integration, formatting, and Lua static-analysis checks:
 
 ```sh
 nix flake check
 ```
 
-`nix develop` provides the development toolchain. Individual headless test
-entrypoints can also be run directly, for example:
+`nix develop` provides the development toolchain. You can also run an
+individual headless test directly:
 
 ```sh
 nvim --headless -u NONE --noplugin -i NONE -l tests/run.lua
 ```
 
-Run the local performance report with:
+Run the local performance report:
 
 ```sh
 nix run .#benchmark
 ```
 
-The report measures the first useful Tree-sitter relationship for the Go,
-Rust, Nix, and OCaml fixtures and the cost of rendering a bounded large result
-set. Set `ARCHLENS_BENCHMARK_ITERATIONS` to change the default of 50 samples.
-Compare results on the same machine; the report has no timing threshold and is
-not part of CI.
+The report measures the time to the first useful Tree-sitter relationship for
+the Go, Rust, Nix, and OCaml fixtures and the cost of rendering a bounded large
+result set. Set `ARCHLENS_BENCHMARK_ITERATIONS` to change the default of 50
+samples. Compare results on the same machine. The report does not enforce a
+timing threshold and does not run in CI.
 
 See [RELEASING.md](RELEASING.md) for the release procedure.
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE).
+ArchLens is licensed under the [Apache License 2.0](LICENSE).

@@ -1,12 +1,12 @@
 *archlens.txt*                                                     *archlens*
 
 ==============================================================================
-ArchLens                                        Human-first code relationships
+ArchLens                                      Contextual code relationships
 
-ArchLens is a Neovim side pane for exploring local structure and project-level
-relationships around the symbol under the cursor. It uses Tree-sitter,
-attached language servers, ast-grep, and ripgrep when they are available. No
-LLM or hosted service is required.
+ArchLens displays local structure and project-level relationships for the
+symbol under your cursor in a Neovim side pane. It uses Tree-sitter, attached
+language servers, ast-grep, and ripgrep when they are available. It does not
+require an LLM, a hosted service, or a persistent project index.
 
 ==============================================================================
 CONTENTS                                                   *archlens-contents*
@@ -22,19 +22,18 @@ CONTENTS                                                   *archlens-contents*
 COMMANDS                                                   *archlens-commands*
 
                                                         *:ArchLensHere*
-:ArchLensHere          Open or refresh ArchLens for the symbol under the
-                       cursor.
+:ArchLensHere          Open ArchLens for the symbol under the cursor. If the
+                       pane is open, refresh it for the current cursor symbol.
 
                                                         *:ArchLensRefresh*
-:ArchLensRefresh       Re-run analysis for the current focus and rebuild
-                       cached module relationships. Manual section state is
-                       preserved.
+:ArchLensRefresh       Refresh the current focus and rebuild cached module
+                       relationships. ArchLens preserves manual section state.
 
                                                         *:ArchLensClose*
 :ArchLensClose         Close the ArchLens pane.
 
-ArchLens does not define a global mapping. Map |:ArchLensHere| explicitly if
-you want one. For example: >lua
+ArchLens does not define a global mapping. Map |:ArchLensHere| in your Neovim
+configuration if you want a shortcut. For example: >lua
 
     vim.keymap.set("n", "<leader>cm", "<cmd>ArchLensHere<cr>", {
       desc = "Explore code relationships",
@@ -44,130 +43,159 @@ you want one. For example: >lua
 ==============================================================================
 PANE MAPPINGS                                              *archlens-mappings*
 
-The following mappings are local to the ArchLens pane:
+The following mappings apply only to the ArchLens pane:
 
 <CR>            Open a relationship or toggle a section or context group.
-f               Focus a relationship and add the previous symbol to history.
+f               Focus a relationship and add the current symbol to history.
 F               Toggle source-cursor following. Pinned mode is the default.
 <BS>, h         Return to the previous focus.
 <Tab>           Move to the next actionable row.
 <S-Tab>         Move to the previous actionable row.
 ]s, [s          Move to the next or previous section.
 <Space>, za     Toggle a section or context group.
-zM              Collapse every visible section.
-zR              Expand every visible section and context group.
-?               Inspect the current line, or show the complete pane help.
+zM              Collapse all visible sections.
+zR              Expand all visible sections and context groups.
+?               Explain the current line, or show the complete key reference.
 r               Refresh the current focus.
 q               Close ArchLens.
 
-The details window opened by `?` closes with `q`, `<Esc>`, or `?`. ArchLens
-keeps one details window open. Opening another details or help view replaces
-it. Closing the window returns focus to the ArchLens pane.
+DETAILS AND STATUS ~
 
-`Sources [?]` and `Analysis [?]` mark provider lifecycle details that can be
-opened with `?`. `Analysis [?]` appears while providers are active or when a
-provider ends with an exceptional outcome. Active provider names remain
-visible when they fit. At narrower widths ordinary running and queued work is
-summarized by count; failures, timeouts, unavailability, cancellation, and
-retries take priority. Completed providers do not leave persistent status
-noise.
-The details include the time to the first useful relationship.
+Press `?` to inspect the selected relationship, section, context group,
+analysis line, or result summary. On other lines, `?` opens the complete pane
+key reference. Close a details window with `q`, `<Esc>`, or `?`.
 
-After the first focused relationship, `Path [?]` shows the previous and
-current focus. Its details contain the complete path and available back count.
-ArchLens retains up to 32 previous focuses.
+ArchLens keeps one details window open. A new details or help view replaces
+the current one. When you close the details window, focus returns to the
+ArchLens pane.
 
-Source-cursor following watches only the tracked source window. It debounces
-cursor movement, skips repeated movement within one symbol, and does not add
-automatic changes to history. Manual focus and back navigation return to
-pinned mode.
+The pane uses these inspectable status lines:
 
-`Results [?]` compacts relationship filtering, provider caveats, and bounded
-analysis into one line. Its details retain each exact message. The persistent
-footer shows only primary controls; press `?` on an ordinary line for the
-complete pane key reference.
+`Sources [?]`
+    Lists the sources that contributed relationships to the current view.
 
-Semantic references covered by incoming-call occurrences are folded into the
-caller row and remain inspectable with `?`. Non-call references stay separate.
+`Analysis [?]`
+    Shows active providers and providers that ended with an exceptional
+    outcome. The details include the time to the first useful relationship and
+    each provider's lifecycle state, timing, retry delay, and message.
+
+`Path [?]`
+    Shows the previous and current focuses. The details show the complete
+    bounded path and the number of available back steps.
+
+`Results [?]`
+    Summarizes filters, provider caveats, and bounded analysis. The details
+    retain every complete message.
+
+The `Analysis` line prioritizes failures, timeouts, unavailable dependencies,
+cancellations, and retries when the pane is narrow. It summarizes ordinary
+running and queued work by count when provider names do not fit. Completed
+providers do not leave a persistent status line.
+
+The footer shows only the primary controls. Press `?` on an ordinary line to
+view every pane mapping.
+
+NAVIGATION MODES ~
+
+ArchLens starts in pinned mode. Press `f` on a relationship to make it the
+current focus. ArchLens adds the previous focus to history and displays the
+`Path [?]` line. It retains up to 32 previous focuses.
+
+Press `F` to follow the symbol under the cursor in the tracked source window.
+ArchLens debounces cursor movement, ignores repeated positions within the same
+symbol, and does not add automatic focus changes to history. Manual focus and
+back navigation return to pinned mode.
+
+RELATIONSHIP EVIDENCE ~
+
+Semantic references covered by incoming-call occurrences are merged into the
+caller row. Press `?` on the row to inspect the call method, reference method,
+and retained call sites. References that do not identify incoming calls remain
+in a separate section.
+
 When semantic calls, references, implementations, or type hierarchy
-relationships exist, unmatched structural candidates start collapsed as
-secondary evidence. They start expanded when structural analysis is the only
-available usage source.
+relationships are available, unmatched structural candidates start collapsed
+as secondary evidence. They start expanded when structural analysis is the
+only available usage source.
 
 Rows within a section are ordered by evidence quality and filesystem locality.
 Exact corroborated relationships appear first, followed by other exact,
-provider-defined, and structural evidence. Lower-ranked rows remain available
-through section expansion.
+provider-defined, and structural evidence. Expand the section to inspect
+lower-ranked rows.
 
-Type-like focuses show their Tree-sitter children as members. Language
-adapters may project canonical type hierarchy relationships into familiar
-roles. For example, Go interfaces distinguish satisfied contracts, extending
-interfaces, and concrete implementations. Unsupported semantic type
+ArchLens groups test and configuration references by their enclosing symbol or
+module. Expand a group to inspect each exact use.
+
+For a type focus, members are direct children found by Tree-sitter. Language
+adapters can present canonical type hierarchy relationships with familiar
+language terms. For example, the Go adapter distinguishes satisfied contracts,
+extended interfaces, and concrete implementations. Unsupported semantic type
 relationships remain absent.
 
 ==============================================================================
 CONFIGURATION                                         *archlens-configuration*
 
-Call `setup()` without options to use the defaults: >lua
+Call `setup()` without options to use the default configuration: >lua
 
     require("archlens").setup()
 <
 
-The plugin loads with defaults automatically. Later `setup()` calls merge
-their options into the active configuration.
+The plugin calls `setup()` with defaults when it loads. A later `setup()` call
+merges its options into the active configuration.
 
 Built-in configuration tables reject unknown keys. Counts, sizes, and row
-limits must be positive integers. Timeouts, delays, minimum name length, and
-thread count must be non-negative integers. Commands and list entries must be
-non-empty strings. The `providers` table remains open for provider-defined
+limits must be positive integers. Timeouts, delays, the minimum name length,
+and the thread count must be non-negative integers. Commands and list items
+must be non-empty strings. The `providers` table accepts provider-defined
 settings.
 
                                                     *archlens-config-general*
 GENERAL OPTIONS ~
 
-`width` (number, default `56`)
+`width` (integer, default `56`)
     Width of the ArchLens pane in columns.
 
-`max_items` (number, default `8`)
-    Default number of visible rows in each section and expanded context group.
+`max_items` (integer, default `8`)
+    Default visible-row limit for each section and expanded context group.
 
 `include_external` (boolean, default `false`)
-    Include relationships outside the selected project root.
+    Whether to include relationships outside the selected project root.
 
 `providers` (table, default `{}`)
-    Provider-specific configuration keyed by provider ID. See
+    Provider-specific settings keyed by provider ID. See
     |archlens-providers|.
 
                                                *archlens-config-cursor-follow*
 CURSOR FOLLOWING ~
 
 `cursor_follow.enabled` (boolean, default `false`)
-    Start |:ArchLensHere| in source-cursor-following mode. The `F` pane
-    mapping changes the mode for the current pane.
+    Whether |:ArchLensHere| starts in source-cursor-following mode. The `F`
+    pane mapping changes the mode for the current pane.
 
-`cursor_follow.debounce_ms` (number, default `150`)
-    Delay in milliseconds after the latest source cursor movement.
+`cursor_follow.debounce_ms` (integer, default `150`)
+    Delay after the latest source cursor movement, in milliseconds.
 
                                                     *archlens-config-sections*
 SECTION POLICY ~
 
 `sections.collapse_secondary` (boolean, default `true`)
-    Collapse unmatched structural candidates when semantic usage exists.
+    Whether unmatched structural candidates start collapsed when semantic
+    usage is available.
 
 `sections.default_collapsed` (list, default `{ "siblings" }`)
-    Relationship IDs that start collapsed. Use an empty list to start regular
-    sections open.
+    Relationship IDs that start collapsed. Use an empty list to start all
+    regular sections expanded.
 
 `sections.hidden` (list, default `{}`)
-    Relationship IDs omitted from the model and navigation. ArchLens reports
+    Relationship IDs to omit from the model and navigation. ArchLens reports
     the number of hidden relationships.
 
 `sections.max_items` (table, default `{}`)
-    Visible-row limits keyed by relationship ID. These values override
-    `max_items`.
+    Visible-row limits keyed by relationship ID. A value in this table
+    overrides `max_items` for that relationship.
 
 `sections.order` (list, default `{}`)
-    Relationship IDs placed first. Unlisted relationships retain registry
+    Relationship IDs to place first. Unlisted relationships keep registry
     order.
 
 Built-in relationship IDs are: >
@@ -178,16 +206,16 @@ Built-in relationship IDs are: >
     test_references       references             test_structural
     structural            siblings
 <
-Extensions may register additional IDs. See |archlens-providers|.
+Extensions can register additional IDs. See |archlens-providers|.
 
                                                      *archlens-config-filters*
 PROJECT FILTERS ~
 
 `filters.include_generated` (boolean, default `false`)
-    Include generated paths and recognized generated files.
+    Whether to include generated paths and recognized generated files.
 
 `filters.include_vendored` (boolean, default `false`)
-    Include vendored and dependency paths.
+    Whether to include vendored and dependency paths.
 
 `filters.exclude` (list, default `{}`)
     Additional project-relative path prefixes to exclude.
@@ -197,143 +225,146 @@ PROJECT FILTERS ~
 MODULE ANALYSIS ~
 
 `imports.enabled` (boolean, default `true`)
-    Enable outbound module dependency analysis.
+    Whether to analyze outbound module dependencies.
 
-`imports.timeout_ms` (number, default `5000`)
-    Time limit for resolving outbound module dependencies.
+`imports.timeout_ms` (integer, default `5000`)
+    Time limit for outbound module analysis, in milliseconds.
 
-`imports.max_imports` (number, default `24`)
-    Maximum number of distinct visible dependency targets.
+`imports.max_imports` (integer, default `24`)
+    Maximum number of distinct dependency targets to return.
 
-`imports.max_sites` (number, default `96`)
-    Maximum number of import sites examined in the focused file.
+`imports.max_sites` (integer, default `96`)
+    Maximum number of import sites to examine in the focused file.
 
-`imports.concurrency` (number, default `4`)
+`imports.concurrency` (integer, default `4`)
     Maximum number of concurrent definition requests for import sites.
 
 `imports.inbound.enabled` (boolean, default `true`)
-    Enable reverse module analysis.
+    Whether to analyze reverse module relationships.
 
 `imports.inbound.command` (string, default `"rg"`)
     ripgrep executable used to enumerate candidate files.
 
-`imports.inbound.timeout_ms` (number, default `8000`)
-    Time limit for the reverse module project scan.
+`imports.inbound.timeout_ms` (integer, default `8000`)
+    Time limit for the reverse module scan, in milliseconds.
 
-`imports.inbound.max_index_files` (number, default `1000`)
-    Maximum number of visible candidate files parsed into the in-memory index.
+`imports.inbound.max_index_files` (integer, default `1000`)
+    Maximum number of visible candidate files to parse into the in-memory
+    index.
 
-`imports.inbound.max_candidate_files` (number, default `2000`)
-    Maximum number of paths accepted from ripgrep before filtering.
+`imports.inbound.max_candidate_files` (integer, default `2000`)
+    Maximum number of paths to accept from ripgrep before filtering.
 
-`imports.inbound.max_file_bytes` (number, default `1048576`)
-    Maximum size of a candidate file parsed for imports.
+`imports.inbound.max_file_bytes` (integer, default `1048576`)
+    Maximum size of a candidate file to parse for imports, in bytes.
 
-`imports.inbound.batch_size` (number, default `16`)
-    Number of candidate files parsed in each scheduled batch.
+`imports.inbound.batch_size` (integer, default `16`)
+    Number of candidate files to parse in each scheduled batch.
 
-`imports.inbound.max_importers` (number, default `24`)
-    Maximum number of module dependents returned for the focused file.
+`imports.inbound.max_importers` (integer, default `24`)
+    Maximum number of module dependents to return for the focused file.
 
                                                          *archlens-config-lsp*
 LSP ANALYSIS ~
 
-`lsp.resolve_timeout_ms` (number, default `5000`)
-    Time limit for resolving the symbol under the cursor.
+`lsp.resolve_timeout_ms` (integer, default `5000`)
+    Time limit for resolving the symbol under the cursor, in milliseconds.
 
-`lsp.relationship_timeout_ms` (number, default `8000`)
-    Time limit for the semantic relationship requests.
+`lsp.relationship_timeout_ms` (integer, default `8000`)
+    Time limit for semantic relationship requests, in milliseconds.
 
-`lsp.max_results` (number, default `256`)
-    Maximum number of result items retained from each semantic response.
-    ArchLens examines at most four times this number of raw candidates to skip
-    malformed and hidden entries and prefer project-local results.
+`lsp.max_results` (integer, default `256`)
+    Maximum number of result items to retain from each semantic response.
+    ArchLens examines at most four times this number of raw candidates so that
+    it can skip malformed and hidden entries and prefer project-local results.
 
-`lsp.max_occurrences` (number, default `256`)
-    Maximum number of incoming or outgoing call occurrences retained for a
+`lsp.max_occurrences` (integer, default `256`)
+    Maximum number of call occurrences to retain for each incoming or outgoing
     semantic request.
 
 `lsp.cold_start_retry.enabled` (boolean, default `true`)
-    Retry once when a newly attached server returns no semantic relationships
-    and no error. Warm clients complete immediately.
+    Whether to retry once when a newly attached server returns no semantic
+    relationships and no error. Warm clients complete immediately.
 
-`lsp.cold_start_retry.delay_ms` (number, default `3000`)
-    Delay before the cold-start retry.
+`lsp.cold_start_retry.delay_ms` (integer, default `3000`)
+    Delay before the cold-start retry, in milliseconds.
 
-`lsp.cold_start_retry.window_ms` (number, default `10000`)
-    Time after LSP attachment during which an empty response can be retried.
+`lsp.cold_start_retry.window_ms` (integer, default `10000`)
+    Time after LSP attachment during which an empty response can be retried,
+    in milliseconds.
 
                                                     *archlens-config-grouping*
 CONTEXT GROUPING ~
 
 `grouping.enabled` (boolean, default `true`)
-    Group test and configuration relationships by their enclosing symbol or
-    module.
+    Whether to group test and configuration relationships by their enclosing
+    symbol or module.
 
-`grouping.timeout_ms` (number, default `1500`)
-    Time limit for resolving context groups.
+`grouping.timeout_ms` (integer, default `1500`)
+    Time limit for resolving context groups, in milliseconds.
 
-`grouping.batch_size` (number, default `4`)
-    Number of source files examined in each scheduled batch.
+`grouping.batch_size` (integer, default `4`)
+    Number of source files to examine in each scheduled batch.
 
-`grouping.max_file_bytes` (number, default `1048576`)
-    Maximum size of a file parsed for an enclosing context.
+`grouping.max_file_bytes` (integer, default `1048576`)
+    Maximum size of a file to parse for an enclosing context, in bytes.
 
-`grouping.max_edges` (number, default `500`)
-    Maximum number of eligible relationships enriched with an enclosing
+`grouping.max_edges` (integer, default `500`)
+    Maximum number of eligible relationships to enrich with an enclosing
     syntax context. Additional relationships remain grouped by file.
 
                                                     *archlens-config-ast-grep*
 STRUCTURAL SEARCH ~
 
 `ast_grep.enabled` (boolean, default `true`)
-    Enable project-wide structural candidates.
+    Whether to search for project-wide structural candidates.
 
 `ast_grep.command` (string, default `"ast-grep"`)
     ast-grep executable.
 
-`ast_grep.timeout_ms` (number, default `15000`)
-    Time limit for a structural search.
+`ast_grep.timeout_ms` (integer, default `15000`)
+    Time limit for a structural search, in milliseconds.
 
-`ast_grep.max_results` (number, default `80`)
+`ast_grep.max_results` (integer, default `80`)
     Maximum number of decoded structural matches.
 
-`ast_grep.max_output_bytes` (number, default `1048576`)
-    Maximum bytes retained from each ast-grep output stream.
+`ast_grep.max_output_bytes` (integer, default `1048576`)
+    Maximum number of bytes to retain from each ast-grep output stream.
 
-`ast_grep.min_name_length` (number, default `5`)
+`ast_grep.min_name_length` (integer, default `5`)
     Minimum symbol-name length required for structural search.
 
-`ast_grep.threads` (number, default `1`)
+`ast_grep.threads` (integer, default `1`)
     Thread count passed to ast-grep.
 
 `ast_grep.globs` (list, default `{}`)
-    Additional globs passed to ast-grep. Project filters add their own
-    exclusion globs.
+    Additional globs passed to ast-grep. Project filters add exclusion globs.
 
-The configuration API remains experimental.
+The configuration API is experimental.
 
 ==============================================================================
 HEALTH                                                       *archlens-health*
 
-Run the following from a source buffer: >vim
+Run the health check from a source buffer: >vim
 
     :checkhealth archlens
 <
 
 The report shows the selected project root, Tree-sitter adapter and parser,
 attached language-server capabilities, ast-grep availability, and ripgrep
-availability for reverse module analysis. The pane's analysis and result
-details report provider-specific runtime failures. Missing optional providers
-reduce the available relationships but do not prevent the pane from opening.
+availability for reverse module analysis.
+
+Missing optional sources reduce the available relationships but do not
+prevent the pane from opening. To inspect provider-specific runtime failures,
+press `?` on the pane's `Analysis` or `Results` line.
 
 ==============================================================================
 LANGUAGE ADAPTERS                                          *archlens-adapters*
 
-Language adapters define Tree-sitter symbols, root markers, module analysis,
-relationship presentation, and ast-grep behavior. Register an additional
-adapter before opening ArchLens:
->lua
+Language adapters define Tree-sitter symbols, project root markers, module
+analysis, relationship presentation, and ast-grep behavior.
+
+Register an adapter before you open ArchLens: >lua
 
     require("archlens.adapters").register("zig", {
       treesitter = {
@@ -346,30 +377,32 @@ adapter before opening ArchLens:
     })
 <
 
-Optional `presentation.section(context, relation, row)` and
+The optional `presentation.section(context, relation, row)` and
 `presentation.row(context, relation, row)` hooks adapt relationship labels and
-concise row names to language semantics. A section hook may return `key`,
-`label`, `order`, or `show_kind`; a row hook may return `name` or `kind_name`.
-A presentation key creates an independently collapsible view section while
-the underlying relationship ID, direction, evidence, filtering, and details
-remain canonical. Presentation hooks should treat their inputs as read-only.
+concise row names to language semantics. A section hook can return `key`,
+`label`, `order`, or `show_kind`. A row hook can return `name` or `kind_name`.
+
+A presentation key creates a separately collapsible section. The underlying
+relationship ID, direction, evidence, filtering, and details remain canonical.
+Treat presentation-hook inputs as read-only.
 
 If an adapter callback fails or returns an invalid value, ArchLens reports the
-failure in the result details. Presentation falls back to canonical labels and
-rows. Module analysis retains unaffected relationships and omits results that
+failure in `Results` details. Presentation falls back to canonical labels and
+rows. Module analysis keeps unaffected relationships and omits results that
 depend on the failed callback.
 
-The focused relationship graph is defined in `lua/archlens/graph.lua`.
-Relationship names, directions, and ordering are registered in
-`lua/archlens/relations.lua`.
+`lua/archlens/graph.lua` defines the focused relationship graph.
+`lua/archlens/relations.lua` registers relationship names, directions, and
+ordering.
 
 ==============================================================================
 PROVIDER EXTENSIONS                                       *archlens-providers*
 
-Built-in and custom project-analysis providers share one ordered registry.
-A provider decides whether it applies, starts its work, calls `done` once with
-a graph delta and optional terminal outcome, and returns a cancellation
-function. It may use `report` to publish a running or retrying state: >lua
+Built-in and custom project-analysis providers use one ordered registry. A
+provider determines whether it applies to the current focus, starts bounded
+work, calls `done` once with a graph delta and an optional terminal outcome,
+and returns a cancellation function. It can call `report` to publish a running
+or retrying state: >lua
 
     local graph = require("archlens.graph")
 
@@ -391,14 +424,15 @@ function. It may use `report` to publish a running or retrying state: >lua
     })
 <
 
-Provider options belong under `providers.<id>`. Register relationship kinds
-through `require("archlens.relations").register()` before returning edges.
-The optional `report` callback accepts `"running"` or `"retrying"`; retry
-metadata may contain `retry_delay_ms` and a short `message`. ArchLens records
+Store provider-specific settings under `providers.<id>`. Register relationship
+types with `require("archlens.relations").register()` before returning edges.
+
+The optional `report` callback accepts `"running"` or `"retrying"`. Retry
+metadata can include `retry_delay_ms` and a short `message`. ArchLens records
 queued, completed, and start-failure states around the provider call.
 
-`done(result)` marks the provider completed. A provider that can classify
-another terminal outcome may pass `state` and an optional `message`: >lua
+`done(result)` marks the provider as completed. If the provider can classify a
+different terminal outcome, pass `state` and an optional `message`: >lua
 
     done(result, {
       state = "timed_out",
@@ -406,14 +440,14 @@ another terminal outcome may pass `state` and an optional `message`: >lua
     })
 <
 Terminal states are `completed`, `failed`, `timed_out`, `unavailable`, and
-`cancelled`. Partial graph results are retained for every terminal state. Use
-`unavailable` only when the provider applies but a required dependency or
-capability is unavailable. Disabled or inapplicable providers should not
-start.
+`cancelled`. ArchLens retains partial graph results for every terminal state.
+Use `unavailable` only when the provider applies but a required dependency or
+capability is unavailable. Do not start disabled or inapplicable providers.
 
-Every applicable attached LSP contributes location-based relationships.
-Provider evidence remains separate when clients return the same row. Opaque
-call-hierarchy items remain with the client that resolved the focused symbol.
+ArchLens queries every attached LSP that supports location-based
+relationships. It keeps evidence from each client separate. Opaque
+call-hierarchy items remain associated with the client that resolved the
+focused symbol.
 
 ==============================================================================
 LICENSE                                                     *archlens-license*

@@ -328,11 +328,18 @@ equal(ast_only_outcome, {
 local timeout_root = vim.fn.tempname()
 vim.fn.mkdir(timeout_root, "p")
 local slow_ast_grep = vim.fs.joinpath(timeout_root, "slow-ast-grep")
-vim.fn.writefile({ "#!/bin/sh", "sleep 1" }, slow_ast_grep)
+vim.fn.writefile({ "#!/bin/sh", "sleep 0.1" }, slow_ast_grep)
 assert(vim.uv.fs_chmod(slow_ast_grep, 493))
 local timeout_context = vim.deepcopy(propagated)
 timeout_context.root_dir = timeout_root
 timeout_context.path = vim.fs.joinpath(timeout_root, "focus.lua")
+local graph = require("archlens.graph")
+local original_node_from_context = graph.node_from_context
+local late_focus_builds = 0
+graph.node_from_context = function()
+  late_focus_builds = late_focus_builds + 1
+  return { id = "focus", scope = "symbol" }
+end
 local ast_timeout_result
 local ast_timeout_outcome
 require("archlens.ast_grep").relationships(timeout_context, {
@@ -353,6 +360,11 @@ equal(ast_timeout_outcome, {
   state = "timed_out",
   message = "ast-grep search exceeded 10 ms and was stopped.",
 })
+vim.wait(500, function()
+  return false
+end, 10)
+equal(late_focus_builds, 0, "a stopped ast-grep process must not materialize late results")
+graph.node_from_context = original_node_from_context
 vim.api.nvim_buf_delete(ast_only_buffer, { force = true })
 
 local parser_missing_buffer = vim.api.nvim_create_buf(false, true)

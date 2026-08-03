@@ -186,6 +186,9 @@ function M.relationships(context, options, callback)
   local args = command_args(command, context, language, root, options)
 
   process = vim.system(args, { text = true, cwd = root }, function(result)
+    if completed or cancelled then
+      return
+    end
     if
       result.code ~= 0
       and (result.stdout or "") == ""

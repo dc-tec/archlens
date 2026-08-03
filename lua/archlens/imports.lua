@@ -304,7 +304,7 @@ function M.relationships(context, bufnr, options, callback)
     active = active + 1
     local settled = false
     local function resolved(locations, err)
-      if completed then
+      if completed or settled then
         return
       end
       settled = true

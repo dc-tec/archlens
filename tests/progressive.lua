@@ -168,6 +168,7 @@ local function run()
   local structural_options = {}
   local resolve_callbacks = {}
   local cancellation_count = 0
+  local cache_clear_hook
   local rendered = {}
   local active_session
   local selected_row_id
@@ -199,7 +200,11 @@ local function run()
     end,
   }
   package.loaded["archlens.imports"] = {
-    clear_cache = function() end,
+    clear_cache = function()
+      if cache_clear_hook then
+        cache_clear_hook()
+      end
+    end,
     relationships = function(_, _, options, callback)
       import_options[#import_options + 1] = vim.deepcopy(options)
       import_callbacks[#import_callbacks + 1] = callback
@@ -585,14 +590,25 @@ local function run()
     "module focus should continue project-level dependency analysis"
   )
   import_callbacks[7](graph.delta())
-  importer_callbacks[7](graph.delta())
 
   active_session.expanded = { module_imports = true }
   active_session.expanded_groups = { ["test_references:group:refresh"] = true }
   active_session.group_limits = { ["test_references:group:refresh"] = 16 }
   active_session.collapsed = { siblings = true, references = true }
   selected_row_id = "module_imports:selected"
+  local cache_clear_renders
+  cache_clear_hook = function()
+    local render_count = #rendered
+    importer_callbacks[7](graph.delta())
+    cache_clear_renders = #rendered - render_count
+  end
   archlens.refresh()
+  cache_clear_hook = nil
+  assert_equal(
+    cache_clear_renders,
+    0,
+    "refresh should invalidate the previous run before provider caches are cleared"
+  )
   assert_equal(
     active_session.expanded,
     { module_imports = true },

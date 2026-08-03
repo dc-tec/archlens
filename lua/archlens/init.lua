@@ -393,9 +393,9 @@ function M.refresh(tabpage)
     render(session, model.error("ArchLens could not recover its source buffer."))
     return
   end
-  providers.clear_cache(session.current.root_dir)
   session.restore_row_id = view.selected_row_id(session)
   local generation = begin_run(session, false, true)
+  providers.clear_cache(session.current.root_dir)
   load_context(session, session.current, generation)
 end
 

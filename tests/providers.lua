@@ -346,6 +346,49 @@ equal(
 )
 config.providers.custom.defer_completion = false
 
+local stale_start_current = true
+local stale_start_cancellations = 0
+providers.register("stale_start", {
+  order = 27,
+  label = "Stale start",
+  enabled = function(_, _, current_config)
+    local options = current_config.providers.stale_start or {}
+    return options.enabled == true
+  end,
+  start = function()
+    stale_start_current = false
+    return function()
+      stale_start_cancellations = stale_start_cancellations + 1
+    end
+  end,
+})
+config.providers.custom.enabled = false
+config.providers.stale_start = { enabled = true }
+local stale_start_registered = {}
+providers.run(syntax_context, bufnr, config, {
+  is_current = function()
+    return stale_start_current
+  end,
+  on_update = function() end,
+  register_cancel = function(cancel)
+    stale_start_registered[#stale_start_registered + 1] = cancel
+  end,
+  now = function()
+    return clock
+  end,
+})
+equal(
+  stale_start_cancellations,
+  1,
+  "providers that become stale during startup should be cancelled immediately"
+)
+equal(
+  #stale_start_registered,
+  0,
+  "stale provider cancellation must not be registered against a replacement run"
+)
+config.providers.stale_start.enabled = false
+
 config.providers.custom.enabled = false
 config.providers.broken = { enabled = true }
 local broken_updates = run_provider(syntax_context)

@@ -550,13 +550,18 @@ function M.run(context, source_buffer, config, controls)
     local ok, cancel_or_error = pcall(task.start, done, report)
     if ok then
       if not completed and type(cancel_or_error) == "function" then
-        controls.register_cancel(function()
+        local function cancel()
           if completed then
             return
           end
           completed = true
           pcall(cancel_or_error)
-        end)
+        end
+        if controls.is_current() then
+          controls.register_cancel(cancel)
+        else
+          cancel()
+        end
       end
     elseif not completed and controls.is_current() then
       fail(

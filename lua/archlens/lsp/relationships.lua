@@ -235,9 +235,10 @@ function M.relationships(context, bufnr, callback, options)
   end
 
   local function finish(spec, err, value)
-    if cancelled or completed then
+    if cancelled or completed or spec.settled then
       return
     end
+    spec.settled = true
     if spec.key == "prepare_type" then
       if err then
         result.errors[#result.errors + 1] =

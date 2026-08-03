@@ -315,6 +315,48 @@ assert(
 )
 sites = original_sites
 
+imports.clear_cache()
+sites = {
+  {
+    name = "duplicate/one",
+    location = { uri = uri, range = range(10, 8) },
+    position = { line = 10, character = 9 },
+  },
+  {
+    name = "duplicate/two",
+    location = { uri = uri, range = range(11, 8) },
+    position = { line = 11, character = 9 },
+  },
+}
+local duplicate_callbacks = {}
+package.loaded["archlens.lsp"].definition_at = function(_, _, _, _, callback)
+  duplicate_callbacks[#duplicate_callbacks + 1] = callback
+  return function() end
+end
+package.loaded["archlens.imports"] = nil
+imports = require("archlens.imports")
+local duplicate_result
+imports.relationships(context, 0, { concurrency = 2, timeout_ms = 1000 }, function(value)
+  duplicate_result = value
+end)
+equal(#duplicate_callbacks, 2, "both module definitions should start")
+local duplicate_target = {
+  {
+    uri = "file:///workspace/duplicate/module.go",
+    range = range(0, 0),
+  },
+}
+duplicate_callbacks[1](duplicate_target)
+duplicate_callbacks[1](duplicate_target)
+equal(
+  duplicate_result,
+  nil,
+  "a duplicate definition callback must not complete unresolved module analysis"
+)
+duplicate_callbacks[2](duplicate_target)
+assert(duplicate_result, "module analysis should complete after every definition settles")
+sites = original_sites
+
 local hanging_callbacks = {}
 local hanging_cancellations = 0
 package.loaded["archlens.lsp"].definition_at = function(_, _, _, _, callback)

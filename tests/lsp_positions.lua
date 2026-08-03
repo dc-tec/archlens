@@ -1067,6 +1067,61 @@ local function run()
     "rejected implementation requests should not synthesize structural fallback rows"
   )
 
+  local duplicate_handlers = {}
+  local duplicate_client = {
+    id = 114,
+    name = "duplicate-callback-lsp",
+    offset_encoding = "utf-8",
+    requests = {},
+    is_stopped = function()
+      return false
+    end,
+    supports_method = function(_, method)
+      return method == "callHierarchy/incomingCalls" or method == "callHierarchy/outgoingCalls"
+    end,
+    request = function(_, _, _, handler)
+      duplicate_handlers[#duplicate_handlers + 1] = handler
+      return true, #duplicate_handlers
+    end,
+  }
+  vim.lsp.get_client_by_id = function(client_id)
+    return client_id == duplicate_client.id and duplicate_client
+      or original_get_client_by_id(client_id)
+  end
+  local duplicate_result
+  local cancel_duplicate = lsp.relationships(
+    vim.tbl_extend("force", vim.deepcopy(relationship_context), {
+      client_id = duplicate_client.id,
+      client_name = duplicate_client.name,
+      position_encoding = "utf-8",
+      root_dir = "/tmp",
+      supports_calls = true,
+      wire_call_item = {
+        name = "Contract",
+        uri = position_uri,
+        range = relationship_context.location.range,
+        selectionRange = relationship_context.location.range,
+      },
+    }),
+    position_buffer,
+    function(value)
+      duplicate_result = value
+    end,
+    { timeout_ms = 1000 }
+  )
+  assert_equal(#duplicate_handlers, 2, "both call hierarchy requests should start")
+  duplicate_handlers[1](nil, {})
+  duplicate_handlers[1](nil, {})
+  assert_equal(
+    duplicate_result,
+    nil,
+    "a duplicate LSP response must not complete an outstanding relationship batch"
+  )
+  duplicate_handlers[2](nil, {})
+  assert(duplicate_result, "the relationship batch should complete after each request settles")
+  cancel_duplicate()
+  vim.lsp.get_client_by_id = original_get_client_by_id
+
   local cancelled_type_requests = {}
   local hanging_type_handlers = {}
   local hanging_type_client = {

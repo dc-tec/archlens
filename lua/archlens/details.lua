@@ -286,17 +286,61 @@ function M.lines(selection, model)
   return lines
 end
 
-local function close(window)
-  if window and vim.api.nvim_win_is_valid(window) then
-    vim.api.nvim_win_close(window, true)
+local function valid_window(window)
+  return window and vim.api.nvim_win_is_valid(window)
+end
+
+local function restore_focus(instance)
+  if
+    not instance.tabpage
+    or not vim.api.nvim_tabpage_is_valid(instance.tabpage)
+    or vim.api.nvim_get_current_tabpage() ~= instance.tabpage
+  then
+    return
+  end
+  for _, field in ipairs({ "return_window", "fallback_window" }) do
+    local window = instance[field]
+    if valid_window(window) then
+      local restored = pcall(vim.api.nvim_set_current_win, window)
+      if restored then
+        return
+      end
+    end
   end
 end
 
-function M.open(selection, model)
+local function notify_closed(instance)
+  if instance.on_close then
+    pcall(instance.on_close, instance)
+  end
+end
+
+function M.close(instance, opts)
+  if not instance or instance.closed then
+    return true
+  end
+  opts = opts or {}
+  instance.closed = true
+  if valid_window(instance.window) then
+    local closed = pcall(vim.api.nvim_win_close, instance.window, true)
+    if not closed and valid_window(instance.window) then
+      instance.closed = false
+      return false
+    end
+  end
+  notify_closed(instance)
+  if opts.restore_focus ~= false then
+    restore_focus(instance)
+  end
+  return true
+end
+
+function M.open(selection, model, opts)
   local lines = M.lines(selection, model)
   if not lines then
     return nil
   end
+  opts = opts or {}
 
   local max_width = math.max(1, vim.o.columns - 4)
   local width = 1
@@ -327,8 +371,32 @@ function M.open(selection, model)
   vim.wo[window].wrap = true
   vim.wo[window].cursorline = false
 
+  local instance = {
+    buffer = buffer,
+    window = window,
+    lines = lines,
+    return_window = opts.return_window,
+    fallback_window = opts.fallback_window,
+    on_close = opts.on_close,
+    tabpage = vim.api.nvim_win_get_tabpage(window),
+    closed = false,
+  }
+
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(window),
+    once = true,
+    callback = function()
+      if instance.closed then
+        return
+      end
+      instance.closed = true
+      notify_closed(instance)
+      restore_focus(instance)
+    end,
+  })
+
   local function close_details()
-    close(window)
+    M.close(instance)
   end
   for _, key in ipairs({ "q", "<Esc>", "?" }) do
     vim.keymap.set("n", key, close_details, {
@@ -339,7 +407,7 @@ function M.open(selection, model)
     })
   end
 
-  return { buffer = buffer, window = window, lines = lines }
+  return instance
 end
 
 return M

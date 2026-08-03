@@ -59,7 +59,9 @@ zR              Expand every visible section and context group.
 r               Refresh the current focus.
 q               Close ArchLens.
 
-The details window opened by `?` closes with `q`, `<Esc>`, or `?`.
+The details window opened by `?` closes with `q`, `<Esc>`, or `?`. ArchLens
+keeps one details window open. Opening another details or help view replaces
+it. Closing the window returns focus to the ArchLens pane.
 
 `Sources [?]` and `Analysis [?]` mark provider lifecycle details that can be
 opened with `?`. Active provider names remain visible when they fit. At

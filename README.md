@@ -111,7 +111,8 @@ Inside the pane:
 
 Each relationship row shows the provider that produced it. Press `?` on a row
 to view its direction, location, provider method, evidence class, and retained
-occurrences.
+occurrences. ArchLens keeps one details window open. Opening another details or
+help view replaces it. Closing the window returns focus to the ArchLens pane.
 
 `Sources [?]` lists the providers that contributed to the view. `Analysis [?]`
 appears while providers are queued, running, or retrying. Its details show the

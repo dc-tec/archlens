@@ -12,6 +12,18 @@ local function valid_buffer(bufnr)
   return bufnr and vim.api.nvim_buf_is_valid(bufnr)
 end
 
+local function close_detail(session, restore_focus)
+  local instance = session.detail
+  if not instance then
+    return true
+  end
+  local closed = details.close(instance, { restore_focus = restore_focus })
+  if closed and session.detail == instance then
+    session.detail = nil
+  end
+  return closed
+end
+
 local function target_at_cursor(session)
   if not valid_window(session.window) or not session.rendered then
     return nil
@@ -184,7 +196,20 @@ local function configure_buffer(session, actions)
     end
     local line = vim.api.nvim_win_get_cursor(session.window)[1]
     local selection = session.rendered.details and session.rendered.details[line]
-    details.open(selection or { help = true }, session.model)
+    if not close_detail(session, false) then
+      return
+    end
+    local instance
+    instance = details.open(selection or { help = true }, session.model, {
+      return_window = session.window,
+      fallback_window = session.source_window,
+      on_close = function(closed)
+        if session.detail == closed then
+          session.detail = nil
+        end
+      end,
+    })
+    session.detail = instance
   end, "ArchLens details or help")
   local function toggle_section()
     local target = target_at_cursor(session)
@@ -264,6 +289,7 @@ function M.ensure(session, options, actions)
     once = true,
     callback = function()
       if session.window == window then
+        close_detail(session, false)
         session.window = nil
         session.buffer = nil
         session.rendered = nil
@@ -277,6 +303,7 @@ function M.ensure(session, options, actions)
     once = true,
     callback = function()
       if session.buffer == buffer then
+        close_detail(session, false)
         session.window = nil
         session.buffer = nil
         session.rendered = nil
@@ -339,6 +366,7 @@ function M.render(session, model, options)
 end
 
 function M.close(session)
+  close_detail(session, false)
   if valid_window(session.window) then
     vim.api.nvim_win_close(session.window, true)
   end

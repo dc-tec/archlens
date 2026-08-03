@@ -345,6 +345,7 @@ local session = {
   group_limits = {},
   collapsed = {},
   history = { "unchanged" },
+  source_window = source_window,
 }
 local noop = function() end
 view.ensure(session, { width = 80, max_items = 8 }, {
@@ -386,28 +387,48 @@ equal(vim.bo[detail_buffer].filetype, "archlensdetails")
 equal(session.window, main_window, "inspection must not replace the ArchLens window")
 equal(session.buffer, main_buffer, "inspection must not replace the ArchLens buffer")
 equal(session.history, history, "inspection must not mutate navigation history")
-
-local close_mapping
-for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(detail_buffer, "n")) do
-  if mapping.lhs == "q" then
-    close_mapping = mapping
-    break
-  end
-end
-assert(close_mapping and close_mapping.callback, "the details float should be closeable")
-close_mapping.callback()
-assert(
-  not vim.api.nvim_win_is_valid(detail_window),
-  "closing details should dismiss only the float"
-)
-assert(vim.api.nvim_win_is_valid(main_window), "closing details must leave ArchLens open")
+equal(session.detail.window, detail_window, "the session should own the details window")
 
 vim.api.nvim_set_current_win(main_window)
 vim.api.nvim_win_set_cursor(main_window, { 1, 0 })
+local original_win_close = vim.api.nvim_win_close
+vim.api.nvim_win_close = function(window, force)
+  if window == detail_window then
+    error("simulated details close failure")
+  end
+  return original_win_close(window, force)
+end
+local replacement_ok, replacement_error = pcall(inspect_mapping.callback)
+vim.api.nvim_win_close = original_win_close
+assert(replacement_ok, replacement_error)
+assert(vim.api.nvim_win_is_valid(detail_window), "a failed close should retain the details window")
+equal(session.detail.window, detail_window, "a failed close should retain session ownership")
+local retained_window_count = 0
+for _, window in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+  local buffer = vim.api.nvim_win_get_buf(window)
+  if vim.bo[buffer].filetype == "archlensdetails" then
+    retained_window_count = retained_window_count + 1
+  end
+end
+equal(retained_window_count, 1, "a failed close must not stack a replacement window")
+
 inspect_mapping.callback()
 local help_window = vim.api.nvim_get_current_win()
 local help_buffer = vim.api.nvim_get_current_buf()
 assert(help_window ~= main_window, "ordinary lines should open keyboard help")
+assert(
+  not vim.api.nvim_win_is_valid(detail_window),
+  "opening help should replace the existing details window"
+)
+equal(session.detail.window, help_window, "the session should own only the replacement window")
+local detail_window_count = 0
+for _, window in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+  local buffer = vim.api.nvim_win_get_buf(window)
+  if vim.bo[buffer].filetype == "archlensdetails" then
+    detail_window_count = detail_window_count + 1
+  end
+end
+equal(detail_window_count, 1, "repeated inspection should not stack details windows")
 assert(
   contains(vim.api.nvim_buf_get_lines(help_buffer, 0, -1, false), "ArchLens keys"),
   "keyboard help should retain the complete pane reference"
@@ -423,11 +444,92 @@ assert(help_close_mapping and help_close_mapping.callback, "keyboard help should
 help_close_mapping.callback()
 assert(not vim.api.nvim_win_is_valid(help_window), "closing help should leave only the pane")
 assert(vim.api.nvim_win_is_valid(main_window), "closing help must leave ArchLens open")
+equal(vim.api.nvim_get_current_win(), main_window, "closing help should restore pane focus")
+equal(session.detail, nil, "closing help should clear the session-owned window")
 
-vim.api.nvim_win_close(main_window, true)
-if vim.api.nvim_win_is_valid(source_window) then
-  vim.api.nvim_set_current_win(source_window)
+vim.api.nvim_win_set_cursor(main_window, { row_location_line, 0 })
+inspect_mapping.callback()
+local external_detail_window = vim.api.nvim_get_current_win()
+vim.api.nvim_win_close(external_detail_window, true)
+assert(
+  not vim.api.nvim_win_is_valid(external_detail_window),
+  "external window closure should dismiss details"
+)
+equal(vim.api.nvim_get_current_win(), main_window, "external closure should restore pane focus")
+equal(session.detail, nil, "external closure should clear the session-owned window")
+
+vim.api.nvim_win_set_cursor(main_window, { 1, 0 })
+inspect_mapping.callback()
+local remote_detail_window = vim.api.nvim_get_current_win()
+local owner_tab = vim.api.nvim_get_current_tabpage()
+vim.cmd.tabnew()
+local remote_tab = vim.api.nvim_get_current_tabpage()
+local remote_tab_window = vim.api.nvim_get_current_win()
+vim.api.nvim_win_close(remote_detail_window, true)
+assert(
+  not vim.api.nvim_win_is_valid(remote_detail_window),
+  "remote closure should dismiss details in the owner tab"
+)
+equal(vim.api.nvim_get_current_tabpage(), remote_tab, "remote closure must not change tabs")
+equal(vim.api.nvim_get_current_win(), remote_tab_window, "remote closure must not steal focus")
+equal(session.detail, nil, "remote closure should clear the owning session")
+vim.api.nvim_set_current_tabpage(owner_tab)
+equal(vim.api.nvim_get_current_win(), main_window, "the owner pane should retain its focus")
+
+vim.api.nvim_win_set_cursor(main_window, { 1, 0 })
+inspect_mapping.callback()
+local teardown_help_window = vim.api.nvim_get_current_win()
+view.close(session)
+assert(not vim.api.nvim_win_is_valid(teardown_help_window), "closing the pane should close help")
+assert(not vim.api.nvim_win_is_valid(main_window), "the pane should close normally")
+equal(session.detail, nil, "pane teardown should clear its details window")
+equal(vim.api.nvim_get_current_win(), source_window, "pane teardown should return to the source")
+
+local inactive_session = {
+  expanded = {},
+  expanded_groups = {},
+  group_limits = {},
+  collapsed = {},
+  source_window = source_window,
+}
+view.ensure(inactive_session, { width = 80, max_items = 8 }, {
+  open = noop,
+  focus = noop,
+  back = noop,
+  refresh = noop,
+  close = noop,
+  dismiss = noop,
+})
+view.render(inactive_session, model, { width = 80, max_items = 8 })
+local inactive_pane_window = inactive_session.window
+local inactive_pane_buffer = inactive_session.buffer
+local inactive_inspect_mapping
+for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(inactive_pane_buffer, "n")) do
+  if mapping.lhs == "?" then
+    inactive_inspect_mapping = mapping
+    break
+  end
 end
+assert(inactive_inspect_mapping and inactive_inspect_mapping.callback)
+vim.api.nvim_win_set_cursor(inactive_pane_window, { 1, 0 })
+inactive_inspect_mapping.callback()
+local inactive_help_window = vim.api.nvim_get_current_win()
+local inactive_owner_tab = vim.api.nvim_get_current_tabpage()
+local inactive_owner_number = vim.api.nvim_tabpage_get_number(inactive_owner_tab)
+vim.cmd.tabnew()
+local surviving_tab = vim.api.nvim_get_current_tabpage()
+local surviving_window = vim.api.nvim_get_current_win()
+vim.cmd("tabclose " .. inactive_owner_number)
+assert(not vim.api.nvim_tabpage_is_valid(inactive_owner_tab), "the inactive owner tab should close")
+assert(not vim.api.nvim_win_is_valid(inactive_help_window), "tab teardown should close help")
+assert(not vim.api.nvim_win_is_valid(inactive_pane_window), "tab teardown should close the pane")
+equal(inactive_session.detail, nil, "tab teardown should clear the session-owned window")
+equal(
+  vim.api.nvim_get_current_tabpage(),
+  surviving_tab,
+  "tab teardown must preserve the active tab"
+)
+equal(vim.api.nvim_get_current_win(), surviving_window, "tab teardown must preserve active focus")
 
 print("archlens details tests passed")
 vim.cmd("quitall")

@@ -306,6 +306,12 @@ adapters.register("broken_hooks", {
   configuration = function()
     error("configuration exploded")
   end,
+  ast_grep = {
+    language = "lua",
+    query = function()
+      error("query exploded")
+    end,
+  },
   presentation = {
     row = function()
       error("row presentation exploded")
@@ -340,6 +346,11 @@ assert(
   invalid_normalization_error
     and invalid_normalization_error:find("must return a table or nil", 1, true),
   "invalid import normalization values should use the same diagnostic path"
+)
+local _, _, query_error = adapters.ast_grep_query({ name = "Focus" }, "broken_hooks")
+assert(
+  query_error and query_error:find("broken_hooks adapter ast-grep query failed", 1, true),
+  "structural query failures should identify the adapter and hook"
 )
 local graph = require("archlens.graph")
 local broken_context = {
@@ -393,6 +404,20 @@ equal(
   { label = "4 adapter issues", severity = "error" },
   "adapter callback failures should remain inspectable without crashing the model"
 )
+local broken_query_result
+local broken_query_outcome
+ast_grep.relationships(broken_context, { command = "true" }, function(result, outcome)
+  broken_query_result = result
+  broken_query_outcome = outcome
+end)
+equal(broken_query_result.notes, { query_error })
+equal(broken_query_result.note_records, {
+  { message = query_error, summary = "adapter query failed", severity = "error" },
+})
+equal(broken_query_outcome, {
+  state = "failed",
+  message = query_error,
+}, "failed structural query hooks should become provider outcomes")
 
 local ast_only_buffer = vim.api.nvim_create_buf(false, true)
 vim.bo[ast_only_buffer].filetype = "lua"

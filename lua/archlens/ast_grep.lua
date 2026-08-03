@@ -71,7 +71,10 @@ local function query_for(context, language)
 end
 
 local function command_args(command, context, language, root, options)
-  local pattern, selector = query_for(context, language)
+  local pattern, selector, query_error = query_for(context, language)
+  if query_error then
+    return nil, query_error
+  end
   local args = {
     command,
     "run",
@@ -183,7 +186,14 @@ function M.relationships(context, options, callback)
     end)
   end
 
-  local args = command_args(command, context, language, root, options)
+  local args, query_error = command_args(command, context, language, root, options)
+  if query_error then
+    callback(empty(query_error, "adapter query failed", "error"), {
+      state = "failed",
+      message = query_error,
+    })
+    return function() end
+  end
 
   process = vim.system(args, { text = true, cwd = root }, function(result)
     if completed or cancelled then

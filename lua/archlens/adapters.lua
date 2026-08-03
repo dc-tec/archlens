@@ -835,7 +835,22 @@ function M.ast_grep_query(context, language)
   local adapter = registry[language]
   local provider = adapter and adapter.ast_grep
   if provider and provider.query then
-    return provider.query(context)
+    local query, query_error = call_hook(language, "ast-grep query", function()
+      local pattern, selector = provider.query(context)
+      assert(
+        type(pattern) == "string" and pattern ~= "",
+        "ast-grep query pattern must be a non-empty string"
+      )
+      assert(
+        selector == nil or (type(selector) == "string" and selector ~= ""),
+        "ast-grep query selector must be a non-empty string or nil"
+      )
+      return { pattern = pattern, selector = selector }
+    end)
+    if query_error then
+      return nil, nil, query_error
+    end
+    return query.pattern, query.selector
   end
   return context.name, nil
 end

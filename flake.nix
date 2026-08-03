@@ -39,6 +39,9 @@
             version = "0.1.0-dev";
             src = ./.;
           };
+          archlensConfig = {
+            ast_grep.command = lib.getExe pkgs.ast-grep;
+          };
 
           nixvim' = nixvim.legacyPackages.${system};
           testNeovim = nixvim'.makeNixvimWithModule {
@@ -59,11 +62,7 @@
               };
 
               extraConfigLua = ''
-                require("archlens").setup({
-                  ast_grep = {
-                    command = "${lib.getExe pkgs.ast-grep}",
-                  },
-                })
+                require("archlens").setup(${lib.generators.toLua { } archlensConfig})
               '';
             };
           };

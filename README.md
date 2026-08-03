@@ -73,15 +73,67 @@ reverse module lookup.
 With Nixvim, add the flake input:
 
 ```nix
-inputs.archlens.url = "github:dc-tec/archlens";
+inputs.archlens = {
+  url = "github:dc-tec/archlens";
+  inputs.nixpkgs.follows = "nixpkgs";
+  inputs.nixvim.follows = "nixvim";
+};
 ```
 
-Then add the plugin and optional tools to your Nixvim module:
+Pass the package to your Nixvim module, for example through
+`makeNixvimWithModule`:
+
+```nix
+extraSpecialArgs.archlens = inputs.archlens.packages.${system}.default;
+```
+
+Then install and configure the plugin in that module. ArchLens does not have a
+native Nixvim option module, but `lib.generators.toLua` lets the module keep its
+configuration in Nix:
 
 ```nix
 {
-  extraPlugins = [ inputs.archlens.packages.${pkgs.system}.default ];
+  archlens,
+  lib,
+  pkgs,
+  ...
+}:
+let
+  archlensConfig = {
+    width = 64;
+    max_items = 8;
+    include_external = false;
+    cursor_follow = {
+      enabled = false;
+      debounce_ms = 150;
+    };
+    ast_grep = {
+      command = lib.getExe pkgs.ast-grep;
+      timeout_ms = 15000;
+      max_results = 80;
+    };
+    imports.inbound.command = lib.getExe pkgs.ripgrep;
+  };
+in
+{
+  extraPlugins = [ archlens ];
   extraPackages = [ pkgs.ast-grep pkgs.ripgrep ];
+
+  extraConfigLua = lib.mkAfter ''
+    require("archlens").setup(${lib.generators.toLua { } archlensConfig})
+  '';
+
+  keymaps = [
+    {
+      mode = "n";
+      key = "<leader>cm";
+      action = "<cmd>ArchLensHere<cr>";
+      options = {
+        desc = "Explore code relationships";
+        silent = true;
+      };
+    }
+  ];
 }
 ```
 

@@ -113,6 +113,26 @@ graph.add_omitted(second_delta, "structural", 3)
 graph.merge(snapshot, second_delta)
 equal(snapshot.omitted, { structural = 5 }, "omitted counts should accumulate across providers")
 
+local atomic_snapshot = graph.new(context)
+local atomic_snapshot_before = vim.deepcopy(atomic_snapshot)
+local atomic_delta = graph.delta()
+graph.add_edge(
+  atomic_delta,
+  graph.edge("implementations", atomic_snapshot.focus, implementation, {
+    provider = "gopls",
+    method = "textDocument/implementation",
+    class = "semantic",
+  })
+)
+atomic_delta.edges[#atomic_delta.edges + 1] = {}
+local atomic_ok = pcall(graph.merge, atomic_snapshot, atomic_delta)
+equal(atomic_ok, false, "invalid graph deltas should fail validation")
+equal(
+  atomic_snapshot,
+  atomic_snapshot_before,
+  "a graph delta that fails validation should leave the pre-existing snapshot unchanged"
+)
+
 local duplicate_notes = graph.new(context)
 local warning_note = graph.delta()
 graph.add_note(warning_note, "same message", { summary = "warning retained", severity = "warn" })

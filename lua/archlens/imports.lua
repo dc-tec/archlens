@@ -140,8 +140,9 @@ function M.relationships(context, bufnr, options, callback)
   local result = graph.delta()
   local sites, extraction_error = treesitter.import_sites(bufnr)
   if extraction_error then
-    graph.add_error(result, "Module dependency extraction failed: " .. extraction_error)
-    callback(result)
+    local message = "Module dependency extraction failed: " .. extraction_error
+    graph.add_error(result, message)
+    callback(result, { state = "failed", message = message })
     return function() end
   end
   if #sites == 0 then

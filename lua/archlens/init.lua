@@ -30,11 +30,10 @@ local config = config_module.new()
 ---@field origin_window? integer
 ---@field origin_buffer? integer
 ---@field origin_view? table
----@field run_source_window? integer
 ---@field run_source_buffer? integer
 ---@field run_changedtick? integer
----@field require_source_window? boolean
 ---@field current? table
+---@field snapshot? ArchLensGraphDelta
 ---@field model? table
 ---@field rendered? table
 ---@field options? table
@@ -46,6 +45,7 @@ local config = config_module.new()
 ---@field follow_timer? any
 ---@field follow_token integer
 ---@field follow_identity? string
+---@field invalidated? boolean
 
 ---@type table<integer, ArchLensSession>
 local sessions = {}
@@ -113,18 +113,18 @@ local function reset_view_state(session)
   end
 end
 
-local function begin_run(session, require_source_window, preserve_view_state)
-  cancel_requests(session)
+local function begin_run(session, preserve_view_state)
   session.generation = session.generation + 1
+  cancel_requests(session)
   if not preserve_view_state then
     reset_view_state(session)
   end
   session.run_source_buffer = session.source_buffer
-  session.run_source_window = require_source_window and session.source_window or nil
   session.run_changedtick = valid_buffer(session.source_buffer)
       and vim.api.nvim_buf_get_changedtick(session.source_buffer)
     or nil
-  session.require_source_window = require_source_window == true
+  session.snapshot = nil
+  session.invalidated = false
   session.performance = performance.start()
   return session.generation
 end
@@ -146,10 +146,7 @@ local function is_current(session, generation)
     return false
   end
 
-  if valid_window(session.run_source_window) then
-    return vim.api.nvim_win_get_buf(session.run_source_window) == session.run_source_buffer
-  end
-  return not session.require_source_window
+  return true
 end
 
 local function register_cancel(session, cancel)
@@ -204,6 +201,7 @@ local function render_local_context(session, context)
   session.current = context
   local snapshot = graph.new(context)
   graph.set_pending(snapshot, providers.local_pending(config))
+  session.snapshot = snapshot
   render(session, model.build(context, snapshot, config))
 end
 
@@ -222,6 +220,7 @@ local function load_context(session, context, generation)
       register_cancel(session, cancel)
     end,
     on_update = function(relationships)
+      session.snapshot = relationships
       render(session, model.build(context, relationships, config))
     end,
   })
@@ -249,7 +248,7 @@ end
 local function resolve_at(session, buffer, position, opts)
   opts = opts or {}
   session.source_buffer = buffer
-  local generation = begin_run(session, opts.require_source_window == true)
+  local generation = begin_run(session)
   local syntax_context = opts.syntax_context or treesitter.resolve(buffer, position, nil)
   if syntax_context then
     render_local_context(session, syntax_context)
@@ -274,20 +273,82 @@ local function resolve_at(session, buffer, position, opts)
     load_context(session, context, generation)
   end
 
-  local cancel = lsp.resolve(buffer, position, function(context, err)
-    finish(context, err)
-  end)
-  register_cancel(session, cancel)
-  local timer = vim.defer_fn(function()
-    finish(syntax_context, syntax_context and nil or opts.timeout_message)
-  end, config.lsp.resolve_timeout_ms)
-  register_cancel(session, function()
+  local cancel_resolve = function() end
+  local resolve_settled = false
+  local resolve_cancelled = false
+  local timer
+  local function stop_timer()
     if timer and not timer:is_closing() then
       timer:stop()
       timer:close()
     end
+    timer = nil
+  end
+
+  local function cancel_resolution()
+    if resolve_settled or resolve_cancelled then
+      return
+    end
+    resolve_cancelled = true
+    pcall(cancel_resolve)
+  end
+
+  local cancel = lsp.resolve(buffer, position, function(context, err)
+    resolve_settled = true
+    stop_timer()
+    finish(context, err)
+  end)
+  cancel_resolve = type(cancel) == "function" and cancel or cancel_resolve
+  if not resolved then
+    timer = vim.defer_fn(function()
+      cancel_resolution()
+      resolve_settled = true
+      finish(syntax_context, syntax_context and nil or opts.timeout_message)
+    end, config.lsp.resolve_timeout_ms)
+  end
+  register_cancel(session, function()
+    stop_timer()
+    cancel_resolution()
   end)
   return syntax_context
+end
+
+local invalidated_provider_states = {
+  queued = true,
+  retrying = true,
+  running = true,
+}
+
+local function invalidate_analysis(session, message)
+  if not session.active or session.invalidated then
+    return false
+  end
+
+  session.generation = session.generation + 1
+  cancel_requests(session)
+  session.invalidated = true
+
+  if not session.current or not session.snapshot then
+    render(session, model.error(message))
+    return true
+  end
+
+  local snapshot = vim.deepcopy(session.snapshot)
+  local runs = vim.deepcopy(snapshot.provider_runs or {})
+  for _, run in ipairs(runs) do
+    if invalidated_provider_states[run.state] then
+      run.state = "cancelled"
+      run.duration_ms = run.elapsed_ms
+      run.elapsed_ms = nil
+      run.retry_delay_ms = nil
+      run.message = message
+    end
+  end
+  graph.set_provider_runs(snapshot, runs)
+  graph.add_note(snapshot, message, { summary = "source changed", severity = "warn" })
+  session.snapshot = snapshot
+  render(session, model.build(session.current, snapshot, config))
+  return true
 end
 
 function M.show_here(tabpage)
@@ -306,7 +367,6 @@ function M.show_here(tabpage)
   local cursor = vim.api.nvim_win_get_cursor(session.source_window)
   local position = { line = cursor[1] - 1, character = cursor[2] }
   local syntax_context = resolve_at(session, session.source_buffer, position, {
-    require_source_window = true,
     loading_message = "Resolving the symbol under the cursor…",
     failure_message = "No symbol could be resolved at the cursor.",
     timeout_message = "Symbol resolution timed out.",
@@ -425,7 +485,6 @@ local function follow_source_cursor(session, allow_background)
 
   session.follow_identity = identity
   resolve_at(session, buffer, position, {
-    require_source_window = true,
     syntax_context = syntax_context,
     loading_message = "Resolving the source cursor…",
     failure_message = "No symbol could be resolved at the source cursor.",
@@ -505,7 +564,7 @@ function M.focus(target, tabpage, navigation_metadata)
     or context
   navigation.push(session, navigation_metadata, view.selected_row_id(session))
   session.restore_row_id = nil
-  local generation = begin_run(session, false)
+  local generation = begin_run(session)
   load_context(session, context, generation)
 end
 
@@ -531,7 +590,7 @@ function M.back(tabpage)
     return
   end
   session.restore_row_id = entry.selected_row_id
-  local generation = begin_run(session, false)
+  local generation = begin_run(session)
   session.expanded = entry.expanded or {}
   session.expanded_groups = entry.expanded_groups or {}
   session.group_limits = entry.group_limits or {}
@@ -545,12 +604,16 @@ function M.refresh(tabpage)
     M.show_here(tabpage)
     return
   end
+  if session.invalidated then
+    M.show_here(tabpage)
+    return
+  end
   if not repair_source_buffer(session, session.current) then
     render(session, model.error("ArchLens could not recover its source buffer."))
     return
   end
   session.restore_row_id = view.selected_row_id(session)
-  local generation = begin_run(session, session.cursor_follow, true)
+  local generation = begin_run(session, true)
   providers.clear_cache(session.current.root_dir)
   load_context(session, session.current, generation)
 end
@@ -687,6 +750,46 @@ function M.setup(options)
         and event.buf == vim.api.nvim_win_get_buf(session.source_window)
       then
         schedule_cursor_follow(session)
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "TextChangedP" }, {
+    group = group,
+    callback = function(event)
+      if not valid_buffer(event.buf) then
+        return
+      end
+      local changedtick = vim.api.nvim_buf_get_changedtick(event.buf)
+      for _, session in pairs(sessions) do
+        if
+          session.active
+          and event.buf == session.run_source_buffer
+          and session.run_changedtick
+          and changedtick ~= session.run_changedtick
+        then
+          local following = session.cursor_follow
+          invalidate_analysis(
+            session,
+            following and "Source changed; ArchLens is resolving the source cursor again."
+              or "Source changed; press r to resolve the symbol at the source cursor again."
+          )
+          if following then
+            schedule_cursor_follow(session)
+          end
+        end
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
+    group = group,
+    callback = function(event)
+      for _, session in pairs(sessions) do
+        if session.active and event.buf == session.run_source_buffer then
+          invalidate_analysis(
+            session,
+            "Source buffer closed; press r to resolve the symbol in the tracked source window."
+          )
+        end
       end
     end,
   })

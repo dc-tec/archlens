@@ -2,35 +2,39 @@ local graph = require("archlens.graph")
 local model = require("archlens.model")
 local positions = require("archlens.lsp.positions")
 local protocol = require("archlens.lsp.protocol")
+local scope = require("archlens.scope")
 local test_paths = require("archlens.test_paths")
 
 local M = {}
 local methods = protocol.methods
 
-local function normalize_call(call, direction, encoding, fallback_bufnr, origin_uri)
-  local normalized = vim.deepcopy(call)
+local function normalize_call(call, direction, encoding, fallback_bufnr, origin_uri, range_limit)
   local item_key = direction == "incoming" and "from" or "to"
   if not call[item_key] then
-    return nil
+    return nil, 0, 0
   end
-  normalized[item_key] =
-    positions.normalize_hierarchy_item(call[item_key], encoding, fallback_bufnr)
+  local normalized = {
+    [item_key] = positions.normalize_hierarchy_item(call[item_key], encoding, fallback_bufnr),
+  }
   if not normalized[item_key] then
-    return nil
+    return nil, 0, 0
   end
   normalized.wire_call_item = call[item_key]
   if call.fromRanges then
     local range_uri = direction == "incoming" and call.from.uri or origin_uri
     normalized.fromRanges = {}
-    for _, range in ipairs(call.fromRanges) do
+    local admitted = math.min(#call.fromRanges, range_limit)
+    for index = 1, admitted do
+      local range = call.fromRanges[index]
       local normalized_range =
         positions.range_from_client(range_uri, range, encoding, fallback_bufnr)
       if normalized_range then
         normalized.fromRanges[#normalized.fromRanges + 1] = normalized_range
       end
     end
+    return normalized, math.max(0, #call.fromRanges - admitted), admitted
   end
-  return normalized
+  return normalized, 0, 0
 end
 
 local function call_edge(call, direction, context)
@@ -104,6 +108,79 @@ local function type_item_score(item, context)
   return score
 end
 
+local function valid_position(position)
+  return type(position) == "table"
+    and type(position.line) == "number"
+    and position.line >= 0
+    and position.line <= 4294967295
+    and position.line == math.floor(position.line)
+    and type(position.character) == "number"
+    and position.character >= 0
+    and position.character <= 4294967295
+    and position.character == math.floor(position.character)
+end
+
+local function valid_range(range)
+  return type(range) == "table" and valid_position(range.start) and valid_position(range["end"])
+end
+
+local function hierarchy_candidate(item)
+  if
+    type(item) ~= "table"
+    or type(item.name) ~= "string"
+    or item.name == ""
+    or type(item.uri) ~= "string"
+    or item.uri == ""
+    or not valid_range(item.range)
+    or not valid_range(item.selectionRange)
+  then
+    return nil
+  end
+  return item.uri, item.selectionRange, item.name
+end
+
+local function location_candidate(location)
+  if type(location) ~= "table" then
+    return nil
+  end
+  if location.targetUri ~= nil then
+    if
+      type(location.targetUri) ~= "string"
+      or location.targetUri == ""
+      or not valid_range(location.targetRange)
+      or not valid_range(location.targetSelectionRange)
+      or (location.originSelectionRange and not valid_range(location.originSelectionRange))
+    then
+      return nil
+    end
+    return location.targetUri, location.targetSelectionRange
+  end
+  if type(location.uri) ~= "string" or location.uri == "" or not valid_range(location.range) then
+    return nil
+  end
+  return location.uri, location.range
+end
+
+local function call_candidate(call, direction)
+  if type(call) ~= "table" then
+    return nil
+  end
+  return hierarchy_candidate(call[direction == "incoming" and "from" or "to"])
+end
+
+local function candidate_key(uri, range, name)
+  local start = range and range.start or {}
+  local finish = range and range["end"] or {}
+  return table.concat({
+    uri or "",
+    string.format("%010d", start.line or 0),
+    string.format("%010d", start.character or 0),
+    string.format("%010d", finish.line or 0),
+    string.format("%010d", finish.character or 0),
+    name or "",
+  }, "\0")
+end
+
 local function select_type_item(items, context, client, bufnr)
   local candidates = {}
   for index, item in ipairs(items or {}) do
@@ -165,6 +242,11 @@ end
 
 function M.relationships(context, bufnr, callback, options)
   options = options or {}
+  local max_results = math.max(1, math.floor(tonumber(options.max_results) or 256))
+  local max_occurrences = math.max(1, math.floor(tonumber(options.max_occurrences) or 256))
+  local filters = options.filters
+    or { include_external = true, include_generated = true, include_vendored = true }
+  local scope_cache = {}
   local result = graph.delta()
   local client = vim.lsp.get_client_by_id(context.client_id)
   if not client or client:is_stopped() then
@@ -210,6 +292,95 @@ function M.relationships(context, bufnr, callback, options)
 
   local request
 
+  local function candidate_scope(uri)
+    if type(uri) ~= "string" or not uri:match("^file:") then
+      return "external"
+    end
+    local path_ok, path = pcall(vim.uri_to_fname, uri)
+    if not path_ok then
+      return "external"
+    end
+    return scope.classify(context.root_dir, path, filters, scope_cache)
+  end
+
+  local scope_scores = {
+    project = 4,
+    generated = 3,
+    vendored = 2,
+    external = 1,
+  }
+
+  local function admitted_values(values, spec, describe)
+    values = type(values) == "table" and values or {}
+    local candidates = {}
+    local rejected = 0
+    local scan_limit = math.min(#values, max_results * 4)
+    for index = 1, scan_limit do
+      local value = values[index]
+      local uri, range, name = describe(value)
+      local kind = uri and candidate_scope(uri) or nil
+      if kind and scope.visible(kind, filters) then
+        local score = (scope_scores[kind] or 0) * 100
+        if uri == (context.location and context.location.uri) then
+          score = score + 10
+        end
+        if name and name == context.name then
+          score = score + 5
+        end
+        candidates[#candidates + 1] = {
+          index = index,
+          key = candidate_key(uri, range, name),
+          score = score,
+          value = value,
+        }
+      else
+        rejected = rejected + 1
+      end
+    end
+    table.sort(candidates, function(left, right)
+      if left.score ~= right.score then
+        return left.score > right.score
+      end
+      if left.key ~= right.key then
+        return left.key < right.key
+      end
+      return left.index < right.index
+    end)
+    local admitted = {}
+    for index = 1, math.min(#candidates, max_results) do
+      admitted[index] = candidates[index].value
+    end
+    local limited = math.max(0, #candidates - #admitted)
+    local unexamined = math.max(0, #values - scan_limit)
+    local omitted = rejected + limited + unexamined
+    if omitted > 0 then
+      local message
+      if rejected == 0 and unexamined == 0 then
+        message = string.format(
+          "%s returned %d results; %d were omitted by the %d-result LSP limit.",
+          spec.label,
+          #values,
+          omitted,
+          max_results
+        )
+      else
+        message = string.format(
+          "%s returned %d results; %d were omitted before normalization (%d hidden or malformed; %d above the %d-result LSP limit; %d outside the %d-candidate scan limit).",
+          spec.label,
+          #values,
+          omitted,
+          rejected,
+          limited,
+          max_results,
+          unexamined,
+          max_results * 4
+        )
+      end
+      graph.add_note(result, message, { summary = "semantic results limited", severity = "warn" })
+    end
+    return admitted
+  end
+
   local function type_requests(item)
     return {
       {
@@ -244,7 +415,8 @@ function M.relationships(context, bufnr, callback, options)
         result.errors[#result.errors + 1] =
           string.format("%s failed: %s", spec.label, protocol.as_error(err))
       else
-        local item, candidates = select_type_item(value, context, client, bufnr)
+        local candidates_input = admitted_values(value, spec, hierarchy_candidate)
+        local item, candidates = select_type_item(candidates_input, context, client, bufnr)
         if item then
           if #candidates > 1 then
             graph.add_note(
@@ -258,11 +430,11 @@ function M.relationships(context, bufnr, callback, options)
             )
           end
           enqueue(type_requests(item))
-        elseif value and #value > 0 then
+        elseif #candidates_input > 0 then
           result.errors[#result.errors + 1] = string.format(
             "Type hierarchy preparation omitted %d result%s because its source text was unavailable for position conversion.",
-            #value,
-            #value == 1 and "" or "s"
+            #candidates_input,
+            #candidates_input == 1 and "" or "s"
           )
         end
       end
@@ -278,7 +450,8 @@ function M.relationships(context, bufnr, callback, options)
       local skipped = 0
       if spec.key == "implementations" or spec.key == "references" then
         local locations = positions.location_list(value)
-        for _, location in ipairs(locations) do
+        local admitted = admitted_values(locations, spec, location_candidate)
+        for _, location in ipairs(admitted) do
           local normalized_location =
             positions.normalize_location(location, client.offset_encoding, bufnr, spec.origin_uri)
           if normalized_location then
@@ -314,17 +487,44 @@ function M.relationships(context, bufnr, callback, options)
           )
         end
       elseif spec.key == "incoming" or spec.key == "outgoing" then
-        for _, call in ipairs(value or {}) do
-          local normalized_call =
-            normalize_call(call, spec.key, client.offset_encoding, bufnr, spec.origin_uri)
+        local admitted = admitted_values(value, spec, function(call)
+          return call_candidate(call, spec.key)
+        end)
+        local remaining_occurrences = max_occurrences
+        local omitted_occurrences = 0
+        for _, call in ipairs(admitted) do
+          local normalized_call, range_omitted, range_admitted = normalize_call(
+            call,
+            spec.key,
+            client.offset_encoding,
+            bufnr,
+            spec.origin_uri,
+            remaining_occurrences
+          )
+          remaining_occurrences = math.max(0, remaining_occurrences - range_admitted)
+          omitted_occurrences = omitted_occurrences + range_omitted
           if normalized_call then
             normalized[#normalized + 1] = call_edge(normalized_call, spec.key, context)
           else
             skipped = skipped + 1
           end
         end
+        if omitted_occurrences > 0 then
+          graph.add_note(
+            result,
+            string.format(
+              "%s omitted %d call occurrence%s by the %d-occurrence LSP limit.",
+              spec.label,
+              omitted_occurrences,
+              omitted_occurrences == 1 and "" or "s",
+              max_occurrences
+            ),
+            { summary = "semantic occurrences limited", severity = "warn" }
+          )
+        end
       elseif spec.key == "supertypes" or spec.key == "subtypes" then
-        for _, item in ipairs(value or {}) do
+        local admitted = admitted_values(value, spec, hierarchy_candidate)
+        for _, item in ipairs(admitted) do
           local edge = type_edge(item, spec.key, context, client, bufnr)
           if edge then
             normalized[#normalized + 1] = edge

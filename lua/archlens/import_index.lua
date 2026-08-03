@@ -495,8 +495,9 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         return
       end
       if err then
-        add_index_note(index, "Project module scan failed: " .. err, "module scan failed", "error")
-        finish()
+        local message = "Project module scan failed: " .. err
+        add_index_note(index, message, "module scan failed", "error")
+        finish({ state = "failed", message = message })
         return
       end
       local files, omitted, oversized, unexamined =
@@ -595,7 +596,14 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
           for _, adapter_error in ipairs(errors) do
             add_index_note(index, adapter_error, "adapter module analysis failed", "error")
           end
-          finish()
+          finish(#errors > 0 and {
+            state = "failed",
+            message = string.format(
+              "%d adapter module callback%s failed during project scanning.",
+              #errors,
+              #errors == 1 and "" or "s"
+            ),
+          } or nil)
         end
       end
       vim.schedule(parse_batch)
@@ -763,15 +771,17 @@ function M.relationships(context, bufnr, options, callback)
         }
       )
     end
-    callback(result)
+    callback(result, key_failure and { state = "failed", message = key_error } or nil)
     return function() end
   end
   local anchor_label, label_error =
     target_label(language, target_imports, context, target_path, root)
   local issues = {}
+  local local_outcome
   if label_error then
     issues[#issues + 1] = label_error
     anchor_label = fallback_target_label(context, target_path, root)
+    local_outcome = { state = "failed", message = label_error }
   end
 
   local cache_key = key_for(root, specs, filters, options)
@@ -780,7 +790,7 @@ function M.relationships(context, bufnr, options, callback)
   if index.ready then
     callback(
       materialize(index, context, target_path, keys, anchor_label, options, issues),
-      index.outcome
+      index.outcome or local_outcome
     )
     return function() end
   end
@@ -789,7 +799,7 @@ function M.relationships(context, bufnr, options, callback)
     callback = function(value)
       callback(
         materialize(value, context, target_path, keys, anchor_label, options, issues),
-        value.outcome
+        value.outcome or local_outcome
       )
     end,
     cancelled = false,

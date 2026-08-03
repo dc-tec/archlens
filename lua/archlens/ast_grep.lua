@@ -17,6 +17,14 @@ local function executable(command)
   return command and command ~= "" and vim.fn.executable(command) == 1
 end
 
+local function diagnostic_text(value)
+  local line = vim.trim(value or ""):match("[^\r\n]+") or ""
+  if #line > 400 then
+    return line:sub(1, 400) .. "..."
+  end
+  return line
+end
+
 local function usable_name(name, minimum)
   return type(name) == "string"
     and #name >= (minimum or 5)
@@ -165,10 +173,20 @@ function M.relationships(context, options, callback)
 
   local cancelled = false
   local completed = false
-  local timeout_ms = options.timeout_ms or 15000
-  local maximum = options.max_results or 80
+  local timeout_ms = math.max(1, math.floor(tonumber(options.timeout_ms) or 15000))
+  local maximum = math.max(1, math.floor(tonumber(options.max_results) or 80))
+  local max_output_bytes =
+    math.max(1, math.floor(tonumber(options.max_output_bytes) or (1024 * 1024)))
   local process
   local timer
+  local stdout_chunks = {}
+  local stdout_bytes = 0
+  local stdout_error
+  local stdout_limited = false
+  local stderr_chunks = {}
+  local stderr_bytes = 0
+  local stderr_error
+  local stderr_limited = false
 
   local function finish(result, outcome)
     if completed or cancelled then
@@ -195,53 +213,125 @@ function M.relationships(context, options, callback)
     return function() end
   end
 
-  process = vim.system(args, { text = true, cwd = root }, function(result)
+  local function collect_stdout(err, data)
     if completed or cancelled then
       return
     end
-    if
-      result.code ~= 0
-      and (result.stdout or "") == ""
-      and (result.code ~= 1 or vim.trim(result.stderr or "") ~= "")
-    then
-      finish(
-        empty(
-          string.format("ast-grep search failed: %s", vim.trim(result.stderr or "unknown error")),
-          "structural search failed",
-          "error"
-        )
-      )
+    if err and not stdout_error then
+      stdout_error = tostring(err)
+    end
+    if not data or data == "" or stdout_limited then
       return
     end
-    local matches, omitted = decode_matches(result.stdout, root, maximum, options.filters or {})
-    local delta = graph.delta()
-    local focus = graph.node_from_context(context)
-    for _, match in ipairs(matches) do
-      local path = vim.uri_to_fname(match.uri)
-      local kind = test_paths.is_test(
-        context.language,
-        path,
-        context.root_dir,
-        match.range.start.line
-      ) and "test_structural" or "structural"
-      local related = graph.node_from_location({ uri = match.uri, range = match.range }, {
-        name = match.text,
-        kind_name = kind == "test_structural" and "Test match" or "Structural match",
-        position_encoding = "utf-8",
-      })
-      graph.add_edge(
-        delta,
-        graph.edge(kind, related, focus, {
-          provider = match.provider or "ast-grep",
-          method = "structural",
-          class = "structural",
-        })
-      )
+
+    local remaining = math.max(0, max_output_bytes - stdout_bytes)
+    if remaining > 0 then
+      local admitted = data:sub(1, remaining)
+      stdout_chunks[#stdout_chunks + 1] = admitted
+      stdout_bytes = stdout_bytes + #admitted
     end
-    graph.add_omitted(delta, "structural", omitted)
-    graph.add_contributor(delta, "ast_grep", "ast-grep")
-    finish(delta)
-  end)
+    if #data > remaining then
+      stdout_limited = true
+      vim.schedule(function()
+        if process and not completed and not cancelled then
+          pcall(process.kill, process, 15)
+        end
+      end)
+    end
+  end
+
+  local function collect_stderr(err, data)
+    if completed or cancelled then
+      return
+    end
+    if err and not stderr_error then
+      stderr_error = tostring(err)
+    end
+    if not data or data == "" or stderr_limited then
+      return
+    end
+
+    local remaining = math.max(0, max_output_bytes - stderr_bytes)
+    if remaining > 0 then
+      local admitted = data:sub(1, remaining)
+      stderr_chunks[#stderr_chunks + 1] = admitted
+      stderr_bytes = stderr_bytes + #admitted
+    end
+    if #data > remaining then
+      stderr_limited = true
+      vim.schedule(function()
+        if process and not completed and not cancelled then
+          pcall(process.kill, process, 15)
+        end
+      end)
+    end
+  end
+
+  process = vim.system(
+    args,
+    { text = true, cwd = root, stdout = collect_stdout, stderr = collect_stderr },
+    function(result)
+      if completed or cancelled then
+        return
+      end
+      local stdout = table.concat(stdout_chunks)
+      local stderr = diagnostic_text(table.concat(stderr_chunks))
+      local process_failed = stdout_error ~= nil
+        or stderr_error ~= nil
+        or stderr_limited
+        or (result.code ~= 0 and not stdout_limited and (result.code ~= 1 or stderr ~= ""))
+      local matches, omitted = decode_matches(stdout, root, maximum, options.filters or {})
+      local delta = graph.delta()
+      local focus = graph.node_from_context(context)
+      for _, match in ipairs(matches) do
+        local path = vim.uri_to_fname(match.uri)
+        local kind = test_paths.is_test(
+          context.language,
+          path,
+          context.root_dir,
+          match.range.start.line
+        ) and "test_structural" or "structural"
+        local related = graph.node_from_location({ uri = match.uri, range = match.range }, {
+          name = match.text,
+          kind_name = kind == "test_structural" and "Test match" or "Structural match",
+          position_encoding = "utf-8",
+        })
+        graph.add_edge(
+          delta,
+          graph.edge(kind, related, focus, {
+            provider = match.provider or "ast-grep",
+            method = "structural",
+            class = "structural",
+          })
+        )
+      end
+      graph.add_omitted(delta, "structural", omitted)
+      graph.add_contributor(delta, "ast_grep", "ast-grep")
+      if stdout_limited then
+        graph.add_note(
+          delta,
+          string.format(
+            "ast-grep output reached the %d-byte limit; structural results may be incomplete.",
+            max_output_bytes
+          ),
+          { summary = "structural search limited", severity = "warn" }
+        )
+      end
+      if process_failed then
+        local message = stderr_limited
+            and string.format("error output reached the %d-byte limit", max_output_bytes)
+          or stdout_error
+          or stderr_error
+          or (stderr ~= "" and stderr)
+          or string.format("exited with code %d", result.code)
+        message = "ast-grep search failed: " .. message
+        graph.add_note(delta, message, { summary = "structural search failed", severity = "error" })
+        finish(delta, { state = "failed", message = message })
+        return
+      end
+      finish(delta)
+    end
+  )
 
   timer = vim.defer_fn(function()
     if completed or cancelled then

@@ -89,8 +89,11 @@ local function run()
     assert(map_windows[1], "the ArchLens window is missing")
     local focus_line
     for index, value in ipairs(lines) do
-      if value:find(focus_name, 1, true) then
+      local _, finish = value:find(focus_name, 1, true)
+      local next_character = finish and value:sub(finish + 1, finish + 1) or ""
+      if finish and not next_character:match("[%w_]") then
         focus_line = index
+        break
       end
     end
     assert(focus_line, "the requested focus row is missing")

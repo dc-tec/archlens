@@ -589,12 +589,7 @@ function M.set_pending(target, providers)
   M.set_provider_runs(target, runs)
 end
 
----@param target ArchLensGraphDelta
----@param delta ArchLensGraphDelta
----@return ArchLensGraphDelta
-function M.merge(target, delta)
-  assert(type(target) == "table" and target.version == 1, "invalid graph snapshot")
-  assert(type(delta) == "table" and delta.version == 1, "invalid graph delta")
+local function merge_into(target, delta)
   for _, edge in ipairs(delta.edges or {}) do
     M.add_edge(target, edge)
   end
@@ -611,6 +606,19 @@ function M.merge(target, delta)
     M.add_contributor(target, contributor.id, contributor.label)
   end
   return target
+end
+
+---@param target ArchLensGraphDelta
+---@param delta ArchLensGraphDelta
+---@return ArchLensGraphDelta
+function M.merge(target, delta)
+  assert(type(target) == "table" and target.version == 1, "invalid graph snapshot")
+  assert(type(delta) == "table" and delta.version == 1, "invalid graph delta")
+
+  local staged = M.delta()
+  staged.focus = target.focus
+  merge_into(staged, delta)
+  return merge_into(target, staged)
 end
 
 local function add_syntax_edges(snapshot, context, kind)

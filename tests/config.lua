@@ -48,6 +48,17 @@ local function run()
     delay_ms = 3000,
     window_ms = 10000,
   }, "cold language servers should receive one bounded empty-result retry")
+  assert_equal(second.lsp.max_results, 256, "LSP responses should have an admission limit")
+  assert_equal(
+    second.lsp.max_occurrences,
+    256,
+    "LSP call occurrences should have an admission limit"
+  )
+  assert_equal(
+    second.ast_grep.max_output_bytes,
+    1024 * 1024,
+    "structural search output should have a byte limit"
+  )
 
   local merged = config.merge(second, {
     width = 72,
@@ -93,6 +104,19 @@ local function run()
     merged.sections.order,
     { "incoming", "outgoing", "references" },
     "configured section order should replace registry order"
+  )
+
+  local extended = config.merge(merged, {
+    providers = {
+      custom = {
+        extension_defined_setting = { "kept", true },
+      },
+    },
+  })
+  assert_equal(
+    extended.providers.custom.extension_defined_setting,
+    { "kept", true },
+    "provider configuration should remain an extension-defined namespace"
   )
 
   local ok, err = pcall(config.merge, merged, { imports = false })
@@ -151,6 +175,78 @@ local function run()
     {
       options = { cursor_follow = { debounce_ms = -1 } },
       message = "cursor_follow.debounce_ms must be a non-negative integer",
+    },
+    {
+      options = { width = "wide" },
+      message = "width must be a positive integer",
+    },
+    {
+      options = { max_items = math.huge },
+      message = "max_items must be a positive integer",
+    },
+    {
+      options = { include_external = "yes" },
+      message = "include_external must be a boolean",
+    },
+    {
+      options = { filters = { exclude = { generated = true } } },
+      message = "filters.exclude must be a list of path prefixes",
+    },
+    {
+      options = { filters = { exclude = { "vendor", 2 } } },
+      message = "filters.exclude[2] must be a non-empty string",
+    },
+    {
+      options = { imports = { timeout_ms = -1 } },
+      message = "imports.timeout_ms must be a non-negative integer",
+    },
+    {
+      options = { imports = { inbound = { command = "" } } },
+      message = "imports.inbound.command must be a non-empty string",
+    },
+    {
+      options = { imports = { inbound = { max_candidate_files = 0 } } },
+      message = "imports.inbound.max_candidate_files must be a positive integer",
+    },
+    {
+      options = { lsp = { resolve_timeout_ms = -1 } },
+      message = "lsp.resolve_timeout_ms must be a non-negative integer",
+    },
+    {
+      options = { lsp = { max_results = 0 } },
+      message = "lsp.max_results must be a positive integer",
+    },
+    {
+      options = { grouping = { enabled = "yes" } },
+      message = "grouping.enabled must be a boolean",
+    },
+    {
+      options = { grouping = { max_edges = 0 } },
+      message = "grouping.max_edges must be a positive integer",
+    },
+    {
+      options = { ast_grep = { globs = { go = "*.go" } } },
+      message = "ast_grep.globs must be a list of glob patterns",
+    },
+    {
+      options = { ast_grep = { globs = { "*.go", false } } },
+      message = "ast_grep.globs[2] must be a non-empty string",
+    },
+    {
+      options = { ast_grep = { max_output_bytes = 0 } },
+      message = "ast_grep.max_output_bytes must be a positive integer",
+    },
+    {
+      options = { ast_grep = { threads = -1 } },
+      message = "ast_grep.threads must be a non-negative integer",
+    },
+    {
+      options = { future_option = true },
+      message = "options.future_option is not a recognized option",
+    },
+    {
+      options = { lsp = { future_option = true } },
+      message = "lsp.future_option is not a recognized option",
     },
   }
   for _, case in ipairs(invalid_options) do

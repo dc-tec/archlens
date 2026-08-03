@@ -81,6 +81,81 @@ local default_name_fields = {
 
 local default_name_node_types = common.name_node_types()
 
+local adapter_fields = {
+  ast_grep = true,
+  configuration = true,
+  filename_extensions = true,
+  filetypes = true,
+  presentation = true,
+  treesitter = true,
+}
+
+local treesitter_fields = {
+  focus_wrappers = true,
+  imports = true,
+  name_fields = true,
+  name_node_types = true,
+  root_markers = true,
+  symbol_types = true,
+  synthetic_name = true,
+}
+
+local import_fields = {
+  capture = true,
+  extensions = true,
+  normalize = true,
+  query = true,
+  scan_languages = true,
+  site_keys = true,
+  target_keys = true,
+  target_label = true,
+}
+
+local ast_grep_fields = {
+  language = true,
+  query = true,
+  unsupported_note = true,
+}
+
+local presentation_fields = {
+  row = true,
+  section = true,
+}
+
+local function nonempty_string(value)
+  return type(value) == "string" and value:match("%S") ~= nil
+end
+
+local function validate_fields(value, allowed, label)
+  for field in pairs(value) do
+    assert(allowed[field], string.format("unsupported %s field: %s", label, tostring(field)))
+  end
+end
+
+local function validate_string_list(value, label, validate_item)
+  assert(type(value) == "table" and vim.islist(value), label .. " must be a list")
+  local seen = {}
+  for index, item in ipairs(value) do
+    assert(
+      nonempty_string(item) and (not validate_item or validate_item(item)),
+      string.format("%s[%d] is invalid", label, index)
+    )
+    assert(not seen[item], string.format("%s contains duplicate value: %s", label, item))
+    seen[item] = true
+  end
+end
+
+local function validate_string_map(value, label, validate_value)
+  assert(
+    type(value) == "table" and (next(value) == nil or not vim.islist(value)),
+    label .. " must be a map"
+  )
+  for key, item in pairs(value) do
+    assert(nonempty_string(key), label .. " keys must be non-empty strings")
+    assert(validate_value(item), label .. " contains an invalid value for " .. key)
+  end
+end
+
 local function declaration_name(node_type, text)
   if node_type == "impl_item" then
     return text:gsub("%s*{%s*$", ""):match("^%s*impl%s+(.+)$")
@@ -94,57 +169,82 @@ end
 ---@param adapter ArchLensAdapterSpec
 ---@return ArchLensAdapter
 local function normalize(language, adapter)
-  assert(type(language) == "string" and language ~= "", "adapter language must be a string")
+  assert(nonempty_string(language), "adapter language must be a non-empty string")
   assert(type(adapter) == "table", "adapter must be a table")
+  validate_fields(adapter, adapter_fields, "adapter")
 
   local normalized = vim.deepcopy(adapter)
   normalized.language = language
-  normalized.filetypes = normalized.filetypes or { language }
-  normalized.filename_extensions = normalized.filename_extensions or {}
-  assert(
-    type(normalized.filename_extensions) == "table",
-    "adapter filename_extensions must be a table"
-  )
-  for _, extension in ipairs(normalized.filename_extensions) do
-    assert(
-      type(extension) == "string" and extension:match("^%."),
-      "adapter filename_extensions must start with a dot"
-    )
+  if normalized.filetypes == nil then
+    normalized.filetypes = { language }
   end
-
-  if normalized.treesitter then
-    assert(
-      type(normalized.treesitter.symbol_types) == "table",
-      "Tree-sitter adapters require symbol_types"
-    )
-    normalized.treesitter.root_markers = normalized.treesitter.root_markers
-      or vim.deepcopy(default_root_markers)
-    normalized.treesitter.focus_wrappers = normalized.treesitter.focus_wrappers or {}
-    assert(
-      type(normalized.treesitter.focus_wrappers) == "table",
-      "Tree-sitter focus_wrappers must be a table"
-    )
-    for node_type, enabled in pairs(normalized.treesitter.focus_wrappers) do
-      assert(
-        type(node_type) == "string" and node_type ~= "" and enabled == true,
-        "Tree-sitter focus_wrappers must map node types to true"
-      )
+  if normalized.filename_extensions == nil then
+    normalized.filename_extensions = {}
+  end
+  validate_string_list(normalized.filetypes, "adapter filetypes")
+  validate_string_list(
+    normalized.filename_extensions,
+    "adapter filename_extensions",
+    function(value)
+      return value:match("^%..+") ~= nil
     end
-    normalized.treesitter.name_fields = normalized.treesitter.name_fields
-      or vim.deepcopy(default_name_fields)
-    normalized.treesitter.name_node_types = normalized.treesitter.name_node_types
-      or vim.deepcopy(default_name_node_types)
-    normalized.treesitter.synthetic_name = normalized.treesitter.synthetic_name or declaration_name
-    if normalized.treesitter.imports then
+  )
+
+  if normalized.treesitter ~= nil then
+    assert(type(normalized.treesitter) == "table", "adapter treesitter must be a table")
+    validate_fields(normalized.treesitter, treesitter_fields, "Tree-sitter adapter")
+    validate_string_map(
+      normalized.treesitter.symbol_types,
+      "Tree-sitter symbol_types",
+      function(value)
+        return nonempty_string(value)
+      end
+    )
+    if normalized.treesitter.root_markers == nil then
+      normalized.treesitter.root_markers = vim.deepcopy(default_root_markers)
+    end
+    validate_string_list(normalized.treesitter.root_markers, "Tree-sitter root_markers")
+    if normalized.treesitter.focus_wrappers == nil then
+      normalized.treesitter.focus_wrappers = {}
+    end
+    validate_string_map(
+      normalized.treesitter.focus_wrappers,
+      "Tree-sitter focus_wrappers",
+      function(value)
+        return value == true
+      end
+    )
+    if normalized.treesitter.name_fields == nil then
+      normalized.treesitter.name_fields = vim.deepcopy(default_name_fields)
+    end
+    validate_string_list(normalized.treesitter.name_fields, "Tree-sitter name_fields")
+    if normalized.treesitter.name_node_types == nil then
+      normalized.treesitter.name_node_types = vim.deepcopy(default_name_node_types)
+    end
+    validate_string_map(
+      normalized.treesitter.name_node_types,
+      "Tree-sitter name_node_types",
+      function(value)
+        return value == true
+      end
+    )
+    if normalized.treesitter.synthetic_name == nil then
+      normalized.treesitter.synthetic_name = declaration_name
+    end
+    assert(
+      type(normalized.treesitter.synthetic_name) == "function",
+      "Tree-sitter synthetic_name must be a function"
+    )
+    if normalized.treesitter.imports ~= nil then
+      assert(type(normalized.treesitter.imports) == "table", "Tree-sitter imports must be a table")
+      validate_fields(normalized.treesitter.imports, import_fields, "Tree-sitter import adapter")
       assert(
-        type(normalized.treesitter.imports.query) == "string"
-          and normalized.treesitter.imports.query ~= "",
+        nonempty_string(normalized.treesitter.imports.query),
         "Tree-sitter import adapters require a query"
       )
       normalized.treesitter.imports.capture = normalized.treesitter.imports.capture or "import"
       assert(
-        type(normalized.treesitter.imports.capture) == "string"
-          and normalized.treesitter.imports.capture ~= "",
+        nonempty_string(normalized.treesitter.imports.capture),
         "Tree-sitter import adapters require a capture"
       )
       if normalized.treesitter.imports.normalize ~= nil then
@@ -153,17 +253,19 @@ local function normalize(language, adapter)
           "Tree-sitter import adapter normalize must be a function"
         )
       end
-      local extensions = normalized.treesitter.imports.extensions or {}
-      assert(type(extensions) == "table", "Tree-sitter import extensions must be a table")
-      for _, extension in ipairs(extensions) do
-        assert(
-          type(extension) == "string" and extension:match("^%."),
-          "Tree-sitter import extensions must start with a dot"
-        )
+      local extensions = normalized.treesitter.imports.extensions
+      if extensions == nil then
+        extensions = {}
       end
+      validate_string_list(extensions, "Tree-sitter import extensions", function(value)
+        return value:match("^%..+") ~= nil
+      end)
       normalized.treesitter.imports.extensions = extensions
-      local scan_languages = normalized.treesitter.imports.scan_languages or { language }
-      assert(type(scan_languages) == "table", "Tree-sitter import scan languages must be a table")
+      local scan_languages = normalized.treesitter.imports.scan_languages
+      if scan_languages == nil then
+        scan_languages = { language }
+      end
+      validate_string_list(scan_languages, "Tree-sitter import scan languages")
       normalized.treesitter.imports.scan_languages = scan_languages
       for _, field in ipairs({ "site_keys", "target_keys", "target_label" }) do
         if normalized.treesitter.imports[field] ~= nil then
@@ -175,11 +277,35 @@ local function normalize(language, adapter)
       end
     end
   end
+  if normalized.ast_grep ~= nil then
+    assert(type(normalized.ast_grep) == "table", "adapter ast_grep must be a table")
+    validate_fields(normalized.ast_grep, ast_grep_fields, "ast-grep adapter")
+    if normalized.ast_grep.language ~= nil then
+      assert(
+        nonempty_string(normalized.ast_grep.language),
+        "ast-grep adapter language must be a non-empty string"
+      )
+    end
+    if normalized.ast_grep.query ~= nil then
+      assert(
+        type(normalized.ast_grep.query) == "function",
+        "ast-grep adapter query must be a function"
+      )
+      assert(normalized.ast_grep.language ~= nil, "ast-grep adapter query requires a language")
+    end
+    if normalized.ast_grep.unsupported_note ~= nil then
+      assert(
+        nonempty_string(normalized.ast_grep.unsupported_note),
+        "ast-grep adapter unsupported_note must be a non-empty string"
+      )
+    end
+  end
   if normalized.configuration ~= nil then
     assert(type(normalized.configuration) == "function", "adapter configuration must be a function")
   end
   if normalized.presentation ~= nil then
     assert(type(normalized.presentation) == "table", "adapter presentation must be a table")
+    validate_fields(normalized.presentation, presentation_fields, "adapter presentation")
     for _, field in ipairs({ "row", "section" }) do
       if normalized.presentation[field] ~= nil then
         assert(

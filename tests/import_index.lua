@@ -274,6 +274,35 @@ equal(
 )
 
 index.clear_cache()
+local failing_command = vim.fs.joinpath(project, "failing-rg")
+vim.fn.writefile({ "#!/bin/sh", "echo 'enumeration exploded' >&2", "exit 2" }, failing_command)
+assert(vim.uv.fs_chmod(failing_command, 493))
+local enumeration_failure
+local enumeration_outcome
+index.relationships(
+  context,
+  bufnr,
+  vim.tbl_deep_extend("force", {}, options, {
+    command = failing_command,
+  }),
+  function(value, outcome)
+    enumeration_failure = value
+    enumeration_outcome = outcome
+  end
+)
+assert(vim.wait(1000, function()
+  return enumeration_failure ~= nil
+end, 10))
+equal(enumeration_outcome, {
+  state = "failed",
+  message = "Project module scan failed: enumeration exploded",
+}, "a failed project enumeration should publish a failed lifecycle outcome")
+assert(
+  table.concat(enumeration_failure.notes, "\n"):find("enumeration exploded", 1, true),
+  "project enumeration failures should remain visible in result details"
+)
+
+index.clear_cache()
 local slow_command = vim.fs.joinpath(project, "slow-rg")
 vim.fn.writefile({ "#!/bin/sh", "sleep 1" }, slow_command)
 assert(vim.uv.fs_chmod(slow_command, 493))
@@ -367,19 +396,28 @@ end
 hook_mode = "target_keys"
 index.clear_cache()
 local broken_target_keys
-index.relationships(context, bufnr, broken_options, function(value)
+local broken_target_keys_outcome
+index.relationships(context, bufnr, broken_options, function(value, outcome)
   broken_target_keys = value
+  broken_target_keys_outcome = outcome
 end)
 assert(
   broken_target_keys and adapter_issue(broken_target_keys, "module target keys"),
   "target-key callback failures should be reported without starting a project scan"
 )
+equal(
+  broken_target_keys_outcome.state,
+  "failed",
+  "target-key callback failures should publish a failed lifecycle outcome"
+)
 
 hook_mode = "target_label"
 index.clear_cache()
 local broken_target_label
-index.relationships(context, bufnr, broken_options, function(value)
+local broken_target_label_outcome
+index.relationships(context, bufnr, broken_options, function(value, outcome)
   broken_target_label = value
+  broken_target_label_outcome = outcome
 end)
 assert(vim.wait(2500, function()
   return broken_target_label ~= nil
@@ -389,12 +427,19 @@ assert(
   "target-label callback failures should retain relationships with a fallback label"
 )
 assert(#broken_target_label.edges > 0, "a failed target label must not discard module dependents")
+equal(
+  broken_target_label_outcome.state,
+  "failed",
+  "target-label callback failures should publish a failed lifecycle outcome"
+)
 
 hook_mode = "site_keys"
 index.clear_cache()
 local broken_site_keys
-index.relationships(context, bufnr, broken_options, function(value)
+local broken_site_keys_outcome
+index.relationships(context, bufnr, broken_options, function(value, outcome)
   broken_site_keys = value
+  broken_site_keys_outcome = outcome
 end)
 assert(vim.wait(2500, function()
   return broken_site_keys ~= nil
@@ -404,6 +449,11 @@ assert(
   "site-key callback failures should explain incomplete module-dependent analysis"
 )
 equal(broken_site_keys.edges, {}, "failed site keys must not synthesize module relationships")
+equal(
+  broken_site_keys_outcome.state,
+  "failed",
+  "site-key callback failures should publish a failed lifecycle outcome"
+)
 
 vim.api.nvim_buf_delete(bufnr, { force = true })
 vim.fn.delete(project, "rf")

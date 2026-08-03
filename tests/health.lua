@@ -75,6 +75,13 @@ local function run()
       available = true,
       version = "ast-grep 0.40.0",
     },
+    ripgrep = {
+      command = "rg",
+      path = "/tools/rg",
+      supported = true,
+      available = true,
+      version = "ripgrep 15.1.0",
+    },
   })
   diagnostic(section(healthy, "ArchLens runtime"), "ok", "Neovim 0.12.4")
   diagnostic(section(healthy, "ArchLens context"), "ok", "Project root: /workspace")
@@ -85,6 +92,8 @@ local function run()
     "document symbols, implementations, project references"
   )
   diagnostic(section(healthy, "ArchLens ast-grep"), "ok", "ast-grep 0.40.0")
+  diagnostic(section(healthy, "ArchLens ripgrep"), "ok", "Executable: /tools/rg")
+  diagnostic(section(healthy, "ArchLens ripgrep"), "ok", "ripgrep 15.1.0")
 
   local degraded = health._diagnose({
     version = { major = 0, minor = 11, patch = 3 },
@@ -99,6 +108,7 @@ local function run()
     treesitter = { parser = false, adapter = false },
     lsp = { clients = {} },
     ast_grep = { command = "ast-grep", available = false },
+    ripgrep = { command = "rg", supported = true, available = false },
   })
   diagnostic(section(degraded, "ArchLens runtime"), "error", "requires Neovim 0.12")
   diagnostic(section(degraded, "ArchLens context"), "warn", "project scope falls back")
@@ -106,6 +116,7 @@ local function run()
   diagnostic(section(degraded, "ArchLens Tree-sitter"), "warn", "No ArchLens Tree-sitter adapter")
   diagnostic(section(degraded, "ArchLens LSP"), "warn", "No LSP clients")
   diagnostic(section(degraded, "ArchLens ast-grep"), "warn", "structural project matches")
+  diagnostic(section(degraded, "ArchLens ripgrep"), "warn", "reverse module relationships")
 
   local disabled = health._diagnose({
     version = { major = 0, minor = 12, patch = 4 },
@@ -113,12 +124,14 @@ local function run()
     treesitter = { parser = false, adapter = false },
     lsp = { clients = {} },
     ast_grep = { command = "/custom/ast-grep", enabled = false },
+    ripgrep = { command = "/custom/rg", enabled = false },
   })
   diagnostic(
     section(disabled, "ArchLens ast-grep"),
     "info",
     "disabled by the ArchLens configuration"
   )
+  diagnostic(section(disabled, "ArchLens ripgrep"), "info", "Reverse module analysis is disabled")
 
   local unsupported = health._diagnose({
     version = { major = 0, minor = 12, patch = 4 },
@@ -138,8 +151,10 @@ local function run()
       supported = false,
       note = "ast-grep has no OCaml parser; semantic references remain available.",
     },
+    ripgrep = { command = "rg", enabled = true, supported = false },
   })
   diagnostic(section(unsupported, "ArchLens ast-grep"), "info", "no OCaml parser")
+  diagnostic(section(unsupported, "ArchLens ripgrep"), "warn", "reverse module adapter")
 
   local invalid = health._diagnose({
     version = { major = 0, minor = 12, patch = 4 },
@@ -152,11 +167,18 @@ local function run()
       available = true,
       error = "version lookup timed out",
     },
+    ripgrep = {
+      command = "rg",
+      path = "/tools/rg",
+      available = true,
+      error = "version lookup timed out",
+    },
   })
   diagnostic(section(invalid, "ArchLens context"), "error", "No source buffer")
   diagnostic(section(invalid, "ArchLens Tree-sitter"), "error", "adapter exploded")
   diagnostic(section(invalid, "ArchLens LSP"), "error", "client lookup exploded")
   diagnostic(section(invalid, "ArchLens ast-grep"), "warn", "version lookup timed out")
+  diagnostic(section(invalid, "ArchLens ripgrep"), "warn", "version lookup timed out")
 
   local query_mismatch = health._diagnose({
     version = { major = 0, minor = 12, patch = 4 },
@@ -175,6 +197,7 @@ local function run()
     },
     lsp = { clients = {} },
     ast_grep = { command = "ast-grep", supported = false },
+    ripgrep = { command = "rg", supported = false },
   })
   diagnostic(
     section(query_mismatch, "ArchLens Tree-sitter"),

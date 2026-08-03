@@ -272,6 +272,13 @@ local function start_lsp_context(context, source_buffer, config, done, report)
   run = function()
     lsp_cancel = lsp.relationships(context, source_buffer, finish, {
       timeout_ms = config.lsp.relationship_timeout_ms,
+      max_results = config.lsp.max_results,
+      max_occurrences = config.lsp.max_occurrences,
+      filters = vim.tbl_extend(
+        "force",
+        vim.deepcopy(config.filters),
+        { include_external = config.include_external }
+      ),
     })
   end
   run()

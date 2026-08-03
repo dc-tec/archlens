@@ -291,11 +291,17 @@ local function run()
   assert_equal(#import_callbacks, 1, "the module dependency provider should start")
   assert_equal(#importer_callbacks, 1, "the module-dependent index should start independently")
   assert_equal(#structural_callbacks, 1, "the first ast-grep provider should start")
-  assert_equal(
-    relationship_options[1],
-    { timeout_ms = 8000 },
-    "LSP provider options should retain their configured timeout"
-  )
+  assert_equal(relationship_options[1], {
+    filters = {
+      exclude = {},
+      include_external = false,
+      include_generated = false,
+      include_vendored = false,
+    },
+    max_occurrences = 256,
+    max_results = 256,
+    timeout_ms = 8000,
+  }, "LSP provider options should retain their bounds and project filters")
   assert_equal(
     import_options[1].filters,
     { include_external = false, include_generated = false, include_vendored = false, exclude = {} },

@@ -302,6 +302,137 @@ local wrappers_ok = pcall(adapters.register, "invalid_wrappers", {
 })
 equal(wrappers_ok, false, "focus wrappers must be explicit node-type flags")
 
+local invalid_static_specs = {
+  {
+    id = "invalid_unknown_field",
+    spec = { relationship_kinds = {} },
+    error = "unsupported adapter field: relationship_kinds",
+  },
+  {
+    id = "invalid_filetypes",
+    spec = { filetypes = "zig" },
+    error = "adapter filetypes must be a list",
+  },
+  {
+    id = "duplicate_filetypes",
+    spec = { filetypes = { "zig", "zig" } },
+    error = "adapter filetypes contains duplicate value: zig",
+  },
+  {
+    id = "invalid_filename_extension",
+    spec = { filename_extensions = { "zig" } },
+    error = "adapter filename_extensions[1] is invalid",
+  },
+  {
+    id = "invalid_treesitter_shape",
+    spec = { treesitter = true },
+    error = "adapter treesitter must be a table",
+  },
+  {
+    id = "invalid_treesitter_field",
+    spec = { treesitter = { symbol_types = {}, query = "(_) @symbol" } },
+    error = "unsupported Tree-sitter adapter field: query",
+  },
+  {
+    id = "missing_symbol_types",
+    spec = { treesitter = {} },
+    error = "Tree-sitter symbol_types must be a map",
+  },
+  {
+    id = "invalid_symbol_types",
+    spec = { treesitter = { symbol_types = { declaration = "" } } },
+    error = "Tree-sitter symbol_types contains an invalid value for declaration",
+  },
+  {
+    id = "invalid_root_markers",
+    spec = { treesitter = { symbol_types = {}, root_markers = { 42 } } },
+    error = "Tree-sitter root_markers[1] is invalid",
+  },
+  {
+    id = "invalid_name_fields",
+    spec = { treesitter = { symbol_types = {}, name_fields = "name" } },
+    error = "Tree-sitter name_fields must be a list",
+  },
+  {
+    id = "invalid_name_node_types",
+    spec = { treesitter = { symbol_types = {}, name_node_types = { identifier = false } } },
+    error = "Tree-sitter name_node_types contains an invalid value for identifier",
+  },
+  {
+    id = "invalid_synthetic_name",
+    spec = { treesitter = { symbol_types = {}, synthetic_name = "name" } },
+    error = "Tree-sitter synthetic_name must be a function",
+  },
+  {
+    id = "invalid_import_field",
+    spec = { treesitter = { symbol_types = {}, imports = { query = "(_) @import", mode = "all" } } },
+    error = "unsupported Tree-sitter import adapter field: mode",
+  },
+  {
+    id = "invalid_import_capture",
+    spec = { treesitter = { symbol_types = {}, imports = { query = "(_) @import", capture = 42 } } },
+    error = "Tree-sitter import adapters require a capture",
+  },
+  {
+    id = "invalid_import_query",
+    spec = { treesitter = { symbol_types = {}, imports = { query = " " } } },
+    error = "Tree-sitter import adapters require a query",
+  },
+  {
+    id = "invalid_import_extensions",
+    spec = {
+      treesitter = { symbol_types = {}, imports = { query = "(_) @import", extensions = { "go" } } },
+    },
+    error = "Tree-sitter import extensions[1] is invalid",
+  },
+  {
+    id = "invalid_import_hook",
+    spec = {
+      treesitter = { symbol_types = {}, imports = { query = "(_) @import", target_keys = true } },
+    },
+    error = "Tree-sitter import adapter target_keys must be a function",
+  },
+  {
+    id = "invalid_ast_grep_field",
+    spec = { ast_grep = { language = "zig", max_results = 10 } },
+    error = "unsupported ast-grep adapter field: max_results",
+  },
+  {
+    id = "invalid_ast_grep_language",
+    spec = { ast_grep = { language = " " } },
+    error = "ast-grep adapter language must be a non-empty string",
+  },
+  {
+    id = "invalid_ast_grep_query",
+    spec = { ast_grep = { query = function() end } },
+    error = "ast-grep adapter query requires a language",
+  },
+  {
+    id = "invalid_ast_grep_note",
+    spec = { ast_grep = { unsupported_note = "" } },
+    error = "ast-grep adapter unsupported_note must be a non-empty string",
+  },
+  {
+    id = "invalid_presentation_field",
+    spec = { presentation = { group = function() end } },
+    error = "unsupported adapter presentation field: group",
+  },
+  {
+    id = "invalid_configuration",
+    spec = { configuration = {} },
+    error = "adapter configuration must be a function",
+  },
+}
+
+for _, invalid in ipairs(invalid_static_specs) do
+  local ok, err = pcall(adapters.register, invalid.id, invalid.spec)
+  assert(not ok, invalid.id .. " should be rejected")
+  assert(
+    tostring(err):find(invalid.error, 1, true),
+    string.format("%s should report %q, got %s", invalid.id, invalid.error, tostring(err))
+  )
+end
+
 adapters.register("broken_hooks", {
   configuration = function()
     error("configuration exploded")
@@ -441,6 +572,94 @@ equal(ast_only_outcome, {
   state = "unavailable",
   message = "ast-grep is unavailable; structural project matches were skipped.",
 }, "an ast-grep-only adapter should publish an unavailable outcome")
+
+local failing_ast_grep = vim.fs.joinpath(vim.fn.tempname(), "failing-ast-grep")
+vim.fn.mkdir(vim.fs.dirname(failing_ast_grep), "p")
+vim.fn.writefile({ "#!/bin/sh", "echo 'simulated failure' >&2", "exit 2" }, failing_ast_grep)
+assert(vim.uv.fs_chmod(failing_ast_grep, 493))
+local failed_result
+local failed_outcome
+local failed_context = vim.deepcopy(propagated)
+failed_context.root_dir = vim.fs.dirname(failing_ast_grep)
+failed_context.path = vim.fs.joinpath(failed_context.root_dir, "focus.lua")
+failed_context.location = {
+  uri = vim.uri_from_fname(failed_context.path),
+  range = {
+    start = { line = 0, character = 0 },
+    ["end"] = { line = 0, character = 5 },
+  },
+}
+failed_context.position_encoding = "utf-8"
+require("archlens.ast_grep").relationships(failed_context, {
+  command = failing_ast_grep,
+}, function(result, outcome)
+  failed_result = result
+  failed_outcome = outcome
+end)
+assert(vim.wait(1000, function()
+  return failed_result ~= nil
+end, 10))
+equal(failed_outcome, {
+  state = "failed",
+  message = "ast-grep search failed: simulated failure",
+}, "a failed ast-grep process should publish a failed lifecycle outcome")
+assert(
+  table.concat(failed_result.notes, "\n"):find("simulated failure", 1, true),
+  "a failed ast-grep process should remain visible in result details"
+)
+
+local noisy_ast_grep = vim.fs.joinpath(vim.fn.tempname(), "noisy-ast-grep")
+vim.fn.mkdir(vim.fs.dirname(noisy_ast_grep), "p")
+vim.fn.writefile({ "#!/bin/sh", "printf '%064d' 0", "sleep 0.1" }, noisy_ast_grep)
+assert(vim.uv.fs_chmod(noisy_ast_grep, 493))
+local limited_output
+local limited_outcome
+local noisy_context = vim.deepcopy(propagated)
+noisy_context.root_dir = vim.fs.dirname(noisy_ast_grep)
+noisy_context.path = vim.fs.joinpath(noisy_context.root_dir, "focus.lua")
+noisy_context.location = vim.deepcopy(failed_context.location)
+noisy_context.location.uri = vim.uri_from_fname(noisy_context.path)
+noisy_context.position_encoding = "utf-8"
+require("archlens.ast_grep").relationships(noisy_context, {
+  command = noisy_ast_grep,
+  max_output_bytes = 16,
+}, function(result, outcome)
+  limited_output = result
+  limited_outcome = outcome
+end)
+assert(vim.wait(1000, function()
+  return limited_output ~= nil
+end, 10))
+equal(limited_outcome, nil, "the configured ast-grep output limit should be a bounded completion")
+assert(
+  table.concat(limited_output.notes, "\n"):find("ast%-grep output reached the 16%-byte limit"),
+  "ast-grep should report when subprocess output reaches its memory bound"
+)
+
+local noisy_stderr = vim.fs.joinpath(vim.fn.tempname(), "noisy-ast-grep-stderr")
+vim.fn.mkdir(vim.fs.dirname(noisy_stderr), "p")
+vim.fn.writefile({ "#!/bin/sh", "printf '%064d' 0 >&2", "sleep 0.1", "exit 2" }, noisy_stderr)
+assert(vim.uv.fs_chmod(noisy_stderr, 493))
+local limited_error
+local limited_error_outcome
+require("archlens.ast_grep").relationships(noisy_context, {
+  command = noisy_stderr,
+  max_output_bytes = 16,
+}, function(result, outcome)
+  limited_error = result
+  limited_error_outcome = outcome
+end)
+assert(vim.wait(1000, function()
+  return limited_error ~= nil
+end, 10))
+equal(limited_error_outcome, {
+  state = "failed",
+  message = "ast-grep search failed: error output reached the 16-byte limit",
+}, "the ast-grep error-output limit should stop a noisy failed process")
+assert(
+  table.concat(limited_error.notes, "\n"):find("error output reached the 16%-byte limit"),
+  "ast-grep should report when error output reaches its memory bound"
+)
 
 local timeout_root = vim.fn.tempname()
 vim.fn.mkdir(timeout_root, "p")

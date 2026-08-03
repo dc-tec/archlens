@@ -329,7 +329,7 @@ local function run()
       range = { start = byte_position, ["end"] = { line = 0, character = 11 } },
     },
   }
-  local function run_relationships(fake_client, context_overrides)
+  local function run_relationships(fake_client, context_overrides, relationship_options)
     local result
     local metadata
     vim.lsp.get_client_by_id = function(client_id)
@@ -344,7 +344,7 @@ local function run()
     local cancel = lsp.relationships(context, position_buffer, function(value, details)
       result = value
       metadata = details
-    end, { timeout_ms = 1000 })
+    end, vim.tbl_extend("force", { timeout_ms = 1000 }, relationship_options or {}))
     assert(
       vim.wait(1000, function()
         return result ~= nil
@@ -736,6 +736,44 @@ local function run()
     "incoming call occurrences should use internal byte columns"
   )
 
+  local occurrence_client = vim.tbl_extend("force", {}, call_client, {
+    id = 112,
+    request = function(_, method, _, handler)
+      vim.schedule(function()
+        if method == "callHierarchy/incomingCalls" then
+          handler(nil, {
+            {
+              from = incoming_wire,
+              fromRanges = {
+                { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 1 } },
+                { start = { line = 0, character = 1 }, ["end"] = { line = 0, character = 2 } },
+                { start = { line = 0, character = 2 }, ["end"] = { line = 0, character = 3 } },
+              },
+            },
+          })
+        else
+          handler(nil, {})
+        end
+      end)
+      return true, method == "callHierarchy/incomingCalls" and 1 or 2
+    end,
+  })
+  local occurrence_result = run_relationships(occurrence_client, {
+    supports_calls = true,
+    wire_call_item = raw_call_item,
+  }, { max_occurrences = 1 })
+  assert_equal(
+    #edges_for(occurrence_result, "incoming")[1].occurrences[1].ranges,
+    1,
+    "call occurrence ingestion should stop at the configured occurrence limit"
+  )
+  assert(
+    table
+      .concat(occurrence_result.notes, "\n")
+      :find("omitted 2 call occurrences by the 1-occurrence LSP limit", 1, true),
+    "the LSP occurrence limit should report omitted call sites"
+  )
+
   local captured_incoming_item
   local unavailable_client = {
     id = 103,
@@ -829,6 +867,167 @@ local function run()
     singleton_implementations[1].target.location.range.start.character,
     5,
     "singleton Location ranges should use internal byte columns"
+  )
+
+  local limited_client = {
+    id = 111,
+    name = "large-reference-lsp",
+    offset_encoding = "utf-8",
+    requests = {},
+    is_stopped = function()
+      return false
+    end,
+    supports_method = function(_, method)
+      return method == "textDocument/references"
+    end,
+    request = function(_, _, _, handler)
+      local locations = {}
+      for index = 0, 4 do
+        locations[#locations + 1] = {
+          uri = position_uri,
+          range = {
+            start = { line = 0, character = index },
+            ["end"] = { line = 0, character = index + 1 },
+          },
+        }
+      end
+      vim.schedule(function()
+        handler(nil, locations)
+      end)
+      return true, 1
+    end,
+  }
+  local limited_result = run_relationships(limited_client, nil, { max_results = 2 })
+  assert_equal(
+    #edges_for(limited_result, "references"),
+    2,
+    "LSP relationship ingestion should stop at the configured result limit"
+  )
+  assert(
+    table
+      .concat(limited_result.notes, "\n")
+      :find("3 were omitted by the 2-result LSP limit", 1, true),
+    "the LSP result limit should report omitted semantic relationships"
+  )
+
+  local function reference_location(path, character)
+    return {
+      uri = vim.uri_from_fname(path),
+      range = {
+        start = { line = 0, character = character },
+        ["end"] = { line = 0, character = character + 1 },
+      },
+    }
+  end
+
+  local admitted_locations = {
+    {},
+    {
+      uri = vim.uri_from_fname("/tmp/fractional.go"),
+      range = {
+        start = { line = 0.5, character = 0 },
+        ["end"] = { line = 1, character = 0 },
+      },
+    },
+    reference_location("/outside/archlens/external.go", 0),
+    reference_location("/tmp/vendor/example/vendor.go", 0),
+    reference_location("/tmp/generated/example.gen.go", 0),
+    reference_location("/tmp/z-local.go", 1),
+    reference_location("/tmp/a-local.go", 1),
+  }
+  local admission_client = vim.tbl_extend("force", {}, limited_client, {
+    id = 113,
+    name = "unordered-reference-lsp",
+    request = function(_, _, _, handler)
+      vim.schedule(function()
+        handler(nil, admitted_locations)
+      end)
+      return true, 1
+    end,
+  })
+  local admission_result = run_relationships(admission_client, nil, {
+    filters = {
+      exclude = {},
+      include_external = false,
+      include_generated = false,
+      include_vendored = false,
+    },
+    max_results = 2,
+  })
+  local admission_edges = edges_for(admission_result, "references")
+  assert_equal(#admission_edges, 2, "hidden and malformed results should not consume local slots")
+  assert_equal(
+    {
+      vim.uri_to_fname(admission_edges[1].source.location.uri),
+      vim.uri_to_fname(admission_edges[2].source.location.uri),
+    },
+    { "/tmp/a-local.go", "/tmp/z-local.go" },
+    "LSP admission should select project-local results in deterministic path order"
+  )
+  assert(
+    table
+      .concat(admission_result.notes, "\n")
+      :find("5 were omitted before normalization (5 hidden or malformed", 1, true),
+    "admission should report entries rejected before bounded normalization"
+  )
+
+  local locality_client = vim.tbl_extend("force", {}, admission_client, {
+    id = 114,
+    request = function(_, _, _, handler)
+      vim.schedule(function()
+        handler(nil, {
+          reference_location("/outside/archlens/a-external.go", 0),
+          reference_location("/tmp/z-project.go", 0),
+        })
+      end)
+      return true, 1
+    end,
+  })
+  local locality_result = run_relationships(locality_client, nil, {
+    filters = {
+      exclude = {},
+      include_external = true,
+      include_generated = false,
+      include_vendored = false,
+    },
+    max_results = 1,
+  })
+  assert_equal(
+    vim.uri_to_fname(edges_for(locality_result, "references")[1].source.location.uri),
+    "/tmp/z-project.go",
+    "project-local results should outrank visible external results regardless of server order"
+  )
+
+  local scan_locations = {}
+  for index = 1, 9 do
+    scan_locations[index] = reference_location(string.format("/tmp/scan-%02d.go", index), 0)
+  end
+  local scan_client = vim.tbl_extend("force", {}, admission_client, {
+    id = 115,
+    request = function(_, _, _, handler)
+      vim.schedule(function()
+        handler(nil, scan_locations)
+      end)
+      return true, 1
+    end,
+  })
+  local scan_result = run_relationships(scan_client, nil, {
+    filters = {
+      exclude = {},
+      include_external = false,
+      include_generated = false,
+      include_vendored = false,
+    },
+    max_results = 2,
+  })
+  assert_equal(
+    #edges_for(scan_result, "references"),
+    2,
+    "the bounded admission scan should still enforce the normalization limit"
+  )
+  assert(
+    table.concat(scan_result.notes, "\n"):find("1 outside the 8-candidate scan limit", 1, true),
+    "LSP admission should report response rows left outside the bounded scan"
   )
 
   local unsupported_requests = {}

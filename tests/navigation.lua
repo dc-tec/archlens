@@ -62,8 +62,12 @@ local function run()
   local beta_semantic = context("Beta", 3, 1)
   local resolve_calls = {}
   local cancellations = 0
+  local provider_cancellations = 0
   local rendered = {}
   local active_session
+  local sessions_by_tab = {}
+  local provider_hooks
+  local hold_provider = false
 
   package.loaded["archlens.lsp"] = {
     note_attach = function() end,
@@ -92,15 +96,27 @@ local function run()
       return {}
     end,
     run = function(current, _, _, hooks)
-      hooks.on_update(graph.new(current))
+      provider_hooks = hooks
+      local snapshot = graph.new(current)
+      if hold_provider then
+        graph.set_provider_runs(snapshot, {
+          { id = "slow", label = "Slow provider", state = "running", elapsed_ms = 1 },
+        })
+        hooks.register_cancel(function()
+          provider_cancellations = provider_cancellations + 1
+        end)
+      end
+      hooks.on_update(snapshot)
     end,
   }
   package.loaded["archlens.view"] = {
     ensure = function(session)
       active_session = session
+      sessions_by_tab[session.tabpage] = session
     end,
     render = function(session, value)
       active_session = session
+      sessions_by_tab[session.tabpage] = session
       session.model = value
       rendered[#rendered + 1] = vim.deepcopy(value)
     end,
@@ -119,6 +135,7 @@ local function run()
     cursor_follow = { debounce_ms = 5 },
     lsp = { resolve_timeout_ms = 60000 },
   })
+  local primary_tab = vim.api.nvim_get_current_tabpage()
   archlens.show_here()
   equal(#resolve_calls, 1, "ArchLensHere should resolve the initial cursor")
   resolve_calls[1].callback(vim.deepcopy(alpha_semantic))
@@ -128,6 +145,106 @@ local function run()
   vim.api.nvim_exec_autocmds("CursorMoved", { buffer = source_buffer })
   vim.wait(20)
   equal(#resolve_calls, 1, "pinned mode should ignore cursor events")
+
+  hold_provider = true
+  archlens.show_here()
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(alpha_semantic))
+  equal(
+    active_session.model.provider_runs[1].state,
+    "running",
+    "the pinned invalidation fixture should begin with active analysis"
+  )
+  vim.api.nvim_buf_set_lines(source_buffer, 1, 2, false, { "  return 10" })
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = source_buffer })
+  equal(active_session.invalidated, true, "source edits should invalidate pinned analysis")
+  equal(
+    active_session.model.provider_runs[1].state,
+    "cancelled",
+    "invalidated providers should not remain displayed as running"
+  )
+  assert(provider_cancellations > 0, "source edits should cancel active provider work")
+  assert(
+    table.concat(active_session.model.notes, "\n"):find("press r", 1, true),
+    "pinned invalidation should explain how to resolve the source cursor again"
+  )
+  local resolves_before_invalidated_refresh = #resolve_calls
+  hold_provider = false
+  archlens.refresh()
+  equal(
+    #resolve_calls,
+    resolves_before_invalidated_refresh + 1,
+    "refreshing an invalidated pane should resolve the source cursor again"
+  )
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(alpha_semantic))
+  equal(active_session.invalidated, false, "a new resolution should clear source invalidation")
+
+  hold_provider = true
+  archlens.show_here()
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(alpha_semantic))
+  local primary_session = sessions_by_tab[primary_tab]
+
+  vim.cmd("tabnew")
+  local secondary_tab = vim.api.nvim_get_current_tabpage()
+  local secondary_window = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(secondary_window, source_buffer)
+  archlens.show_here()
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(alpha_semantic))
+  local secondary_session = sessions_by_tab[secondary_tab]
+  equal(
+    secondary_session.model.provider_runs[1].state,
+    "running",
+    "the secondary tab should track active analysis for the shared source buffer"
+  )
+
+  local cancellations_before_shared_edit = provider_cancellations
+  vim.api.nvim_set_current_tabpage(primary_tab)
+  vim.api.nvim_set_current_win(source_window)
+  vim.api.nvim_buf_set_lines(source_buffer, 1, 2, false, { "  return 11" })
+  vim.api.nvim_exec_autocmds("TextChangedP", { buffer = source_buffer })
+  for label, session in pairs({ primary = primary_session, secondary = secondary_session }) do
+    equal(session.invalidated, true, label .. " session should be invalidated by the shared edit")
+    equal(
+      session.model.provider_runs[1].state,
+      "cancelled",
+      label .. " session should not leave providers displayed as running"
+    )
+  end
+  equal(
+    provider_cancellations,
+    cancellations_before_shared_edit + 2,
+    "TextChangedP should cancel every active analysis tracking the changed buffer"
+  )
+
+  vim.api.nvim_set_current_tabpage(secondary_tab)
+  archlens.close()
+  vim.cmd("tabclose")
+  vim.api.nvim_set_current_tabpage(primary_tab)
+  vim.api.nvim_set_current_win(source_window)
+  hold_provider = false
+  archlens.refresh()
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(alpha_semantic))
+  equal(primary_session.invalidated, false, "refresh should clear shared-buffer invalidation")
+
+  hold_provider = true
+  archlens.show_here()
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(alpha_semantic))
+  local replacement_buffer = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(replacement_buffer, 0, -1, false, { "local replacement = true" })
+  vim.api.nvim_win_set_buf(source_window, replacement_buffer)
+  local completed_after_replacement = graph.new(alpha_semantic)
+  graph.set_provider_runs(completed_after_replacement, {
+    { id = "slow", label = "Slow provider", state = "completed", duration_ms = 2 },
+  })
+  provider_hooks.on_update(completed_after_replacement)
+  equal(
+    active_session.model.provider_runs[1].state,
+    "completed",
+    "pinned analysis should finish after the source window displays another buffer"
+  )
+  vim.api.nvim_win_set_buf(source_window, source_buffer)
+  hold_provider = false
+  archlens.show_here()
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(alpha_semantic))
 
   for index = 1, 35 do
     local next_context = context("Focus" .. index, index + 10, 1)
@@ -236,6 +353,34 @@ local function run()
   vim.wait(20)
   equal(#resolve_calls, before_close, "closing should cancel pending cursor work")
   equal(active_session.cursor_follow, false, "closing should disable cursor following")
+
+  archlens.setup({ lsp = { resolve_timeout_ms = 5 } })
+  vim.api.nvim_set_current_win(replacement_window)
+  archlens.show_here()
+  local cancellations_after_start = cancellations
+  vim.wait(20)
+  equal(
+    cancellations,
+    cancellations_after_start + 1,
+    "a symbol-resolution timeout should cancel its LSP request"
+  )
+  archlens.close()
+
+  local closed_source = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(closed_source, 0, -1, false, { "local closed_source = true" })
+  vim.api.nvim_win_set_buf(replacement_window, closed_source)
+  vim.api.nvim_set_current_win(replacement_window)
+  hold_provider = true
+  archlens.show_here()
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(alpha_semantic))
+  vim.api.nvim_buf_delete(closed_source, { force = true })
+  equal(active_session.invalidated, true, "closing the source buffer should invalidate analysis")
+  equal(
+    active_session.model.provider_runs[1].state,
+    "cancelled",
+    "closing the source buffer should not leave providers displayed as running"
+  )
+  archlens.close()
 end
 
 local ok, err = xpcall(run, debug.traceback)

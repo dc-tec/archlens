@@ -37,10 +37,11 @@ local sites = {
     position = { line = 4, character = 9 },
   },
 }
+local site_error
 
 package.loaded["archlens.treesitter"] = {
   import_sites = function()
-    return vim.deepcopy(sites)
+    return vim.deepcopy(sites), site_error
   end,
 }
 
@@ -242,6 +243,23 @@ equal(no_lsp_dynamic_outcome, {
   message = "1 module dependency target requires a definition-capable language server.",
 })
 sites = original_sites
+
+site_error = "query exploded"
+local extraction_failure
+local extraction_outcome
+imports.relationships(context, 0, {}, function(value, outcome)
+  extraction_failure = value
+  extraction_outcome = outcome
+end)
+equal(extraction_outcome, {
+  state = "failed",
+  message = "Module dependency extraction failed: query exploded",
+}, "a complete import extraction failure should publish a failed lifecycle outcome")
+assert(
+  table.concat(extraction_failure.errors, "\n"):find("query exploded", 1, true),
+  "import extraction failures should remain visible in result details"
+)
+site_error = nil
 
 imports.clear_cache()
 local requests_before_refresh = #requested

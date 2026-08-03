@@ -152,6 +152,50 @@ local function first_line(text)
   return text ~= "" and text:match("[^\r\n]+") or nil
 end
 
+local function inspect_executable(command)
+  if vim.fn.executable(command) ~= 1 then
+    return { command = command, available = false }
+  end
+
+  local executable = vim.fn.exepath(command)
+  if executable == "" then
+    executable = command
+  end
+  local start_ok, process = pcall(vim.system, { executable, "--version" }, { text = true })
+  if not start_ok then
+    return {
+      command = command,
+      path = executable,
+      available = true,
+      error = tostring(process),
+    }
+  end
+
+  local wait_ok, result = pcall(process.wait, process, 3000)
+  if not wait_ok then
+    return {
+      command = command,
+      path = executable,
+      available = true,
+      error = tostring(result),
+    }
+  end
+  if result.code ~= 0 then
+    return {
+      command = command,
+      path = executable,
+      available = true,
+      error = first_line(result.stderr) or string.format("exited with code %d", result.code),
+    }
+  end
+  return {
+    command = command,
+    path = executable,
+    available = true,
+    version = first_line(result.stdout) or first_line(result.stderr),
+  }
+end
+
 local function inspect_ast_grep(command, enabled, filetype, path)
   command = command or "ast-grep"
   if enabled == false then
@@ -167,51 +211,20 @@ local function inspect_ast_grep(command, enabled, filetype, path)
       note = provider and provider.unsupported_note or nil,
     }
   end
-  if vim.fn.executable(command) ~= 1 then
-    return { command = command, enabled = true, supported = true, available = false }
-  end
+  return vim.tbl_extend("force", inspect_executable(command), { enabled = true, supported = true })
+end
 
-  local path = vim.fn.exepath(command)
-  if path == "" then
-    path = command
+local function inspect_ripgrep(command, enabled, filetype, path)
+  command = command or "rg"
+  if enabled == false then
+    return { command = command, enabled = false }
   end
-  local start_ok, process = pcall(vim.system, { path, "--version" }, { text = true })
-  if not start_ok then
-    return {
-      command = command,
-      enabled = true,
-      path = path,
-      available = true,
-      error = tostring(process),
-    }
+  local adapter = filetype and adapters.for_filetype(filetype, path) or nil
+  local imports = adapter and adapter.treesitter and adapter.treesitter.imports or nil
+  if not imports then
+    return { command = command, enabled = true, supported = false }
   end
-
-  local wait_ok, result = pcall(process.wait, process, 3000)
-  if not wait_ok then
-    return {
-      command = command,
-      enabled = true,
-      path = path,
-      available = true,
-      error = tostring(result),
-    }
-  end
-  if result.code ~= 0 then
-    return {
-      command = command,
-      enabled = true,
-      path = path,
-      available = true,
-      error = first_line(result.stderr) or string.format("exited with code %d", result.code),
-    }
-  end
-  return {
-    command = command,
-    enabled = true,
-    path = path,
-    available = true,
-    version = first_line(result.stdout) or first_line(result.stderr),
-  }
+  return vim.tbl_extend("force", inspect_executable(command), { enabled = true, supported = true })
 end
 
 local function inspect()
@@ -220,12 +233,20 @@ local function inspect()
   local archlens_ok, archlens = pcall(require, "archlens")
   local configured = archlens_ok and archlens.get_config and archlens.get_config() or {}
   local ast_grep = configured.ast_grep or {}
+  local imports = configured.imports or {}
+  local inbound = imports.inbound or {}
   return {
     version = vim.version(),
     buffer = buffer,
     treesitter = inspect_treesitter(bufnr, buffer),
     lsp = inspect_lsp(bufnr, buffer),
     ast_grep = inspect_ast_grep(ast_grep.command, ast_grep.enabled, buffer.filetype, buffer.name),
+    ripgrep = inspect_ripgrep(
+      inbound.command,
+      imports.enabled ~= false and inbound.enabled ~= false,
+      buffer.filetype,
+      buffer.name
+    ),
   }
 end
 
@@ -399,6 +420,36 @@ function M._diagnose(state)
     end
   end
 
+  local rg = { title = "ArchLens ripgrep", items = {} }
+  sections[#sections + 1] = rg
+  local rg_state = state.ripgrep or { command = "rg", available = false }
+  if rg_state.enabled == false then
+    rg.items[#rg.items + 1] =
+      item("info", "Reverse module analysis is disabled by the ArchLens configuration.")
+  elseif rg_state.supported == false then
+    rg.items[#rg.items + 1] =
+      item("warn", "No ArchLens reverse module adapter is available for the source buffer.")
+  elseif not rg_state.available then
+    rg.items[#rg.items + 1] = item(
+      "warn",
+      string.format(
+        "%s is unavailable; reverse module relationships will be skipped.",
+        rg_state.command
+      )
+    )
+  else
+    rg.items[#rg.items + 1] = item("ok", "Executable: " .. (rg_state.path or rg_state.command))
+    if rg_state.version then
+      rg.items[#rg.items + 1] = item("ok", "Version: " .. rg_state.version)
+    else
+      rg.items[#rg.items + 1] = item(
+        "warn",
+        "The ripgrep version could not be determined"
+          .. (rg_state.error and ": " .. rg_state.error or ".")
+      )
+    end
+  end
+
   return sections
 end
 
@@ -418,5 +469,6 @@ end
 M._context_buffer = context_buffer
 M._inspect_buffer = inspect_buffer
 M._inspect_treesitter = inspect_treesitter
+M._inspect_ripgrep = inspect_ripgrep
 
 return M

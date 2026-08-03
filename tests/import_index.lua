@@ -126,6 +126,7 @@ equal(
 equal(result.edges[1].source.context.scope, "file")
 equal(result.edges[1].source.context.module_context, true)
 equal(result.edges[1].source.context.preserve_file_identity, true)
+equal(result.edges[1].presentation.section_anchor, { prefix = "for", label = "pkg" })
 equal(parsed[vendored], nil, "vendored paths should be excluded before parsing")
 equal(parsed[generated], nil, "generated paths should be excluded before parsing")
 
@@ -151,12 +152,16 @@ local snapshot = graph.new(context)
 graph.merge(snapshot, result)
 local mapped = require("archlens.model").build(context, snapshot, {})
 equal(mapped.sections[1].id, "module_importers")
+equal(mapped.sections[1].label, "Module dependents")
+equal(mapped.sections[1].anchor, { prefix = "for", label = "pkg" })
 equal(#mapped.sections[1].rows, 2)
 equal(
   mapped.sections[1].rows[1].location.uri,
   vim.uri_from_fname(consumer),
-  "the imported-by row should navigate to the exact declaration"
+  "the module-dependent row should navigate to the exact declaration"
 )
+local rendered = require("archlens.render").build(mapped, { width = 80 })
+assert(vim.tbl_contains(rendered.lines, "  for pkg"), "the module anchor should render")
 
 local first_parse_count = 0
 for _, count in pairs(parsed) do
@@ -180,7 +185,7 @@ index.relationships(context, bufnr, limited_options, function(value)
 end)
 equal(#limited.edges, 1, "the importer budget should count unique files")
 assert(
-  table.concat(limited.notes, "\n"):find("1 importing file omitted", 1, true),
+  table.concat(limited.notes, "\n"):find("1 module dependent omitted", 1, true),
   "the importer budget should report partial results"
 )
 

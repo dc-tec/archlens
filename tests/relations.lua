@@ -72,7 +72,7 @@ equal(relations.ordered(), {
   },
   {
     id = "module_imports",
-    label = "File imports",
+    label = "Module dependencies",
     marker = "⇢",
     order = 45,
     source = "semantic",
@@ -84,7 +84,7 @@ equal(relations.ordered(), {
   },
   {
     id = "module_importers",
-    label = "Imported by",
+    label = "Module dependents",
     marker = "⇠",
     order = 46,
     source = "semantic",

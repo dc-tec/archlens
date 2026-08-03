@@ -20,7 +20,7 @@ local M = {}
 ---@field evidence { provider: string, method: string, class: string }
 ---@field occurrences table[]
 ---@field position_encoding "utf-8"
----@field presentation? { container?: { id: string, name: string, kind_name: string, location: table } }
+---@field presentation? { container?: { id: string, name: string, kind_name: string, location: table }, section_anchor?: { prefix: string, label: string } }
 
 ---@class ArchLensGraphDelta
 ---@field version 1
@@ -184,20 +184,29 @@ local function validate_presentation(presentation)
   end
   assert(type(presentation) == "table", "graph edge presentation must be a table")
   local container = presentation.container
-  if container == nil then
-    return
-  end
-  assert(type(container) == "table", "graph edge container presentation must be a table")
-  for _, field in ipairs({ "id", "name", "kind_name" }) do
+  if container ~= nil then
+    assert(type(container) == "table", "graph edge container presentation must be a table")
+    for _, field in ipairs({ "id", "name", "kind_name" }) do
+      assert(
+        type(container[field]) == "string" and container[field] ~= "",
+        "graph edge container presentation requires " .. field
+      )
+    end
     assert(
-      type(container[field]) == "string" and container[field] ~= "",
-      "graph edge container presentation requires " .. field
+      container.location and container.location.uri and container.location.range,
+      "graph edge container presentation requires a location"
     )
   end
-  assert(
-    container.location and container.location.uri and container.location.range,
-    "graph edge container presentation requires a location"
-  )
+  local section_anchor = presentation.section_anchor
+  if section_anchor ~= nil then
+    assert(type(section_anchor) == "table", "graph edge section anchor must be a table")
+    for _, field in ipairs({ "prefix", "label" }) do
+      assert(
+        type(section_anchor[field]) == "string" and section_anchor[field] ~= "",
+        "graph edge section anchor requires " .. field
+      )
+    end
+  end
 end
 
 function M.edge(kind, source, target, evidence, fields)

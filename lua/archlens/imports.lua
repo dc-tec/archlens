@@ -126,6 +126,12 @@ local function import_edge(context, site, location, import_filetype)
         ranges = { vim.deepcopy(site.location.range) },
       },
     },
+    presentation = {
+      section_anchor = {
+        prefix = "from",
+        label = vim.fs.basename(source_path),
+      },
+    },
   })
 end
 
@@ -134,7 +140,7 @@ function M.relationships(context, bufnr, options, callback)
   local result = graph.delta()
   local sites, extraction_error = treesitter.import_sites(bufnr)
   if extraction_error then
-    graph.add_error(result, "Import extraction failed: " .. extraction_error)
+    graph.add_error(result, "Module dependency extraction failed: " .. extraction_error)
     callback(result)
     return function() end
   end
@@ -220,7 +226,7 @@ function M.relationships(context, bufnr, options, callback)
       graph.add_note(
         result,
         string.format(
-          "%d import target%s could not be resolved.",
+          "%d module dependency target%s could not be resolved.",
           unresolved,
           unresolved == 1 and "" or "s"
         )
@@ -230,7 +236,7 @@ function M.relationships(context, bufnr, options, callback)
       graph.add_note(
         result,
         string.format(
-          "%d import target%s require%s a definition-capable language server.",
+          "%d module dependency target%s require%s a definition-capable language server.",
           requires_lsp,
           requires_lsp == 1 and "" or "s",
           requires_lsp == 1 and "s" or ""
@@ -241,9 +247,9 @@ function M.relationships(context, bufnr, options, callback)
       graph.add_note(
         result,
         string.format(
-          "%d visible file import%s omitted by the import limit.",
+          "%d visible module dependenc%s omitted by the dependency limit.",
           omitted_imports,
-          omitted_imports == 1 and "" or "s"
+          omitted_imports == 1 and "y" or "ies"
         )
       )
     end
@@ -251,7 +257,7 @@ function M.relationships(context, bufnr, options, callback)
       graph.add_note(
         result,
         string.format(
-          "%d import declaration%s omitted by the scan limit.",
+          "%d module dependency declaration%s omitted by the scan limit.",
           omitted_sites,
           omitted_sites == 1 and "" or "s"
         )
@@ -350,7 +356,7 @@ function M.relationships(context, bufnr, options, callback)
       add_notes()
       graph.add_note(
         result,
-        string.format("Import target resolution exceeded %d ms and was stopped.", timeout_ms)
+        string.format("Module dependency resolution exceeded %d ms and was stopped.", timeout_ms)
       )
       callback(result)
     end, timeout_ms)

@@ -130,9 +130,15 @@ equal(result.edges[1].evidence, {
   method = "textDocument/definition",
   class = "semantic",
 })
+equal(result.edges[1].presentation.section_anchor, {
+  prefix = "from",
+  label = "source.go",
+})
 equal(result.edges[1].occurrences[1].ranges[1], sites[1].location.range)
 assert(
-  table.concat(result.notes, "\n"):find("1 import target could not be resolved.", 1, true),
+  table
+    .concat(result.notes, "\n")
+    :find("1 module dependency target could not be resolved.", 1, true),
   "unresolved imports should be aggregated"
 )
 
@@ -143,8 +149,20 @@ graph.merge(snapshot, result)
 local mapped = model.build(context, snapshot, {})
 equal(#mapped.sections, 1)
 equal(mapped.sections[1].id, "module_imports")
+equal(mapped.sections[1].label, "Module dependencies")
+equal(mapped.sections[1].anchor, { prefix = "from", label = "source.go" })
 equal(#mapped.sections[1].rows, 1, "duplicate imports should merge by target module")
 equal(#mapped.sections[1].rows[1].occurrences, 2, "merged imports should retain source sites")
+local rendered = require("archlens.render").build(mapped, { width = 80 })
+assert(vim.tbl_contains(rendered.lines, "  from source.go"), "the file anchor should render")
+local collapsed = require("archlens.render").build(mapped, {
+  width = 80,
+  collapsed = { module_imports = true },
+})
+assert(
+  not vim.tbl_contains(collapsed.lines, "  from source.go"),
+  "collapsed sections should hide their anchor"
+)
 assert(
   table.concat(mapped.notes, "\n"):find("1 vendored relationship hidden.", 1, true),
   "module targets should use shared scope filtering"
@@ -219,7 +237,7 @@ equal(#no_lsp_dynamic.edges, 0)
 assert(
   table
     .concat(no_lsp_dynamic.notes, "\n")
-    :find("1 import target requires a definition-capable language server.", 1, true)
+    :find("1 module dependency target requires a definition-capable language server.", 1, true)
 )
 sites = original_sites
 
@@ -290,7 +308,7 @@ end)
 assert(
   table
     .concat(scan_limited.notes, "\n")
-    :find("23 import declarations omitted by the scan limit.", 1, true),
+    :find("23 module dependency declarations omitted by the scan limit.", 1, true),
   "the hard import scan limit should be reported separately"
 )
 sites = original_sites

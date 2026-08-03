@@ -119,6 +119,9 @@ function M.build(model, opts)
       { action = "toggle", section_id = section.id },
       "Special"
     )
+    if not is_collapsed and section.anchor then
+      add(string.format("  %s %s", section.anchor.prefix, section.anchor.label), nil, "Comment")
+    end
     local function add_row(row, indent)
       add(
         string.format("%s%s %s", indent, section.marker, row.name),

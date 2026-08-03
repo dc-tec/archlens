@@ -159,17 +159,17 @@ local imported_by = graph.edge("module_importers", importing_file, focused_file,
 equal(
   graph.related_node(imported_by),
   importing_file,
-  "imported-by should navigate to the importer"
+  "module dependents should navigate to the dependent source"
 )
 equal(
   graph.focus_node(imported_by),
   focused_file,
-  "imported-by should remain anchored to the target"
+  "module dependents should remain anchored to the dependency target"
 )
 equal(
   pcall(graph.add_edge, snapshot, imported_by),
   true,
-  "imported-by edges should be accepted for the focused file"
+  "module-dependent edges should be accepted for the focused file"
 )
 
 for _, invalid in ipairs({
@@ -219,6 +219,15 @@ for _, invalid in ipairs({
       class = "semantic",
     })
     malformed.presentation = { container = { id = "missing-fields" } }
+    graph.add_edge(graph.delta(), malformed)
+  end,
+  function()
+    local malformed = graph.edge("implementations", snapshot.focus, implementation, {
+      provider = "test",
+      method = "test",
+      class = "semantic",
+    })
+    malformed.presentation = { section_anchor = { prefix = "from" } }
     graph.add_edge(graph.delta(), malformed)
   end,
   function()

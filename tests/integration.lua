@@ -371,19 +371,26 @@ for _, case in ipairs({
 end
 
 for _, case in ipairs({
-  { file = "module.nix", filetype = "nix", importer = "imports.nix" },
-  { file = "imports/worker.rs", filetype = "rust", importer = "imports.rs" },
-  { file = "helper.ml", filetype = "ocaml", importer = "imports.ml" },
+  { file = "module.nix", filetype = "nix", importer = "imports.nix", anchor = "module.nix" },
+  {
+    file = "imports/worker.rs",
+    filetype = "rust",
+    importer = "imports.rs",
+    anchor = "imports/worker.rs",
+  },
+  { file = "helper.ml", filetype = "ocaml", importer = "imports.ml", anchor = "helper.ml" },
   {
     file = "internal/service/service.go",
     filetype = "go",
     importer = "imports.go",
+    anchor = "internal/service",
   },
   {
     file = "lib/domain/dune",
     filetype = "dune",
     scan_filetype = "ocaml",
     importer = "wrapped_import.ml",
+    anchor = "lib/domain/dune",
   },
 }) do
   local path = fixture_root .. "/" .. case.file
@@ -421,13 +428,23 @@ for _, case in ipairs({
     vim.wait(6000, function()
       return relationships ~= nil
     end, 20),
-    case.file .. " imported-by indexing timed out"
+    case.file .. " reverse module indexing timed out"
   )
   local importer_found = false
   for _, edge in ipairs(relationships.edges) do
     if vim.fs.basename(vim.uri_to_fname(edge.source.location.uri)) == case.importer then
       importer_found = true
       assert_equal(edge.kind, "module_importers", case.file .. " returned the wrong relation")
+      assert_equal(
+        edge.presentation.section_anchor.prefix,
+        "for",
+        case.file .. " returned the wrong module anchor prefix"
+      )
+      assert_equal(
+        edge.presentation.section_anchor.label,
+        case.anchor,
+        case.file .. " returned the wrong module anchor label"
+      )
       break
     end
   end

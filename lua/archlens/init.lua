@@ -230,7 +230,7 @@ local function load_context(session, context, generation)
   if config.imports.enabled and local_imports then
     tasks[#tasks + 1] = {
       id = "imports",
-      label = "Imports",
+      label = "Module dependencies",
       start = function(done)
         local options = vim.deepcopy(config.imports)
         options.filters = vim.deepcopy(config.filters)
@@ -246,7 +246,7 @@ local function load_context(session, context, generation)
   then
     tasks[#tasks + 1] = {
       id = "importers",
-      label = "Project imports",
+      label = "Module dependents",
       start = function(done)
         local options = vim.deepcopy(config.imports.inbound)
         options.filetype = context.import_filetype

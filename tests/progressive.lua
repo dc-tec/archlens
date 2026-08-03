@@ -258,19 +258,22 @@ local function run()
 
   resolve_callbacks[1](vim.deepcopy(base_context))
   assert_equal(#relationship_callbacks, 1, "the first LSP provider should start")
-  assert_equal(#import_callbacks, 1, "the file import provider should start")
-  assert_equal(#importer_callbacks, 1, "the project import index should start independently")
+  assert_equal(#import_callbacks, 1, "the module dependency provider should start")
+  assert_equal(#importer_callbacks, 1, "the module-dependent index should start independently")
   assert_equal(#structural_callbacks, 1, "the first ast-grep provider should start")
   local local_model = rendered[#rendered]
   assert(section(local_model, "children"), "Tree-sitter structure should render immediately")
   assert_equal(
     local_model.pending_providers,
-    { "gopls", "Imports", "Project imports", "ast-grep" },
+    { "gopls", "Module dependencies", "Module dependents", "ast-grep" },
     "the initial local view should name all pending providers"
   )
   local local_lines = require("archlens.render").build(local_model, { width = 80 }).lines
   assert(
-    vim.tbl_contains(local_lines, "Pending: gopls · Imports · Project imports · ast-grep"),
+    vim.tbl_contains(
+      local_lines,
+      "Pending: gopls · Module dependencies · Module dependents · ast-grep"
+    ),
     "the rendered pane should expose pending providers"
   )
 
@@ -281,7 +284,7 @@ local function run()
   assert(section(structural_model, "structural"), "ast-grep results should render on arrival")
   assert_equal(
     structural_model.pending_providers,
-    { "gopls", "Imports", "Project imports" },
+    { "gopls", "Module dependencies", "Module dependents" },
     "out-of-order ast-grep completion should leave semantic providers pending"
   )
 
@@ -303,13 +306,13 @@ local function run()
   assert(section(complete_model, "structural"), "earlier ast-grep results should remain merged")
   assert_equal(
     complete_model.pending_providers,
-    { "Imports", "Project imports" },
+    { "Module dependencies", "Module dependents" },
     "LSP completion should not hide the pending import provider"
   )
   import_callbacks[1](graph.delta())
   assert_equal(
     rendered[#rendered].pending_providers,
-    { "Project imports" },
+    { "Module dependents" },
     "outbound imports should render without waiting for the cold project index"
   )
   importer_callbacks[1](graph.delta())

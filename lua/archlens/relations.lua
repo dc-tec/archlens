@@ -188,7 +188,7 @@ for _, kind in ipairs({
   },
   {
     id = "module_imports",
-    label = "File imports",
+    label = "Module dependencies",
     marker = "⇢",
     order = 45,
     source = "semantic",
@@ -200,7 +200,7 @@ for _, kind in ipairs({
   },
   {
     id = "module_importers",
-    label = "Imported by",
+    label = "Module dependents",
     marker = "⇠",
     order = 46,
     source = "semantic",

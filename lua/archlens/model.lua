@@ -252,9 +252,28 @@ local function merge_row(target, source)
       target.occurrences[#target.occurrences + 1] = occurrence
     end
   end
-  if not target.presentation and source.presentation then
-    target.presentation = vim.deepcopy(source.presentation)
+  if source.presentation then
+    target.presentation = target.presentation or {}
+    for key, value in pairs(source.presentation) do
+      if target.presentation[key] == nil then
+        target.presentation[key] = vim.deepcopy(value)
+      end
+    end
   end
+end
+
+local function section_anchor(rows)
+  local anchor
+  for _, row in ipairs(rows) do
+    local candidate = row.presentation and row.presentation.section_anchor
+    if candidate then
+      if anchor and not vim.deep_equal(anchor, candidate) then
+        return nil
+      end
+      anchor = vim.deepcopy(candidate)
+    end
+  end
+  return anchor
 end
 
 local function container_groups(relation, rows)
@@ -500,6 +519,7 @@ function M.build(context, snapshot, opts)
         marker = relation.marker,
         rows = rows,
         groups = container_groups(relation, rows),
+        anchor = section_anchor(rows),
       }
     end
   end

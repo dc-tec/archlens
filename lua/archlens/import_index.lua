@@ -72,6 +72,19 @@ local function target_keys(imports, path, root)
   return { file_key(path) }
 end
 
+local function target_label(imports, context, path, root)
+  if imports.target_label then
+    local ok, label = pcall(imports.target_label, path, root, context)
+    if ok and type(label) == "string" and label ~= "" then
+      return label
+    end
+  end
+  if context.module_context and type(context.name) == "string" and context.name ~= "" then
+    return context.name
+  end
+  return (root and vim.fs.relpath(root, path)) or vim.fs.basename(path)
+end
+
 local function site_keys(imports, site, path, root)
   if imports.site_keys then
     local ok, keys = pcall(imports.site_keys, site, path, root)
@@ -267,7 +280,7 @@ local function enumerate(root, specs, _, filters, options, callback)
   local command = options.command or "rg"
   if vim.fn.executable(command) ~= 1 then
     vim.schedule(function()
-      callback({}, command .. " is unavailable; install ripgrep or disable imported-by analysis")
+      callback({}, command .. " is unavailable; install ripgrep or disable reverse module analysis")
     end)
     return function() end
   end
@@ -396,7 +409,7 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
     end
     cancel_enumeration()
     index.notes[#index.notes + 1] = string.format(
-      "Project import scan stopped after %d ms; imported-by results may be incomplete.",
+      "Project module scan stopped after %d ms; module-dependent results may be incomplete.",
       options.timeout_ms
     )
     finish()
@@ -414,7 +427,7 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         return
       end
       if err then
-        index.notes[#index.notes + 1] = "Project import scan failed: " .. err
+        index.notes[#index.notes + 1] = "Project module scan failed: " .. err
         finish()
         return
       end
@@ -422,7 +435,7 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         visible_files(root, paths, by_extension, filters, options)
       if enumeration_limited then
         index.notes[#index.notes + 1] = string.format(
-          "Project import discovery reached the %d-candidate limit; imported-by results may be incomplete.",
+          "Project module discovery reached the %d-candidate limit; module-dependent results may be incomplete.",
           options.max_candidate_files
         )
       end
@@ -435,7 +448,7 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
       end
       if omitted > 0 then
         index.notes[#index.notes + 1] = string.format(
-          "%d module source file%s omitted by the project import scan limit.",
+          "%d module source file%s omitted by the project module scan limit.",
           omitted,
           omitted == 1 and "" or "s"
         )
@@ -487,7 +500,7 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
   return index
 end
 
-local function importer_edge(context, target_path, importer)
+local function importer_edge(context, target_path, importer, anchor_label)
   table.sort(importer.sites, function(left, right)
     return graph.location_key(left.location) < graph.location_key(right.location)
   end)
@@ -532,10 +545,16 @@ local function importer_edge(context, target_path, importer)
     class = "semantic",
   }, {
     occurrences = { { uri = first.location.uri, ranges = ranges } },
+    presentation = {
+      section_anchor = {
+        prefix = "for",
+        label = anchor_label,
+      },
+    },
   })
 end
 
-local function materialize(index, context, target_path, keys, options)
+local function materialize(index, context, target_path, keys, anchor_label, options)
   local result = graph.delta()
   for _, note in ipairs(index.notes) do
     graph.add_note(result, note)
@@ -562,13 +581,13 @@ local function materialize(index, context, target_path, keys, options)
     table.remove(paths)
   end
   for _, path in ipairs(paths) do
-    graph.add_edge(result, importer_edge(context, target_path, importers[path]))
+    graph.add_edge(result, importer_edge(context, target_path, importers[path], anchor_label))
   end
   if omitted > 0 then
     graph.add_note(
       result,
       string.format(
-        "%d importing file%s omitted by the imported-by limit.",
+        "%d module dependent%s omitted by the dependent limit.",
         omitted,
         omitted == 1 and "" or "s"
       )
@@ -622,23 +641,24 @@ function M.relationships(context, bufnr, options, callback)
   if #keys == 0 then
     local result = graph.delta()
     if key_error then
-      graph.add_note(result, "Imported-by matching unavailable: " .. key_error .. ".")
+      graph.add_note(result, "Reverse module matching unavailable: " .. key_error .. ".")
     end
     callback(result)
     return function() end
   end
+  local anchor_label = target_label(target_imports, context, target_path, root)
 
   local cache_key = key_for(root, specs, filters, options)
   local index = indexes[cache_key]
     or build_index(cache_key, root, specs, by_extension, filters, options)
   if index.ready then
-    callback(materialize(index, context, target_path, keys, options))
+    callback(materialize(index, context, target_path, keys, anchor_label, options))
     return function() end
   end
 
   local subscriber = {
     callback = function(value)
-      callback(materialize(value, context, target_path, keys, options))
+      callback(materialize(value, context, target_path, keys, anchor_label, options))
     end,
     cancelled = false,
   }

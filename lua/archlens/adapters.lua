@@ -96,6 +96,16 @@ local function go_target_keys(path, root)
   return { "go-package:" .. module }
 end
 
+local function go_target_label(path, root)
+  local directory = vim.fs.normalize(vim.fs.dirname(path))
+  root = root and vim.fs.normalize(root) or nil
+  local relative = root and vim.fs.relpath(root, directory) or nil
+  if relative and relative ~= "." then
+    return relative:gsub("\\", "/")
+  end
+  return vim.fs.basename(root or directory)
+end
+
 local function go_site_keys(site)
   return { "go-package:" .. site.name }
 end
@@ -483,7 +493,7 @@ local function normalize(language, adapter)
       local scan_languages = normalized.treesitter.imports.scan_languages or { language }
       assert(type(scan_languages) == "table", "Tree-sitter import scan languages must be a table")
       normalized.treesitter.imports.scan_languages = scan_languages
-      for _, field in ipairs({ "site_keys", "target_keys" }) do
+      for _, field in ipairs({ "site_keys", "target_keys", "target_label" }) do
         if normalized.treesitter.imports[field] ~= nil then
           assert(
             type(normalized.treesitter.imports[field]) == "function",
@@ -589,6 +599,7 @@ M.register("go", {
       normalize = go_import,
       site_keys = go_site_keys,
       target_keys = go_target_keys,
+      target_label = go_target_label,
     },
   },
   ast_grep = {

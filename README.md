@@ -17,9 +17,10 @@ structure, LSP adds semantic relationships, and ast-grep searches the project
 for related patterns. Results are assembled on demand without a separate
 project index.
 
-Reverse module relationships use a bounded in-memory import scan. The scan is
-cached while you navigate the project and rebuilt when ArchLens is refreshed;
-it does not write an index to disk or start language servers for scanned files.
+Module dependencies and dependents use a bounded in-memory project scan. The
+scan is cached while you navigate the project and rebuilt when ArchLens is
+refreshed; it does not write an index to disk or start language servers for
+scanned files. Section anchors show which file or module the relationship uses.
 
 Test and configuration uses are grouped by their enclosing function or module.
 Expanding a group keeps each exact use site available for navigation.
@@ -63,8 +64,8 @@ Then add the package to a Nixvim module:
 }
 ```
 
-Ripgrep enables the reverse module scan. The rest of ArchLens remains available
-without it, and the pane reports when imported-by analysis cannot run.
+Ripgrep enables reverse module analysis. The rest of ArchLens remains available
+without it, and the pane reports when that analysis cannot run.
 
 ## Usage
 

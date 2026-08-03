@@ -89,10 +89,41 @@ local function configure_buffer(session, actions)
     M.render(session, session.model, session.options)
   end
 
-  local function expand_group(group_id)
-    local step = math.max(1, session.options.max_items or 8)
+  local function section_limit(section_id)
+    local limits = session.options.sections and session.options.sections.max_items or {}
+    return math.max(1, limits[section_id] or session.options.max_items or 8)
+  end
+
+  local function expand_group(group_id, section_id)
+    local step = section_limit(section_id)
     session.expanded_groups[group_id] = true
     session.group_limits[group_id] = (session.group_limits[group_id] or step) + step
+    M.render(session, session.model, session.options)
+  end
+
+  local function collapse_all()
+    session.expanded = {}
+    session.expanded_groups = {}
+    session.group_limits = {}
+    session.collapsed = {}
+    for _, section in ipairs(session.model and session.model.sections or {}) do
+      session.collapsed[section.id] = true
+    end
+    M.render(session, session.model, session.options)
+  end
+
+  local function expand_all()
+    session.expanded = {}
+    session.expanded_groups = {}
+    session.group_limits = {}
+    session.collapsed = {}
+    for _, section in ipairs(session.model and session.model.sections or {}) do
+      session.expanded[section.id] = true
+      for _, group in ipairs(section.groups or {}) do
+        session.expanded_groups[group.id] = true
+        session.group_limits[group.id] = #group.rows
+      end
+    end
     M.render(session, session.model, session.options)
   end
 
@@ -106,7 +137,7 @@ local function configure_buffer(session, actions)
     elseif target.action == "toggle_group" then
       toggle_group(target.group_id)
     elseif target.action == "expand_group" then
-      expand_group(target.group_id)
+      expand_group(target.group_id, target.section_id)
     elseif target.action == "toggle" then
       session.collapsed[target.section_id] = not session.collapsed[target.section_id]
       M.render(session, session.model, session.options)
@@ -142,7 +173,7 @@ local function configure_buffer(session, actions)
     elseif target and target.action == "toggle_group" then
       toggle_group(target.group_id)
     elseif target and target.action == "expand_group" then
-      expand_group(target.group_id)
+      expand_group(target.group_id, target.section_id)
     elseif target and target.action == "toggle" then
       session.collapsed[target.section_id] = not session.collapsed[target.section_id]
       M.render(session, session.model, session.options)
@@ -150,6 +181,8 @@ local function configure_buffer(session, actions)
   end
   map(buffer, "<Space>", toggle_section, "ArchLens toggle section")
   map(buffer, "za", toggle_section, "ArchLens toggle section")
+  map(buffer, "zM", collapse_all, "ArchLens collapse all sections")
+  map(buffer, "zR", expand_all, "ArchLens expand all sections")
   map(buffer, "<Tab>", function()
     move_to_target(session, 1)
   end, "ArchLens next item")
@@ -248,6 +281,7 @@ function M.render(session, model, options)
   local rendered = renderer.build(model, {
     width = width,
     max_items = options.max_items,
+    section_max_items = options.sections and options.sections.max_items or {},
     expanded = session.expanded,
     expanded_groups = session.expanded_groups,
     group_limits = session.group_limits,

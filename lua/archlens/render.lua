@@ -37,6 +37,7 @@ function M.build(model, opts)
   opts = opts or {}
   local width = math.max(opts.width or 56, 30)
   local max_items = opts.max_items or 8
+  local section_max_items = opts.section_max_items or {}
   local expanded = opts.expanded or {}
   local expanded_groups = opts.expanded_groups or {}
   local group_limits = opts.group_limits or {}
@@ -151,8 +152,9 @@ function M.build(model, opts)
     end
 
     local items = section.groups or section.rows
+    local item_limit = section_max_items[section.id] or max_items
     local limit = is_collapsed and 0
-      or (expanded[section.id] and #items or math.min(#items, max_items))
+      or (expanded[section.id] and #items or math.min(#items, item_limit))
     if section.groups then
       for index = 1, limit do
         local group = section.groups[index]
@@ -168,6 +170,7 @@ function M.build(model, opts)
           {
             action = "toggle_group",
             group_id = group.id,
+            section_id = section.id,
             row = {
               id = group.id,
               name = group.name,
@@ -181,7 +184,7 @@ function M.build(model, opts)
           group_detail
         )
         if is_group_expanded then
-          local group_limit = math.min(#group.rows, group_limits[group.id] or max_items)
+          local group_limit = math.min(#group.rows, group_limits[group.id] or item_limit)
           for row_index = 1, group_limit do
             add_row(group.rows[row_index], "    ")
           end
@@ -189,6 +192,7 @@ function M.build(model, opts)
             add(string.format("    … %d more uses", #group.rows - group_limit), {
               action = "expand_group",
               group_id = group.id,
+              section_id = section.id,
             }, "MoreMsg", group_detail)
           end
         end
@@ -215,7 +219,7 @@ function M.build(model, opts)
   add("")
   add("<CR> open  f focus  <BS> back  <Tab> next", nil, "Comment")
   add("<Space> toggle  [s/]s sections  ? details", nil, "Comment")
-  add("r refresh  q close", nil, "Comment")
+  add("zM/zR collapse/expand all  r refresh  q close", nil, "Comment")
 
   return {
     lines = lines,

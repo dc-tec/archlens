@@ -50,13 +50,22 @@ local function cancel_requests(session)
   session.cancellations = {}
 end
 
-local function begin_run(session, require_source_window)
-  cancel_requests(session)
-  session.generation = session.generation + 1
+local function reset_view_state(session)
   session.expanded = {}
   session.expanded_groups = {}
   session.group_limits = {}
   session.collapsed = {}
+  for _, section_id in ipairs(config.sections.default_collapsed or {}) do
+    session.collapsed[section_id] = true
+  end
+end
+
+local function begin_run(session, require_source_window, preserve_view_state)
+  cancel_requests(session)
+  session.generation = session.generation + 1
+  if not preserve_view_state then
+    reset_view_state(session)
+  end
   session.run_source_buffer = session.source_buffer
   session.run_source_window = require_source_window and session.source_window or nil
   session.run_changedtick = valid_buffer(session.source_buffer)
@@ -386,7 +395,7 @@ function M.refresh(tabpage)
   end
   providers.clear_cache(session.current.root_dir)
   session.restore_row_id = view.selected_row_id(session)
-  local generation = begin_run(session, false)
+  local generation = begin_run(session, false, true)
   load_context(session, session.current, generation)
 end
 

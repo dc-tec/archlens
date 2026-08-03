@@ -5,6 +5,10 @@ local M = {}
 local defaults = {
   width = 56,
   max_items = 8,
+  sections = {
+    default_collapsed = { "siblings" },
+    max_items = {},
+  },
   include_external = false,
   filters = {
     include_generated = false,
@@ -56,14 +60,60 @@ local function validate_table(value, path)
   end
 end
 
+local function validate_default_collapsed(value)
+  if value == nil then
+    return
+  end
+  validate_table(value, "sections.default_collapsed")
+  if not vim.islist(value) then
+    error("ArchLens setup: sections.default_collapsed must be a list of section IDs", 3)
+  end
+  for index, section_id in ipairs(value) do
+    if type(section_id) ~= "string" or section_id == "" then
+      error(
+        string.format(
+          "ArchLens setup: sections.default_collapsed[%d] must be a non-empty section ID",
+          index
+        ),
+        3
+      )
+    end
+  end
+end
+
+local function validate_section_limits(value)
+  if value == nil then
+    return
+  end
+  validate_table(value, "sections.max_items")
+  for section_id, limit in pairs(value) do
+    if type(section_id) ~= "string" or section_id == "" then
+      error("ArchLens setup: sections.max_items keys must be non-empty section IDs", 3)
+    end
+    if type(limit) ~= "number" or limit < 1 or limit % 1 ~= 0 then
+      error(
+        string.format(
+          "ArchLens setup: sections.max_items.%s must be a positive integer",
+          section_id
+        ),
+        3
+      )
+    end
+  end
+end
+
 local function validate(options)
   validate_table(options, "options")
   if not options then
     return
   end
 
-  for _, key in ipairs({ "filters", "imports", "lsp", "grouping", "ast_grep" }) do
+  for _, key in ipairs({ "sections", "filters", "imports", "lsp", "grouping", "ast_grep" }) do
     validate_table(options[key], key)
+  end
+  if type(options.sections) == "table" then
+    validate_default_collapsed(options.sections.default_collapsed)
+    validate_section_limits(options.sections.max_items)
   end
   if type(options.imports) == "table" then
     validate_table(options.imports.inbound, "imports.inbound")

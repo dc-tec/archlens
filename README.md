@@ -27,9 +27,9 @@ Test and configuration references are grouped by their enclosing function or
 module. Each exact use remains available when a group is expanded. Filtered and
 truncated relationships are reported instead of silently disappearing.
 
-Press `?` on a relationship to inspect its direction, anchor, provider method,
-evidence class, and retained occurrence sites without changing navigation
-state.
+Press `?` on a relationship to inspect its direction, anchor, provider methods,
+evidence classes, and retained occurrence sites without changing navigation
+state. Contributions from multiple providers remain independently visible.
 
 ![ArchLens relationship evidence for a Rust reference](docs/assets/relationship-details.png)
 
@@ -94,6 +94,9 @@ ArchLens does not install a global key mapping. It provides three commands:
 - `:ArchLensRefresh` refreshes the open pane.
 - `:ArchLensClose` closes it.
 
+Use `:help archlens` for the complete command, mapping, and configuration
+reference.
+
 Inside the pane:
 
 - `<CR>` opens a relationship, or toggles the selected section or context group.
@@ -102,6 +105,7 @@ Inside the pane:
 - `<Tab>` and `<S-Tab>` move between actionable rows.
 - `]s` and `[s` move between sections.
 - `<Space>` or `za` toggles a section or context group.
+- `zM` and `zR` collapse or expand the complete view.
 - `?` explains the selected relationship, section, or context group.
 - `r` refreshes the view; `q` closes it.
 
@@ -119,6 +123,12 @@ included, and additional project-relative path prefixes can be excluded:
 
 ```lua
 require("archlens").setup({
+  sections = {
+    default_collapsed = { "siblings" },
+    max_items = {
+      references = 12,
+    },
+  },
   filters = {
     include_vendored = true,
     include_generated = true,
@@ -126,6 +136,11 @@ require("archlens").setup({
   },
 })
 ```
+
+Nearby definitions are collapsed by default. Section and context expansion is
+preserved when the pane is refreshed. Use an empty `default_collapsed` list to
+start with every section open; `max_items` at the top level remains the fallback
+for sections without an override.
 
 ## Language adapters
 

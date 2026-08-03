@@ -1,0 +1,181 @@
+*archlens.txt*                                                     *archlens*
+
+==============================================================================
+ArchLens                                        Human-first code relationships
+
+ArchLens is a Neovim side pane for exploring local structure and project-level
+relationships around the symbol under the cursor. It uses Tree-sitter,
+attached language servers, ast-grep, and ripgrep when they are available. No
+LLM or hosted service is required.
+
+==============================================================================
+CONTENTS                                                   *archlens-contents*
+
+1. Commands................................................|archlens-commands|
+2. Pane mappings...........................................|archlens-mappings|
+3. Configuration.....................................|archlens-configuration|
+4. Health...................................................|archlens-health|
+5. Language adapters.......................................|archlens-adapters|
+
+==============================================================================
+COMMANDS                                                   *archlens-commands*
+
+                                                        *:ArchLensHere*
+:ArchLensHere          Open or refresh ArchLens for the symbol under the
+                       cursor.
+
+                                                        *:ArchLensRefresh*
+:ArchLensRefresh       Re-run analysis for the current focus and rebuild
+                       cached module relationships. Manual section state is
+                       preserved.
+
+                                                        *:ArchLensClose*
+:ArchLensClose         Close the ArchLens pane.
+
+ArchLens does not define a global mapping. Map |:ArchLensHere| explicitly if
+you want one. For example: >lua
+
+    vim.keymap.set("n", "<leader>cm", "<cmd>ArchLensHere<cr>", {
+      desc = "Explore code relationships",
+    })
+<
+
+==============================================================================
+PANE MAPPINGS                                              *archlens-mappings*
+
+The following mappings are local to the ArchLens pane:
+
+<CR>            Open a relationship or toggle a section or context group.
+f               Focus a relationship and add the previous symbol to history.
+<BS>, h         Return to the previous focus.
+<Tab>           Move to the next actionable row.
+<S-Tab>         Move to the previous actionable row.
+]s, [s          Move to the next or previous section.
+<Space>, za     Toggle a section or context group.
+zM              Collapse every visible section.
+zR              Expand every visible section and context group.
+?               Inspect direction, location, and provider evidence.
+r               Refresh the current focus.
+q               Close ArchLens.
+
+The details window opened by `?` closes with `q`, `<Esc>`, or `?`.
+
+==============================================================================
+CONFIGURATION                                         *archlens-configuration*
+
+Call `setup()` without options to use the defaults: >lua
+
+    require("archlens").setup()
+<
+
+The plugin loads with defaults automatically. Later `setup()` calls merge
+their options into the active configuration.
+
+                                                    *archlens-config-sections*
+Section policy controls initial collapse state and result limits: >lua
+
+    require("archlens").setup({
+      max_items = 8,
+      sections = {
+        default_collapsed = { "siblings" },
+        max_items = {
+          references = 12,
+        },
+      },
+    })
+<
+
+`max_items` is the fallback for every section and expanded context group.
+`sections.max_items` overrides it by relationship ID. Use an empty
+`default_collapsed` list to start with every section open.
+
+                                                     *archlens-config-filters*
+Project scope filters hide external, vendored, and generated results by
+default: >lua
+
+    require("archlens").setup({
+      include_external = false,
+      filters = {
+        include_vendored = false,
+        include_generated = false,
+        exclude = { "third_party/legacy" },
+      },
+    })
+<
+
+`filters.exclude` contains project-relative path prefixes.
+
+                                                   *archlens-config-providers*
+Providers can be enabled, disabled, and bounded independently: >lua
+
+    require("archlens").setup({
+      imports = {
+        enabled = true,
+        timeout_ms = 5000,
+        inbound = {
+          enabled = true,
+          command = "rg",
+          timeout_ms = 8000,
+        },
+      },
+      lsp = {
+        resolve_timeout_ms = 5000,
+        relationship_timeout_ms = 8000,
+      },
+      grouping = {
+        enabled = true,
+        timeout_ms = 1500,
+      },
+      ast_grep = {
+        enabled = true,
+        command = "ast-grep",
+        timeout_ms = 15000,
+        max_results = 80,
+      },
+    })
+<
+
+See `lua/archlens/config.lua` for all current bounds and defaults. The
+configuration API remains experimental.
+
+==============================================================================
+HEALTH                                                       *archlens-health*
+
+Run the following from a source buffer: >vim
+
+    :checkhealth archlens
+<
+
+The report shows the selected project root, Tree-sitter adapter and parser,
+attached language-server capabilities, and ast-grep availability. Missing
+optional providers reduce the available relationships but do not prevent the
+pane from opening.
+
+==============================================================================
+LANGUAGE ADAPTERS                                          *archlens-adapters*
+
+Language adapters define Tree-sitter symbols, root markers, module analysis,
+and ast-grep behavior. Register an additional adapter before opening ArchLens:
+>lua
+
+    require("archlens.adapters").register("zig", {
+      treesitter = {
+        root_markers = { "build.zig", ".git" },
+        symbol_types = {
+          function_declaration = "Function",
+        },
+      },
+      ast_grep = { language = "zig" },
+    })
+<
+
+The focused relationship graph is defined in `lua/archlens/graph.lua`.
+Relationship names, directions, and ordering are registered in
+`lua/archlens/relations.lua`.
+
+==============================================================================
+LICENSE                                                     *archlens-license*
+
+ArchLens is licensed under the Apache License 2.0.
+
+vim:tw=78:ts=8:noet:ft=help:norl:

@@ -251,6 +251,11 @@ local function run()
   archlens.show_here()
 
   assert_equal(#resolve_callbacks, 1, "the first LSP resolution should start")
+  assert_equal(
+    active_session.collapsed,
+    { siblings = true },
+    "a new ArchLensHere run should apply configured section defaults"
+  )
   assert_equal(#relationship_callbacks, 0, "relationships must wait for LSP resolution")
   assert_equal(#structural_callbacks, 0, "project search must wait for symbol resolution")
   local immediate_model = rendered[#rendered]
@@ -351,7 +356,23 @@ local function run()
     "the completed view should have no pending providers"
   )
 
+  active_session.expanded = { outgoing = true }
+  active_session.expanded_groups = { ["test_references:group:old"] = true }
+  active_session.group_limits = { ["test_references:group:old"] = 24 }
+  active_session.collapsed = { references = true }
   archlens.show_here()
+  assert_equal(active_session.expanded, {}, "ArchLensHere should clear manual section expansion")
+  assert_equal(
+    active_session.expanded_groups,
+    {},
+    "ArchLensHere should clear manual context expansion"
+  )
+  assert_equal(active_session.group_limits, {}, "ArchLensHere should clear progressive limits")
+  assert_equal(
+    active_session.collapsed,
+    { siblings = true },
+    "ArchLensHere should restore configured collapsed sections"
+  )
   resolve_callbacks[2](vim.deepcopy(base_context))
   local stale_lsp = relationship_callbacks[2]
   local stale_imports = import_callbacks[2]
@@ -407,6 +428,12 @@ local function run()
     location = location(2),
     resolve_on_focus = true,
   })
+  assert_equal(active_session.expanded, {}, "focusing a new symbol should reset section expansion")
+  assert_equal(
+    active_session.collapsed,
+    { siblings = true },
+    "focusing a new symbol should apply configured collapsed sections"
+  )
   assert_equal(#resolve_callbacks, 4, "focusing a location row should start semantic resolution")
   resolve_callbacks[4](semantic_implementation)
   assert_equal(
@@ -444,6 +471,16 @@ local function run()
     context = focused_type,
     location = focused_type.location,
   })
+  assert_equal(
+    active_session.expanded,
+    {},
+    "direct symbol focus should start with a fresh section policy"
+  )
+  assert_equal(
+    active_session.collapsed,
+    { siblings = true },
+    "direct symbol focus should use configured collapsed sections"
+  )
   assert_equal(
     relationship_contexts[5].wire_type_item,
     focused_type.wire_type_item,
@@ -505,6 +542,38 @@ local function run()
   )
   import_callbacks[7](graph.delta())
   importer_callbacks[7](graph.delta())
+
+  active_session.expanded = { module_imports = true }
+  active_session.expanded_groups = { ["test_references:group:refresh"] = true }
+  active_session.group_limits = { ["test_references:group:refresh"] = 16 }
+  active_session.collapsed = { siblings = true, references = true }
+  selected_row_id = "module_imports:selected"
+  archlens.refresh()
+  assert_equal(
+    active_session.expanded,
+    { module_imports = true },
+    "refresh should preserve expanded sections"
+  )
+  assert_equal(
+    active_session.expanded_groups,
+    { ["test_references:group:refresh"] = true },
+    "refresh should preserve expanded context groups"
+  )
+  assert_equal(
+    active_session.group_limits,
+    { ["test_references:group:refresh"] = 16 },
+    "refresh should preserve progressive group limits"
+  )
+  assert_equal(
+    active_session.collapsed,
+    { siblings = true, references = true },
+    "refresh should preserve manually collapsed sections"
+  )
+  assert_equal(
+    active_session.restore_row_id,
+    "module_imports:selected",
+    "refresh should preserve the selected relationship when it returns"
+  )
 
   archlens.close()
   assert(vim.api.nvim_win_is_valid(source_window), "the source window should remain valid")

@@ -85,7 +85,8 @@ end
 
 local function language_for(bufnr)
   local filetype = vim.bo[bufnr].filetype
-  return adapters.language_for_filetype(filetype)
+  local path = vim.api.nvim_buf_get_name(bufnr)
+  return adapters.language_for_filetype(filetype, path)
 end
 
 local function label_for(adapter, node)
@@ -298,10 +299,21 @@ function M.supports_imports(bufnr)
   return adapter ~= nil and adapter.treesitter ~= nil and adapter.treesitter.imports ~= nil
 end
 
+local function loaded_buffer_for_path(path)
+  for _, candidate in ipairs(vim.api.nvim_list_bufs()) do
+    if
+      vim.api.nvim_buf_is_loaded(candidate)
+      and vim.fs.normalize(vim.api.nvim_buf_get_name(candidate)) == path
+    then
+      return candidate
+    end
+  end
+end
+
 local function parser_for_path(path, language)
   path = vim.fs.normalize(path)
-  local bufnr = vim.fn.bufnr(path)
-  if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
+  local bufnr = loaded_buffer_for_path(path)
+  if bufnr then
     local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, language, { error = false })
     if not parser_ok or not parser then
       return nil, nil, parser_ok and "Tree-sitter parser unavailable" or tostring(parser)
@@ -428,10 +440,9 @@ end
 
 function M.enclosing_containers(path, positions)
   path = vim.fs.normalize(path)
-  local bufnr = vim.fn.bufnr(path)
-  local filetype = bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) and vim.bo[bufnr].filetype
-    or vim.filetype.match({ filename = path })
-  local language = adapters.language_for_filetype(filetype or "")
+  local bufnr = loaded_buffer_for_path(path)
+  local filetype = bufnr and vim.bo[bufnr].filetype or vim.filetype.match({ filename = path })
+  local language = adapters.language_for_filetype(filetype or "", path)
   local adapter = adapters.get(language)
   if not adapter or not adapter.treesitter then
     return {}, "Tree-sitter adapter unavailable"

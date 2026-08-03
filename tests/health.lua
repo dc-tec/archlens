@@ -158,6 +158,30 @@ local function run()
   diagnostic(section(invalid, "ArchLens LSP"), "error", "client lookup exploded")
   diagnostic(section(invalid, "ArchLens ast-grep"), "warn", "version lookup timed out")
 
+  local query_mismatch = health._diagnose({
+    version = { major = 0, minor = 12, patch = 4 },
+    buffer = {
+      valid = true,
+      bufnr = 5,
+      name = "/workspace/api.mli",
+      filetype = "ocaml",
+      language = "ocaml_interface",
+    },
+    treesitter = {
+      language = "ocaml_interface",
+      parser = true,
+      adapter = true,
+      query_error = "Invalid node type open_module_signature",
+    },
+    lsp = { clients = {} },
+    ast_grep = { command = "ast-grep", supported = false },
+  })
+  diagnostic(
+    section(query_mismatch, "ArchLens Tree-sitter"),
+    "error",
+    "import query is invalid for the ocaml_interface grammar"
+  )
+
   local fixture = root .. "/tests/fixtures/project/main.go"
   vim.cmd.edit(vim.fn.fnameescape(fixture))
   vim.bo.filetype = "go"

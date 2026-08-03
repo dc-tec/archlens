@@ -7,6 +7,15 @@ end
 
 equal(adapters.language_for_filetype("go"), "go")
 equal(adapters.language_for_filetype("ocamlinterface"), "ocaml_interface")
+equal(adapters.language_for_filetype("ocaml", "/workspace/api.mli"), "ocaml_interface")
+equal(adapters.language_for_filetype("ocaml", "/workspace/api.ml"), "ocaml")
+equal(adapters.for_filetype("ocaml", "/workspace/api.mli").language, "ocaml_interface")
+assert(
+  adapters
+    .imports_for_filetype("ocaml", "/workspace/api.mli").query
+    :find("include_module_type", 1, true),
+  "path-aware import selection should use the interface adapter"
+)
 equal(adapters.language_for_filetype("javascriptreact"), "javascript")
 equal(adapters.language_for_filetype("typescriptreact"), "tsx")
 equal(adapters.language_for_filetype("unknown"), "unknown")
@@ -109,6 +118,7 @@ equal(adapters.imports_for_filetype("unknown"), nil)
 equal(adapters.get("rust").treesitter.symbol_types.impl_item, "Implementation")
 equal(adapters.get("rust").treesitter.symbol_types.field_declaration, "Field")
 equal(adapters.get("ocaml_interface").treesitter.symbol_types.value_specification, "Value")
+equal(adapters.get("ocaml_interface").filename_extensions, { ".mli" })
 equal(adapters.get("nix").treesitter.root_markers, {
   ".git",
   "flake.nix",

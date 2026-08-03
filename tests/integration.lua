@@ -65,6 +65,13 @@ local cases = {
     child = "adjusted",
     sibling = "helper",
   },
+  {
+    file = "imports.mli",
+    filetype = "ocaml",
+    position = { line = 3, character = 5 },
+    name = "run",
+    language = "ocaml_interface",
+  },
 }
 
 local contexts = {}
@@ -112,6 +119,9 @@ for _, case in ipairs(cases) do
       contains(names(context.syntax.ancestors), case.ancestor),
       case.file .. " ancestor is missing"
     )
+  end
+  if case.language then
+    assert_equal(context.language, case.language, case.file .. " selected the wrong grammar")
   end
   if case.absent_child then
     assert(
@@ -264,6 +274,12 @@ for _, case in ipairs({
     targets = { "helper.ml", "shared.ml" },
   },
   {
+    file = "imports.mli",
+    filetype = "ocaml",
+    expected = { "Helper", "Shared" },
+    targets = { "helper.ml", "shared.ml" },
+  },
+  {
     file = "nested_imports.rs",
     filetype = "rust",
     expected = { "crate::outer::child", "crate::renamed" },
@@ -356,6 +372,11 @@ for _, case in ipairs({
     expected = { "crate::outer::child", "crate::renamed" },
   },
   { file = "imports.ml", language = "ocaml", expected = { "Helper", "Shared" } },
+  {
+    file = "imports.mli",
+    language = "ocaml_interface",
+    expected = { "Helper", "Shared" },
+  },
 }) do
   local path = fixture_root .. "/" .. case.file
   local loaded = vim.fn.bufnr(path)
@@ -370,6 +391,37 @@ for _, case in ipairs({
   )
 end
 
+vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/imports.mli"))
+vim.bo.filetype = "ocaml"
+local health = require("archlens.health")
+local interface_buffer = health._inspect_buffer(0)
+assert_equal(
+  interface_buffer.language,
+  "ocaml_interface",
+  "health should select its grammar using the interface path"
+)
+local interface_health = health._inspect_treesitter(0, interface_buffer)
+assert(interface_health.parser, "health should probe the ocaml_interface parser for .mli files")
+assert(interface_health.adapter, "health should select the ocaml_interface adapter for .mli files")
+assert(
+  interface_health.query,
+  "the configured ocaml_interface import query should compile: "
+    .. tostring(interface_health.query_error)
+)
+local interface_containers, interface_container_error =
+  treesitter.enclosing_containers(fixture_root .. "/imports.mli", {
+    { line = 3, character = 5 },
+  })
+assert(
+  not interface_container_error,
+  "path-based container parsing should use the interface grammar: "
+    .. tostring(interface_container_error)
+)
+assert(
+  vim.deep_equal(interface_containers, {}),
+  "top-level value specs have no enclosing container"
+)
+
 for _, case in ipairs({
   { file = "module.nix", filetype = "nix", importer = "imports.nix", anchor = "module.nix" },
   {
@@ -378,7 +430,13 @@ for _, case in ipairs({
     importer = "imports.rs",
     anchor = "imports/worker.rs",
   },
-  { file = "helper.ml", filetype = "ocaml", importer = "imports.ml", anchor = "helper.ml" },
+  {
+    file = "helper.ml",
+    filetype = "ocaml",
+    importer = "imports.ml",
+    additional_importer = "imports.mli",
+    anchor = "helper.ml",
+  },
   {
     file = "internal/service/service.go",
     filetype = "go",
@@ -431,8 +489,13 @@ for _, case in ipairs({
     case.file .. " reverse module indexing timed out"
   )
   local importer_found = false
+  local additional_importer_found = case.additional_importer == nil
   for _, edge in ipairs(relationships.edges) do
-    if vim.fs.basename(vim.uri_to_fname(edge.source.location.uri)) == case.importer then
+    local importer = vim.fs.basename(vim.uri_to_fname(edge.source.location.uri))
+    if importer == case.additional_importer then
+      additional_importer_found = true
+    end
+    if importer == case.importer then
       importer_found = true
       assert_equal(edge.kind, "module_importers", case.file .. " returned the wrong relation")
       assert_equal(
@@ -445,10 +508,17 @@ for _, case in ipairs({
         case.anchor,
         case.file .. " returned the wrong module anchor label"
       )
-      break
     end
   end
   assert(importer_found, case.file .. " did not find importer " .. case.importer)
+  assert(
+    additional_importer_found,
+    case.file .. " did not find importer " .. tostring(case.additional_importer)
+  )
+  assert(
+    not table.concat(relationships.notes or {}, "\n"):find("could not be parsed", 1, true),
+    case.file .. " mixed-language module indexing reported parser failures"
+  )
 end
 
 local completed = false

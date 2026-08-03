@@ -2,6 +2,7 @@ local M = {}
 
 local registry = {}
 local filetypes = {}
+local filename_extensions = {}
 
 local default_root_markers = {
   ".git",
@@ -413,6 +414,7 @@ end
 
 local function ocaml_import(_, text, source, metadata)
   local name = vim.trim(text:gsub("%s+", " "))
+  name = name:match("^module%s+type%s+of%s+(.+)$") or name
   local source_file = source_path(source, metadata)
   if not source_file or source_file == "" then
     return { name = name }
@@ -450,6 +452,17 @@ local function normalize(language, adapter)
   local normalized = vim.deepcopy(adapter)
   normalized.language = language
   normalized.filetypes = normalized.filetypes or { language }
+  normalized.filename_extensions = normalized.filename_extensions or {}
+  assert(
+    type(normalized.filename_extensions) == "table",
+    "adapter filename_extensions must be a table"
+  )
+  for _, extension in ipairs(normalized.filename_extensions) do
+    assert(
+      type(extension) == "string" and extension:match("^%."),
+      "adapter filename_extensions must start with a dot"
+    )
+  end
 
   if normalized.treesitter then
     assert(
@@ -517,10 +530,19 @@ function M.register(language, adapter)
   for _, filetype in ipairs(normalized.filetypes) do
     assert(filetypes[filetype] == nil, string.format("filetype already registered: %s", filetype))
   end
+  for _, extension in ipairs(normalized.filename_extensions) do
+    assert(
+      filename_extensions[extension] == nil,
+      string.format("filename extension already registered: %s", extension)
+    )
+  end
 
   registry[language] = normalized
   for _, filetype in ipairs(normalized.filetypes) do
     filetypes[filetype] = language
+  end
+  for _, extension in ipairs(normalized.filename_extensions) do
+    filename_extensions[extension] = language
   end
   return vim.deepcopy(normalized)
 end
@@ -529,27 +551,34 @@ function M.get(language)
   return vim.deepcopy(registry[language])
 end
 
-function M.for_filetype(filetype)
-  return M.get(filetypes[filetype] or filetype)
+local function path_extension(path)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+  return vim.fs.basename(path):match("(%.[^%.]+)$")
 end
 
-function M.language_for_filetype(filetype)
-  return filetypes[filetype] or filetype
+function M.language_for_filetype(filetype, path)
+  return filename_extensions[path_extension(path)] or filetypes[filetype] or filetype
 end
 
-function M.root_markers(filetype)
-  local adapter = M.for_filetype(filetype)
+function M.for_filetype(filetype, path)
+  return M.get(M.language_for_filetype(filetype, path))
+end
+
+function M.root_markers(filetype, path)
+  local adapter = M.for_filetype(filetype, path)
   local treesitter = adapter and adapter.treesitter
   return vim.deepcopy(treesitter and treesitter.root_markers or default_root_markers)
 end
 
-function M.imports_for_filetype(filetype)
-  local adapter = M.for_filetype(filetype)
+function M.imports_for_filetype(filetype, path)
+  local adapter = M.for_filetype(filetype, path)
   return vim.deepcopy(adapter and adapter.treesitter and adapter.treesitter.imports or nil)
 end
 
-function M.import_scan_specs(filetype)
-  local language = filetypes[filetype] or filetype
+function M.import_scan_specs(filetype, path)
+  local language = M.language_for_filetype(filetype, path)
   local adapter = registry[language]
   local imports = adapter and adapter.treesitter and adapter.treesitter.imports
   local specs = {}
@@ -664,6 +693,7 @@ M.register("ocaml", {
 
 M.register("ocaml_interface", {
   filetypes = { "ocamlinterface" },
+  filename_extensions = { ".mli" },
   treesitter = {
     symbol_types = {
       class_specification = "Class",
@@ -677,7 +707,7 @@ M.register("ocaml_interface", {
       scan_languages = { "ocaml", "ocaml_interface" },
       query = [[
         [
-          (open_module_signature module: (extended_module_path) @import)
+          (open_module module: (_) @import)
           (include_module_type module_type: (_) @import)
         ]
       ]],

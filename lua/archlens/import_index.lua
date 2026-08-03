@@ -27,8 +27,8 @@ local function extension(path)
   return vim.fs.basename(path):match("(%.[^%.]+)$")
 end
 
-local function scan_specs(filetype)
-  local specs = adapters.import_scan_specs(filetype)
+local function scan_specs(filetype, path)
+  local specs = adapters.import_scan_specs(filetype, path)
   local by_extension = {}
   for _, spec in ipairs(specs) do
     for _, suffix in ipairs(spec.extensions or {}) do
@@ -610,8 +610,8 @@ function M.relationships(context, bufnr, options, callback)
   end
 
   local filetype = options.filetype or vim.bo[bufnr].filetype
-  local specs, by_extension = scan_specs(filetype)
-  local target_imports = adapters.imports_for_filetype(filetype)
+  local specs, by_extension = scan_specs(filetype, target_path)
+  local target_imports = adapters.imports_for_filetype(filetype, target_path)
   if #specs == 0 or not target_imports then
     callback(graph.delta())
     return function() end

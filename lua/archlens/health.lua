@@ -1,5 +1,4 @@
 local adapters = require("archlens.adapters")
-local treesitter = require("archlens.treesitter")
 
 local M = {}
 
@@ -63,10 +62,11 @@ local function inspect_buffer(bufnr)
 
   local name = vim.api.nvim_buf_get_name(bufnr)
   local filetype = vim.bo[bufnr].filetype
+  local language = adapters.language_for_filetype(filetype, name)
   local marker_root
   local root
   if name ~= "" then
-    marker_root = vim.fs.root(name, adapters.root_markers(filetype))
+    marker_root = vim.fs.root(name, adapters.root_markers(filetype, name))
     root = marker_root or vim.fs.dirname(name)
   end
 
@@ -75,6 +75,7 @@ local function inspect_buffer(bufnr)
     bufnr = bufnr,
     name = name,
     filetype = filetype,
+    language = language,
     root = root,
     marker_root = marker_root ~= nil,
   }
@@ -85,13 +86,26 @@ local function inspect_treesitter(bufnr, buffer)
     return { parser = false, adapter = false }
   end
 
-  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, nil, { error = false })
-  local adapter_ok, adapter = pcall(treesitter.supports, bufnr)
+  local language = buffer.language or adapters.language_for_filetype(buffer.filetype, buffer.name)
+  local adapter_ok, adapter = pcall(adapters.get, language)
+  local tree_adapter = adapter_ok and adapter and adapter.treesitter or nil
+  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, language, { error = false })
+  local imports = tree_adapter and tree_adapter.imports or nil
+  local query_ok = true
+  local query_error
+  if imports and parser_ok and parser then
+    local compiled, query = pcall(vim.treesitter.query.parse, language, imports.query)
+    query_ok = compiled and query ~= nil
+    query_error = query_ok and nil or tostring(query)
+  end
   return {
+    language = language,
     parser = parser_ok and parser ~= nil,
     parser_error = parser_ok and nil or tostring(parser),
-    adapter = adapter_ok and adapter == true,
+    adapter = tree_adapter ~= nil,
     adapter_error = adapter_ok and nil or tostring(adapter),
+    query = imports and parser_ok and parser and query_ok or nil,
+    query_error = query_error,
   }
 end
 
@@ -138,12 +152,12 @@ local function first_line(text)
   return text ~= "" and text:match("[^\r\n]+") or nil
 end
 
-local function inspect_ast_grep(command, enabled, filetype)
+local function inspect_ast_grep(command, enabled, filetype, path)
   command = command or "ast-grep"
   if enabled == false then
     return { command = command, enabled = false }
   end
-  local adapter = filetype and adapters.for_filetype(filetype) or nil
+  local adapter = filetype and adapters.for_filetype(filetype, path) or nil
   local provider = adapter and adapter.ast_grep or nil
   if not provider or not provider.language then
     return {
@@ -211,7 +225,7 @@ local function inspect()
     buffer = buffer,
     treesitter = inspect_treesitter(bufnr, buffer),
     lsp = inspect_lsp(bufnr, buffer),
-    ast_grep = inspect_ast_grep(ast_grep.command, ast_grep.enabled, buffer.filetype),
+    ast_grep = inspect_ast_grep(ast_grep.command, ast_grep.enabled, buffer.filetype, buffer.name),
   }
 end
 
@@ -292,6 +306,24 @@ function M._diagnose(state)
   else
     parser.items[#parser.items + 1] =
       item("warn", "No ArchLens Tree-sitter adapter is available for the source buffer.")
+  end
+  if tree_state.query then
+    parser.items[#parser.items + 1] = item(
+      "ok",
+      string.format(
+        "The ArchLens import query compiles for the %s grammar.",
+        tree_state.language or "selected"
+      )
+    )
+  elseif tree_state.query_error then
+    parser.items[#parser.items + 1] = item(
+      "error",
+      string.format(
+        "The ArchLens import query is invalid for the %s grammar: %s",
+        tree_state.language or "selected",
+        tree_state.query_error
+      )
+    )
   end
 
   local lsp = { title = "ArchLens LSP", items = {} }
@@ -384,5 +416,7 @@ function M.check()
 end
 
 M._context_buffer = context_buffer
+M._inspect_buffer = inspect_buffer
+M._inspect_treesitter = inspect_treesitter
 
 return M

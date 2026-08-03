@@ -331,6 +331,7 @@ local function run()
   }
   local function run_relationships(fake_client, context_overrides)
     local result
+    local metadata
     vim.lsp.get_client_by_id = function(client_id)
       return client_id == fake_client.id and fake_client or original_get_client_by_id(client_id)
     end
@@ -340,8 +341,9 @@ local function run()
       position_encoding = "utf-8",
       root_dir = "/tmp",
     }, context_overrides or {})
-    local cancel = lsp.relationships(context, position_buffer, function(value)
+    local cancel = lsp.relationships(context, position_buffer, function(value, details)
       result = value
+      metadata = details
     end, { timeout_ms = 1000 })
     assert(
       vim.wait(1000, function()
@@ -351,7 +353,7 @@ local function run()
     )
     cancel()
     vim.lsp.get_client_by_id = original_get_client_by_id
-    return result
+    return result, metadata
   end
 
   local captured_params = {}
@@ -849,12 +851,16 @@ local function run()
       return true, 1
     end,
   }
-  local unsupported_result = run_relationships(unsupported_client)
+  local unsupported_result, unsupported_metadata = run_relationships(unsupported_client)
   assert_equal(
     unsupported_requests,
     { "textDocument/references" },
     "clients without implementation support should not receive that request"
   )
+  assert_equal(unsupported_metadata, {
+    request_count = 1,
+    request_labels = { "Project references" },
+  }, "relationship completion should describe the semantic requests that ran")
   assert_equal(
     edges_for(unsupported_result, "implementations"),
     {},

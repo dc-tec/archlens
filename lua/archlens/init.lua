@@ -507,6 +507,14 @@ function M.setup(options)
       end
     end,
   })
+  vim.api.nvim_create_autocmd("LspAttach", {
+    group = group,
+    callback = function(event)
+      if event.data and event.data.client_id then
+        lsp.note_attach(event.data.client_id)
+      end
+    end,
+  })
 end
 
 function M.get_config()

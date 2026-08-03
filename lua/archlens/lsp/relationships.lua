@@ -183,6 +183,8 @@ function M.relationships(context, bufnr, callback, options)
   local cancelled = false
   local completed = false
   local request_ids = {}
+  local request_count = 0
+  local request_labels = {}
   local timer
 
   local function complete()
@@ -194,7 +196,10 @@ function M.relationships(context, bufnr, callback, options)
       timer:stop()
       timer:close()
     end
-    callback(result)
+    callback(result, {
+      request_count = request_count,
+      request_labels = vim.deepcopy(request_labels),
+    })
   end
 
   local request
@@ -434,6 +439,8 @@ function M.relationships(context, bufnr, callback, options)
   pending = #requests
 
   request = function(spec)
+    request_count = request_count + 1
+    request_labels[#request_labels + 1] = spec.label
     local ok, request_id = client:request(spec.method, spec.params, function(err, value)
       finish(spec, err, value)
     end, bufnr)

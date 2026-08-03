@@ -51,10 +51,24 @@ local function run()
   print(text)
   assert(text:find("ArchLens", 1, true), "ArchLens title is missing")
   if vim.env.ARCHLENS_SMOKE_REQUIRE_RELATIONSHIPS ~= "0" then
-    assert(
-      text:find("Entered through", 1, true) or text:find("Touches", 1, true),
-      "no relationships rendered"
-    )
+    local relationship_labels = {
+      "Entered through",
+      "Touches",
+      "Implementations",
+      "Supertypes",
+      "Subtypes",
+      "Module dependencies",
+      "Module dependents",
+      "Configuration used at",
+      "Referenced from tests",
+      "Referenced across project",
+      "Potential test matches",
+      "Structural matches",
+    }
+    local found_relationship = vim.iter(relationship_labels):any(function(label)
+      return text:find(label, 1, true) ~= nil
+    end)
+    assert(found_relationship, "no relationships rendered")
   end
   local expected = vim.env.ARCHLENS_SMOKE_EXPECT
   if expected and expected ~= "" then

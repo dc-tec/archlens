@@ -27,6 +27,18 @@ local function run()
     "nearby definitions should be the only section collapsed by default"
   )
   assert_equal(second.sections.max_items, {}, "section limits should fall back to max_items")
+  assert_equal(second.sections.hidden, {}, "sections should remain visible by default")
+  assert_equal(second.sections.order, {}, "relation registry order should remain the default")
+  assert_equal(
+    second.providers,
+    {},
+    "custom providers should have an empty configuration namespace"
+  )
+  assert_equal(second.lsp.cold_start_retry, {
+    enabled = true,
+    delay_ms = 3000,
+    window_ms = 10000,
+  }, "cold language servers should receive one bounded empty-result retry")
 
   local merged = config.merge(second, {
     width = 72,
@@ -35,7 +47,9 @@ local function run()
     },
     sections = {
       default_collapsed = { "references", "siblings" },
+      hidden = { "structural" },
       max_items = { references = 12 },
+      order = { "incoming", "outgoing", "references" },
     },
   })
   assert_equal(merged.width, 72, "top-level options should override defaults")
@@ -54,6 +68,16 @@ local function run()
     merged.sections.max_items.references,
     12,
     "per-section item limits should override the global fallback"
+  )
+  assert_equal(
+    merged.sections.hidden,
+    { "structural" },
+    "hidden sections should replace the default list"
+  )
+  assert_equal(
+    merged.sections.order,
+    { "incoming", "outgoing", "references" },
+    "configured section order should replace registry order"
   )
 
   local ok, err = pcall(config.merge, merged, { imports = false })
@@ -80,6 +104,26 @@ local function run()
     {
       options = { sections = { max_items = { references = 0 } } },
       message = "sections.max_items.references must be a positive integer",
+    },
+    {
+      options = { sections = { hidden = { "references", "references" } } },
+      message = "sections.hidden contains duplicate section ID references",
+    },
+    {
+      options = { sections = { order = { incoming = true } } },
+      message = "sections.order must be a list of section IDs",
+    },
+    {
+      options = { lsp = { cold_start_retry = false } },
+      message = "lsp.cold_start_retry must be a table",
+    },
+    {
+      options = { lsp = { cold_start_retry = { delay_ms = -1 } } },
+      message = "lsp.cold_start_retry.delay_ms must be a non-negative integer",
+    },
+    {
+      options = { lsp = { cold_start_retry = { enabled = "yes" } } },
+      message = "lsp.cold_start_retry.enabled must be a boolean",
     },
   }
   for _, case in ipairs(invalid_options) do

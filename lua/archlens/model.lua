@@ -439,6 +439,32 @@ function M.error(message)
   }
 end
 
+local function section_relations(policy)
+  local ordered = relations.ordered()
+  if not policy or not policy.order or #policy.order == 0 then
+    return ordered
+  end
+
+  local by_id = {}
+  for _, relation in ipairs(ordered) do
+    by_id[relation.id] = relation
+  end
+  local result = {}
+  local added = {}
+  for _, section_id in ipairs(policy.order) do
+    if by_id[section_id] and not added[section_id] then
+      result[#result + 1] = by_id[section_id]
+      added[section_id] = true
+    end
+  end
+  for _, relation in ipairs(ordered) do
+    if not added[relation.id] then
+      result[#result + 1] = relation
+    end
+  end
+  return result
+end
+
 function M.build(context, snapshot, opts)
   opts = opts or {}
   snapshot = snapshot or graph.new(context)
@@ -500,18 +526,35 @@ function M.build(context, snapshot, opts)
   end
 
   local sections = {}
-  for _, relation in ipairs(relations.ordered()) do
+  local section_policy = opts.sections or {}
+  local hidden_sections = {}
+  for _, section_id in ipairs(section_policy.hidden or {}) do
+    hidden_sections[section_id] = true
+  end
+  local section_hidden_count = 0
+  for _, relation in ipairs(section_relations(section_policy)) do
     local rows = grouped[relation.id]
     if rows and #rows > 0 then
-      sections[#sections + 1] = {
-        id = relation.id,
-        label = relation.label,
-        marker = relation.marker,
-        rows = rows,
-        groups = container_groups(relation, rows),
-        anchor = section_anchor(rows),
-      }
+      if hidden_sections[relation.id] then
+        section_hidden_count = section_hidden_count + #rows
+      else
+        sections[#sections + 1] = {
+          id = relation.id,
+          label = relation.label,
+          marker = relation.marker,
+          rows = rows,
+          groups = container_groups(relation, rows),
+          anchor = section_anchor(rows),
+        }
+      end
     end
+  end
+  if section_hidden_count > 0 then
+    notes[#notes + 1] = string.format(
+      "%d relationship%s hidden by section policy.",
+      section_hidden_count,
+      section_hidden_count == 1 and "" or "s"
+    )
   end
   if #sections == 0 and #notes == 0 and #pending_providers == 0 then
     notes[#notes + 1] = "No local or project relationships were returned."

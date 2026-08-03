@@ -7,9 +7,12 @@ local defaults = {
   max_items = 8,
   sections = {
     default_collapsed = { "siblings" },
+    hidden = {},
     max_items = {},
+    order = {},
   },
   include_external = false,
+  providers = {},
   filters = {
     include_generated = false,
     include_vendored = false,
@@ -35,6 +38,11 @@ local defaults = {
   lsp = {
     resolve_timeout_ms = 5000,
     relationship_timeout_ms = 8000,
+    cold_start_retry = {
+      enabled = true,
+      delay_ms = 3000,
+      window_ms = 10000,
+    },
   },
   grouping = {
     enabled = true,
@@ -60,24 +68,26 @@ local function validate_table(value, path)
   end
 end
 
-local function validate_default_collapsed(value)
+local function validate_section_ids(value, path)
   if value == nil then
     return
   end
-  validate_table(value, "sections.default_collapsed")
+  validate_table(value, path)
   if not vim.islist(value) then
-    error("ArchLens setup: sections.default_collapsed must be a list of section IDs", 3)
+    error(string.format("ArchLens setup: %s must be a list of section IDs", path), 3)
   end
+  local seen = {}
   for index, section_id in ipairs(value) do
     if type(section_id) ~= "string" or section_id == "" then
+      error(string.format("ArchLens setup: %s[%d] must be a non-empty section ID", path, index), 3)
+    end
+    if seen[section_id] then
       error(
-        string.format(
-          "ArchLens setup: sections.default_collapsed[%d] must be a non-empty section ID",
-          index
-        ),
+        string.format("ArchLens setup: %s contains duplicate section ID %s", path, section_id),
         3
       )
     end
+    seen[section_id] = true
   end
 end
 
@@ -102,17 +112,52 @@ local function validate_section_limits(value)
   end
 end
 
+local function validate_cold_start_retry(value)
+  if value == nil then
+    return
+  end
+  validate_table(value, "lsp.cold_start_retry")
+  if value.enabled ~= nil and type(value.enabled) ~= "boolean" then
+    error("ArchLens setup: lsp.cold_start_retry.enabled must be a boolean", 3)
+  end
+  for _, field in ipairs({ "delay_ms", "window_ms" }) do
+    local setting = value[field]
+    if setting ~= nil and (type(setting) ~= "number" or setting < 0 or setting % 1 ~= 0) then
+      error(
+        string.format(
+          "ArchLens setup: lsp.cold_start_retry.%s must be a non-negative integer",
+          field
+        ),
+        3
+      )
+    end
+  end
+end
+
 local function validate(options)
   validate_table(options, "options")
   if not options then
     return
   end
 
-  for _, key in ipairs({ "sections", "filters", "imports", "lsp", "grouping", "ast_grep" }) do
+  for _, key in ipairs({
+    "sections",
+    "providers",
+    "filters",
+    "imports",
+    "lsp",
+    "grouping",
+    "ast_grep",
+  }) do
     validate_table(options[key], key)
   end
+  if type(options.lsp) == "table" then
+    validate_cold_start_retry(options.lsp.cold_start_retry)
+  end
   if type(options.sections) == "table" then
-    validate_default_collapsed(options.sections.default_collapsed)
+    validate_section_ids(options.sections.default_collapsed, "sections.default_collapsed")
+    validate_section_ids(options.sections.hidden, "sections.hidden")
+    validate_section_ids(options.sections.order, "sections.order")
     validate_section_limits(options.sections.max_items)
   end
   if type(options.imports) == "table" then

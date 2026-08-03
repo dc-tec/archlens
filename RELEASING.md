@@ -5,11 +5,13 @@ ArchLens releases use signed tags from a validated `main` branch.
 1. Confirm that `main` is clean and synchronized with `origin/main`.
 2. Set the package version in `flake.nix` to the release version without the
    `-dev` suffix.
-3. Run the validation and local performance report:
+3. Evaluate every supported system, run the current-system validation, and run
+   the local performance report:
 
    ```sh
+   nix flake show path:. --all-systems
    nix flake check path:. --print-build-logs
-   nix run .#benchmark
+   nix run path:.#benchmark
    ```
 
 4. Commit the version change with a conventional, DCO-signed, GPG-signed
@@ -28,5 +30,7 @@ ArchLens releases use signed tags from a validated `main` branch.
    gh release create vX.Y.Z --verify-tag --generate-notes
    ```
 
-8. Set the package version on `main` to the next development version before
-   starting further development.
+8. Set the package version on `main` to the next patch development version, such
+   as `0.1.1-dev` after `0.1.0`. Commit the change with a conventional,
+   DCO-signed, GPG-signed commit and push `main` before starting further
+   development.

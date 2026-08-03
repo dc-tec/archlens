@@ -47,8 +47,31 @@ available:
   lookup.
 
 If a source is unavailable, ArchLens leaves out those relationships and
-continues with the rest. Run `:checkhealth archlens` from a source buffer to see
-what is available for that file.
+continues with the rest. Run `:checkhealth archlens` from a source buffer to
+inspect the selected project root, Tree-sitter parser and adapter, attached LSP
+capabilities, ast-grep, and ripgrep. The pane reports provider-specific runtime
+failures in its analysis and result details.
+
+### Language capabilities
+
+ArchLens sends the same language-neutral relationship requests to each attached
+language server. Available results depend on the methods advertised by the
+server. Built-in adapters add the following language-specific analysis:
+
+| Language                 | Built-in analysis                                                                                    |
+| ------------------------ | ---------------------------------------------------------------------------------------------------- |
+| Go                       | Tree-sitter symbols and modules, ast-grep candidates, and Go interface relationship presentation     |
+| Rust                     | Tree-sitter symbols and modules, ast-grep candidates, and Rust implementation presentation           |
+| Nix                      | Tree-sitter bindings and module imports, plus ast-grep candidates                                    |
+| OCaml (`.ml` and `.mli`) | Tree-sitter symbols, module relationships, and member presentation; ast-grep has no OCaml parser     |
+| JavaScript and JSX       | ast-grep candidates                                                                                  |
+| TypeScript and TSX       | ast-grep candidates                                                                                  |
+| Lua                      | ast-grep candidates                                                                                  |
+| Python                   | ast-grep candidates                                                                                  |
+
+Languages without a built-in adapter can still expose semantic relationships
+through an attached LSP. Register an adapter to add local structure, module
+analysis, structural search, or language-specific presentation.
 
 ## Installation
 
@@ -207,18 +230,19 @@ interfaces, and concrete implementations.
 
 ![ArchLens exploring Go type relationships and following the source cursor](docs/assets/archlens-demo.gif)
 
-Module dependencies and dependents use a bounded in-memory scan. ArchLens
-caches the scan while you navigate and rebuilds it when you refresh the pane.
-The scan writes no index to disk and starts no language servers for scanned
-files.
+Module dependencies resolve bounded import sites from the focused file. Module
+dependents use a bounded in-memory project scan. ArchLens caches that scan while
+you navigate and rebuilds it when you refresh the pane. The scan writes no index
+to disk and starts no language servers for scanned files.
 
 ![ArchLens relationship evidence for a Rust reference](docs/assets/relationship-details.png)
 
 ## Configuration
 
 `require("archlens").setup()` works without options. The configuration API is
-still evolving; current options and defaults live in
-[`lua/archlens/config.lua`](lua/archlens/config.lua).
+still evolving. Use `:help archlens-configuration` for the complete option and
+default reference. [`lua/archlens/config.lua`](lua/archlens/config.lua)
+implements those defaults.
 
 Vendored and generated relationships are hidden by default. They can be
 included, and additional project-relative path prefixes can be excluded:
@@ -263,6 +287,13 @@ If a newly attached language server returns no semantic relationships,
 ArchLens retries once after three seconds. The retry only applies during the
 configured cold-start window and can be disabled through
 `lsp.cold_start_retry.enabled`.
+
+Provider work has separate time, input, and output bounds. Use `imports` and
+`imports.inbound` to bound module analysis, `lsp.max_results` and
+`lsp.max_occurrences` to bound semantic responses, `grouping` to bound context
+group detection, and `ast_grep.max_results` and `ast_grep.max_output_bytes` to
+bound structural search. The Vim help reference lists every bound and its
+default.
 
 ## Language adapters
 

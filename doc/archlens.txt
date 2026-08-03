@@ -66,10 +66,11 @@ it. Closing the window returns focus to the ArchLens pane.
 
 `Sources [?]` and `Analysis [?]` mark provider lifecycle details that can be
 opened with `?`. `Analysis [?]` appears while providers are active or when a
-provider ends with an exceptional outcome. Active provider names remain visible
-when they fit. At narrower widths ordinary running and queued work is summarized
-by count; failures, timeouts, unavailability, cancellation, and retries take
-priority. Completed providers do not leave persistent status noise.
+provider ends with an exceptional outcome. Active provider names remain
+visible when they fit. At narrower widths ordinary running and queued work is
+summarized by count; failures, timeouts, unavailability, cancellation, and
+retries take priority. Completed providers do not leave persistent status
+noise.
 The details include the time to the first useful relationship.
 
 After the first focused relationship, `Path [?]` shows the previous and
@@ -115,103 +116,202 @@ Call `setup()` without options to use the defaults: >lua
 The plugin loads with defaults automatically. Later `setup()` calls merge
 their options into the active configuration.
 
+Built-in configuration tables reject unknown keys. Counts, sizes, and row
+limits must be positive integers. Timeouts, delays, minimum name length, and
+thread count must be non-negative integers. Commands and list entries must be
+non-empty strings. The `providers` table remains open for provider-defined
+settings.
+
+                                                    *archlens-config-general*
+GENERAL OPTIONS ~
+
+`width` (number, default `56`)
+    Width of the ArchLens pane in columns.
+
+`max_items` (number, default `8`)
+    Default number of visible rows in each section and expanded context group.
+
+`include_external` (boolean, default `false`)
+    Include relationships outside the selected project root.
+
+`providers` (table, default `{}`)
+    Provider-specific configuration keyed by provider ID. See
+    |archlens-providers|.
+
                                                *archlens-config-cursor-follow*
-Cursor following is optional: >lua
+CURSOR FOLLOWING ~
 
-    require("archlens").setup({
-      cursor_follow = {
-        enabled = false,
-        debounce_ms = 150,
-      },
-    })
-<
+`cursor_follow.enabled` (boolean, default `false`)
+    Start |:ArchLensHere| in source-cursor-following mode. The `F` pane
+    mapping changes the mode for the current pane.
 
-`enabled` selects the mode used by |:ArchLensHere|. The `F` pane mapping
-changes the current pane. `debounce_ms` is the delay after the latest cursor
-movement.
+`cursor_follow.debounce_ms` (number, default `150`)
+    Delay in milliseconds after the latest source cursor movement.
 
                                                     *archlens-config-sections*
-Section policy controls initial collapse state and result limits: >lua
+SECTION POLICY ~
 
-    require("archlens").setup({
-      max_items = 8,
-      sections = {
-        collapse_secondary = true,
-        default_collapsed = { "siblings" },
-        hidden = { "structural" },
-        max_items = {
-          references = 12,
-        },
-        order = { "incoming", "outgoing", "references" },
-      },
-    })
+`sections.collapse_secondary` (boolean, default `true`)
+    Collapse unmatched structural candidates when semantic usage exists.
+
+`sections.default_collapsed` (list, default `{ "siblings" }`)
+    Relationship IDs that start collapsed. Use an empty list to start regular
+    sections open.
+
+`sections.hidden` (list, default `{}`)
+    Relationship IDs omitted from the model and navigation. ArchLens reports
+    the number of hidden relationships.
+
+`sections.max_items` (table, default `{}`)
+    Visible-row limits keyed by relationship ID. These values override
+    `max_items`.
+
+`sections.order` (list, default `{}`)
+    Relationship IDs placed first. Unlisted relationships retain registry
+    order.
+
+Built-in relationship IDs are: >
+
+    children              supertypes             subtypes
+    implementations       incoming               outgoing
+    module_imports        module_importers       configuration_consumers
+    test_references       references             test_structural
+    structural            siblings
 <
-
-`max_items` is the fallback for every section and expanded context group.
-`sections.max_items` overrides it by relationship ID. Use an empty
-`default_collapsed` list to start regular sections open. Set
-`collapse_secondary` to false to also keep unmatched structural candidates
-open when semantic usage exists. Hidden relationships are omitted from
-navigation and reported by count. IDs in `order` appear first; unlisted
-relationship kinds retain registry order.
+Extensions may register additional IDs. See |archlens-providers|.
 
                                                      *archlens-config-filters*
-Project scope filters hide external, vendored, and generated results by
-default: >lua
+PROJECT FILTERS ~
 
-    require("archlens").setup({
-      include_external = false,
-      filters = {
-        include_vendored = false,
-        include_generated = false,
-        exclude = { "third_party/legacy" },
-      },
-    })
-<
+`filters.include_generated` (boolean, default `false`)
+    Include generated paths and recognized generated files.
 
-`filters.exclude` contains project-relative path prefixes.
+`filters.include_vendored` (boolean, default `false`)
+    Include vendored and dependency paths.
+
+`filters.exclude` (list, default `{}`)
+    Additional project-relative path prefixes to exclude.
 
                                                    *archlens-config-providers*
-Providers can be enabled, disabled, and bounded independently: >lua
+                                                     *archlens-config-imports*
+MODULE ANALYSIS ~
 
-    require("archlens").setup({
-      imports = {
-        enabled = true,
-        timeout_ms = 5000,
-        inbound = {
-          enabled = true,
-          command = "rg",
-          timeout_ms = 8000,
-        },
-      },
-      lsp = {
-        resolve_timeout_ms = 5000,
-        relationship_timeout_ms = 8000,
-        cold_start_retry = {
-          enabled = true,
-          delay_ms = 3000,
-          window_ms = 10000,
-        },
-      },
-      grouping = {
-        enabled = true,
-        timeout_ms = 1500,
-      },
-      ast_grep = {
-        enabled = true,
-        command = "ast-grep",
-        timeout_ms = 15000,
-        max_results = 80,
-      },
-    })
-<
+`imports.enabled` (boolean, default `true`)
+    Enable outbound module dependency analysis.
 
-See `lua/archlens/config.lua` for all current bounds and defaults. The
-configuration API remains experimental.
+`imports.timeout_ms` (number, default `5000`)
+    Time limit for resolving outbound module dependencies.
 
-The cold-start retry runs once only when a newly attached language server
-returns no semantic relationships and no error. Warm clients complete
-immediately. Set `lsp.cold_start_retry.enabled` to false to disable it.
+`imports.max_imports` (number, default `24`)
+    Maximum number of distinct visible dependency targets.
+
+`imports.max_sites` (number, default `96`)
+    Maximum number of import sites examined in the focused file.
+
+`imports.concurrency` (number, default `4`)
+    Maximum number of concurrent definition requests for import sites.
+
+`imports.inbound.enabled` (boolean, default `true`)
+    Enable reverse module analysis.
+
+`imports.inbound.command` (string, default `"rg"`)
+    ripgrep executable used to enumerate candidate files.
+
+`imports.inbound.timeout_ms` (number, default `8000`)
+    Time limit for the reverse module project scan.
+
+`imports.inbound.max_index_files` (number, default `1000`)
+    Maximum number of visible candidate files parsed into the in-memory index.
+
+`imports.inbound.max_candidate_files` (number, default `2000`)
+    Maximum number of paths accepted from ripgrep before filtering.
+
+`imports.inbound.max_file_bytes` (number, default `1048576`)
+    Maximum size of a candidate file parsed for imports.
+
+`imports.inbound.batch_size` (number, default `16`)
+    Number of candidate files parsed in each scheduled batch.
+
+`imports.inbound.max_importers` (number, default `24`)
+    Maximum number of module dependents returned for the focused file.
+
+                                                         *archlens-config-lsp*
+LSP ANALYSIS ~
+
+`lsp.resolve_timeout_ms` (number, default `5000`)
+    Time limit for resolving the symbol under the cursor.
+
+`lsp.relationship_timeout_ms` (number, default `8000`)
+    Time limit for the semantic relationship requests.
+
+`lsp.max_results` (number, default `256`)
+    Maximum number of result items retained from each semantic response.
+    ArchLens examines at most four times this number of raw candidates to skip
+    malformed and hidden entries and prefer project-local results.
+
+`lsp.max_occurrences` (number, default `256`)
+    Maximum number of incoming or outgoing call occurrences retained for a
+    semantic request.
+
+`lsp.cold_start_retry.enabled` (boolean, default `true`)
+    Retry once when a newly attached server returns no semantic relationships
+    and no error. Warm clients complete immediately.
+
+`lsp.cold_start_retry.delay_ms` (number, default `3000`)
+    Delay before the cold-start retry.
+
+`lsp.cold_start_retry.window_ms` (number, default `10000`)
+    Time after LSP attachment during which an empty response can be retried.
+
+                                                    *archlens-config-grouping*
+CONTEXT GROUPING ~
+
+`grouping.enabled` (boolean, default `true`)
+    Group test and configuration relationships by their enclosing symbol or
+    module.
+
+`grouping.timeout_ms` (number, default `1500`)
+    Time limit for resolving context groups.
+
+`grouping.batch_size` (number, default `4`)
+    Number of source files examined in each scheduled batch.
+
+`grouping.max_file_bytes` (number, default `1048576`)
+    Maximum size of a file parsed for an enclosing context.
+
+`grouping.max_edges` (number, default `500`)
+    Maximum number of eligible relationships enriched with an enclosing
+    syntax context. Additional relationships remain grouped by file.
+
+                                                    *archlens-config-ast-grep*
+STRUCTURAL SEARCH ~
+
+`ast_grep.enabled` (boolean, default `true`)
+    Enable project-wide structural candidates.
+
+`ast_grep.command` (string, default `"ast-grep"`)
+    ast-grep executable.
+
+`ast_grep.timeout_ms` (number, default `15000`)
+    Time limit for a structural search.
+
+`ast_grep.max_results` (number, default `80`)
+    Maximum number of decoded structural matches.
+
+`ast_grep.max_output_bytes` (number, default `1048576`)
+    Maximum bytes retained from each ast-grep output stream.
+
+`ast_grep.min_name_length` (number, default `5`)
+    Minimum symbol-name length required for structural search.
+
+`ast_grep.threads` (number, default `1`)
+    Thread count passed to ast-grep.
+
+`ast_grep.globs` (list, default `{}`)
+    Additional globs passed to ast-grep. Project filters add their own
+    exclusion globs.
+
+The configuration API remains experimental.
 
 ==============================================================================
 HEALTH                                                       *archlens-health*
@@ -222,9 +322,10 @@ Run the following from a source buffer: >vim
 <
 
 The report shows the selected project root, Tree-sitter adapter and parser,
-attached language-server capabilities, and ast-grep availability. Missing
-optional providers reduce the available relationships but do not prevent the
-pane from opening.
+attached language-server capabilities, ast-grep availability, and ripgrep
+availability for reverse module analysis. The pane's analysis and result
+details report provider-specific runtime failures. Missing optional providers
+reduce the available relationships but do not prevent the pane from opening.
 
 ==============================================================================
 LANGUAGE ADAPTERS                                          *archlens-adapters*

@@ -1,61 +1,14 @@
-local ast_grep = require("archlens.ast_grep")
-local containers = require("archlens.containers")
+local config_module = require("archlens.config")
 local graph = require("archlens.graph")
-local imports = require("archlens.imports")
 local lsp = require("archlens.lsp")
 local model = require("archlens.model")
+local providers = require("archlens.providers")
 local treesitter = require("archlens.treesitter")
 local view = require("archlens.view")
 
 local M = {}
 
-local config = {
-  width = 56,
-  max_items = 8,
-  include_external = false,
-  filters = {
-    include_generated = false,
-    include_vendored = false,
-    exclude = {},
-  },
-  imports = {
-    enabled = true,
-    timeout_ms = 5000,
-    max_imports = 24,
-    max_sites = 96,
-    concurrency = 4,
-    inbound = {
-      enabled = true,
-      command = "rg",
-      timeout_ms = 8000,
-      max_index_files = 1000,
-      max_candidate_files = 2000,
-      max_file_bytes = 1024 * 1024,
-      batch_size = 16,
-      max_importers = 24,
-    },
-  },
-  lsp = {
-    resolve_timeout_ms = 5000,
-    relationship_timeout_ms = 8000,
-  },
-  grouping = {
-    enabled = true,
-    timeout_ms = 1500,
-    batch_size = 4,
-    max_file_bytes = 1024 * 1024,
-    max_edges = 500,
-  },
-  ast_grep = {
-    enabled = true,
-    command = "ast-grep",
-    timeout_ms = 15000,
-    max_results = 80,
-    min_name_length = 5,
-    threads = 1,
-    globs = vim.deepcopy(ast_grep.default_globs),
-  },
-}
+local config = config_module.new()
 
 local sessions = {}
 local lifecycle_initialized = false
@@ -178,12 +131,8 @@ local function render(session, rendered_model)
 end
 
 local function render_local_context(session, context)
-  local pending_providers = { { id = "lsp", label = "LSP" } }
-  if config.ast_grep.enabled then
-    pending_providers[#pending_providers + 1] = { id = "ast_grep", label = "ast-grep" }
-  end
   local snapshot = graph.new(context)
-  graph.set_pending(snapshot, pending_providers)
+  graph.set_pending(snapshot, providers.local_pending(config))
   render(session, model.build(context, snapshot, config))
 end
 
@@ -194,134 +143,17 @@ local function load_context(session, context, generation)
 
   session.current = context
 
-  local relationships = graph.new(context)
-  local tasks = {}
-
-  local function merge(result)
-    graph.merge(relationships, result or graph.delta())
-  end
-
-  if context.client_id and not context.module_context then
-    tasks[#tasks + 1] = {
-      id = "lsp",
-      label = context.client_name or "LSP",
-      start = function(done)
-        local grouping_cancel = function() end
-        local lsp_cancel = lsp.relationships(context, session.source_buffer, function(result)
-          if not config.grouping.enabled then
-            done(result)
-            return
-          end
-          local options = vim.deepcopy(config.grouping)
-          options.filters = vim.deepcopy(config.filters)
-          options.filters.include_external = config.include_external
-          grouping_cancel = containers.enrich(result, context, options, done)
-        end, {
-          timeout_ms = config.lsp.relationship_timeout_ms,
-        })
-        return function()
-          pcall(lsp_cancel)
-          pcall(grouping_cancel)
-        end
-      end,
-    }
-  end
-  local local_imports = treesitter.supports_imports(session.source_buffer)
-  if config.imports.enabled and local_imports then
-    tasks[#tasks + 1] = {
-      id = "imports",
-      label = "Module dependencies",
-      start = function(done)
-        local options = vim.deepcopy(config.imports)
-        options.filters = vim.deepcopy(config.filters)
-        options.filters.include_external = config.include_external
-        return imports.relationships(context, session.source_buffer, options, done)
-      end,
-    }
-  end
-  if
-    config.imports.enabled
-    and config.imports.inbound.enabled
-    and (local_imports or context.import_filetype)
-  then
-    tasks[#tasks + 1] = {
-      id = "importers",
-      label = "Module dependents",
-      start = function(done)
-        local options = vim.deepcopy(config.imports.inbound)
-        options.filetype = context.import_filetype
-        options.filters = vim.deepcopy(config.filters)
-        options.filters.include_external = config.include_external
-        return require("archlens.import_index").relationships(
-          context,
-          session.source_buffer,
-          options,
-          done
-        )
-      end,
-    }
-  end
-  if config.ast_grep.enabled and not context.module_context and not context.configuration then
-    tasks[#tasks + 1] = {
-      id = "ast_grep",
-      label = "ast-grep",
-      start = function(done)
-        local options = vim.deepcopy(config.ast_grep)
-        options.filters = vim.deepcopy(config.filters)
-        options.filters.include_external = config.include_external
-        return ast_grep.relationships(context, options, done)
-      end,
-    }
-  end
-
-  local pending = {}
-  for _, task in ipairs(tasks) do
-    pending[task.id] = true
-  end
-
-  local function render_progress()
-    if not is_current(session, generation) then
-      return
-    end
-    local pending_providers = {}
-    for _, task in ipairs(tasks) do
-      if pending[task.id] then
-        pending_providers[#pending_providers + 1] = { id = task.id, label = task.label }
-      end
-    end
-    graph.set_pending(relationships, pending_providers)
-    render(session, model.build(context, relationships, config))
-  end
-
-  -- Tree-sitter context is already available, so show it before starting any
-  -- project-wide work. Later provider results enrich this same bounded view.
-  render_progress()
-
-  for _, task in ipairs(tasks) do
-    local completed = false
-    local function done(result)
-      if completed or not is_current(session, generation) then
-        return
-      end
-      completed = true
-      merge(result)
-      pending[task.id] = nil
-      render_progress()
-    end
-
-    local ok, cancel_or_error = pcall(task.start, done)
-    if ok then
-      register_cancel(session, cancel_or_error)
-    elseif not completed and is_current(session, generation) then
-      completed = true
-      pending[task.id] = nil
-      graph.add_error(
-        relationships,
-        string.format("%s failed to start: %s", task.label, tostring(cancel_or_error))
-      )
-      render_progress()
-    end
-  end
+  providers.run(context, session.source_buffer, config, {
+    is_current = function()
+      return is_current(session, generation)
+    end,
+    register_cancel = function(cancel)
+      register_cancel(session, cancel)
+    end,
+    on_update = function(relationships)
+      render(session, model.build(context, relationships, config))
+    end,
+  })
 end
 
 local function capture_source(session)
@@ -552,8 +384,7 @@ function M.refresh(tabpage)
     render(session, model.error("ArchLens could not recover its source buffer."))
     return
   end
-  imports.clear_cache(session.current.root_dir)
-  containers.clear_cache()
+  providers.clear_cache(session.current.root_dir)
   session.restore_row_id = view.selected_row_id(session)
   local generation = begin_run(session, false)
   load_context(session, session.current, generation)
@@ -650,7 +481,7 @@ function M.close(tabpage)
 end
 
 function M.setup(options)
-  config = vim.tbl_deep_extend("force", config, options or {})
+  config = config_module.merge(config, options)
   if lifecycle_initialized then
     return
   end

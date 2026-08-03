@@ -156,9 +156,13 @@ local function run()
 
   local relationship_callbacks = {}
   local relationship_contexts = {}
+  local relationship_options = {}
   local import_callbacks = {}
+  local import_options = {}
   local importer_callbacks = {}
+  local importer_options = {}
   local structural_callbacks = {}
+  local structural_options = {}
   local resolve_callbacks = {}
   local cancellation_count = 0
   local rendered = {}
@@ -172,8 +176,9 @@ local function run()
         cancellation_count = cancellation_count + 1
       end
     end,
-    relationships = function(context, _, callback)
+    relationships = function(context, _, callback, options)
       relationship_contexts[#relationship_contexts + 1] = vim.deepcopy(context)
+      relationship_options[#relationship_options + 1] = vim.deepcopy(options)
       relationship_callbacks[#relationship_callbacks + 1] = callback
       return function()
         cancellation_count = cancellation_count + 1
@@ -182,7 +187,8 @@ local function run()
   }
   package.loaded["archlens.ast_grep"] = {
     default_globs = {},
-    relationships = function(_, _, callback)
+    relationships = function(_, options, callback)
+      structural_options[#structural_options + 1] = vim.deepcopy(options)
       structural_callbacks[#structural_callbacks + 1] = callback
       return function()
         cancellation_count = cancellation_count + 1
@@ -191,7 +197,8 @@ local function run()
   }
   package.loaded["archlens.imports"] = {
     clear_cache = function() end,
-    relationships = function(_, _, _, callback)
+    relationships = function(_, _, options, callback)
+      import_options[#import_options + 1] = vim.deepcopy(options)
       import_callbacks[#import_callbacks + 1] = callback
       return function()
         cancellation_count = cancellation_count + 1
@@ -199,7 +206,8 @@ local function run()
     end,
   }
   package.loaded["archlens.import_index"] = {
-    relationships = function(_, _, _, callback)
+    relationships = function(_, _, options, callback)
+      importer_options[#importer_options + 1] = vim.deepcopy(options)
       importer_callbacks[#importer_callbacks + 1] = callback
       return function()
         cancellation_count = cancellation_count + 1
@@ -261,6 +269,26 @@ local function run()
   assert_equal(#import_callbacks, 1, "the module dependency provider should start")
   assert_equal(#importer_callbacks, 1, "the module-dependent index should start independently")
   assert_equal(#structural_callbacks, 1, "the first ast-grep provider should start")
+  assert_equal(
+    relationship_options[1],
+    { timeout_ms = 8000 },
+    "LSP provider options should retain their configured timeout"
+  )
+  assert_equal(
+    import_options[1].filters,
+    { include_external = false, include_generated = false, include_vendored = false, exclude = {} },
+    "module dependency analysis should inherit the shared project filters"
+  )
+  assert_equal(
+    importer_options[1].filters,
+    import_options[1].filters,
+    "module-dependent analysis should inherit the same project filters"
+  )
+  assert_equal(
+    structural_options[1].filters,
+    import_options[1].filters,
+    "structural analysis should inherit the same project filters"
+  )
   local local_model = rendered[#rendered]
   assert(section(local_model, "children"), "Tree-sitter structure should render immediately")
   assert_equal(

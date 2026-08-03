@@ -252,6 +252,89 @@ local function merge_row(target, source)
   end
 end
 
+local function ranges_overlap(left, right)
+  if
+    not left
+    or not right
+    or not left.start
+    or not left["end"]
+    or not right.start
+    or not right["end"]
+  then
+    return false
+  end
+  local left_empty = not position_lt(left.start, left["end"])
+  local right_empty = not position_lt(right.start, right["end"])
+  if left_empty then
+    return M.range_contains(right, left.start)
+  end
+  if right_empty then
+    return M.range_contains(left, right.start)
+  end
+  return position_lt(left.start, right["end"]) and position_lt(right.start, left["end"])
+end
+
+local function occurrence_line_key(uri, line)
+  return table.concat({ uri or "", tostring(line or 0) }, "\0")
+end
+
+local function incoming_occurrence_index(rows)
+  local exact = {}
+  local by_line = {}
+  for _, row in ipairs(rows or {}) do
+    for _, occurrence in ipairs(row.occurrences or {}) do
+      if occurrence.uri then
+        for _, range in ipairs(occurrence.ranges or {}) do
+          if range.start and range["end"] and range.start.line and range["end"].line then
+            local location = { uri = occurrence.uri, range = range }
+            local location_key = graph.location_key(location)
+            exact[location_key] = exact[location_key] or row
+            for line = range.start.line, range["end"].line do
+              local key = occurrence_line_key(occurrence.uri, line)
+              by_line[key] = by_line[key] or {}
+              by_line[key][#by_line[key] + 1] = { row = row, range = range }
+            end
+          end
+        end
+      end
+    end
+  end
+  return exact, by_line
+end
+
+local function covering_incoming(row, exact, by_line)
+  local location = row.location
+  local direct = exact[graph.location_key(location)]
+  if direct then
+    return direct
+  end
+  local candidates = by_line[occurrence_line_key(location.uri, location.range.start.line)] or {}
+  for _, candidate in ipairs(candidates) do
+    if ranges_overlap(candidate.range, location.range) then
+      return candidate.row
+    end
+  end
+end
+
+local function coalesce_call_references(grouped)
+  local exact, by_line = incoming_occurrence_index(grouped.incoming)
+  if vim.tbl_isempty(exact) then
+    return
+  end
+  for _, relation_id in ipairs({ "test_references", "references" }) do
+    local remaining = {}
+    for _, row in ipairs(grouped[relation_id] or {}) do
+      local incoming = covering_incoming(row, exact, by_line)
+      if incoming then
+        merge_row(incoming, row)
+      else
+        remaining[#remaining + 1] = row
+      end
+    end
+    grouped[relation_id] = remaining
+  end
+end
+
 local function section_anchor(rows)
   local anchor
   for _, row in ipairs(rows) do
@@ -417,6 +500,8 @@ local function normalize_edges(snapshot, context, filters)
     end
   end
 
+  coalesce_call_references(grouped)
+
   return grouped, hidden
 end
 
@@ -518,6 +603,9 @@ function M.build(context, snapshot, opts)
     filters.include_external = opts.include_external == true
   end
   local grouped, hidden = normalize_edges(snapshot, context, filters)
+  local has_semantic_usage = #grouped.incoming > 0
+    or #grouped.test_references > 0
+    or #grouped.references > 0
 
   local notes = {}
   if context.configuration and not context.client_id and not resolving_lsp then
@@ -579,6 +667,9 @@ function M.build(context, snapshot, opts)
           rows = rows,
           groups = container_groups(relation, rows),
           anchor = section_anchor(rows),
+          default_collapsed = section_policy.collapse_secondary ~= false
+            and relation.source == "structural"
+            and has_semantic_usage,
         }
       end
     end

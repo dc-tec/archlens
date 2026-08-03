@@ -27,6 +27,13 @@ Test and configuration references are grouped by their enclosing function or
 module. Each exact use remains available when a group is expanded. Filtered and
 truncated relationships are reported instead of silently disappearing.
 
+Semantic references covered by an incoming call are folded into that caller;
+its details retain the call-hierarchy method, reference method, and exact call
+sites. Non-call references remain separate. When semantic calls or references
+are available, unmatched structural candidates start collapsed as secondary
+evidence; they remain expanded when structural analysis is the only usage
+source.
+
 Press `?` on a relationship to inspect its direction, anchor, provider methods,
 evidence classes, and retained occurrence sites without changing navigation
 state. The `Sources [?]` and `Analysis [?]` lines expose lifecycle state,
@@ -130,6 +137,7 @@ included, and additional project-relative path prefixes can be excluded:
 ```lua
 require("archlens").setup({
   sections = {
+    collapse_secondary = true,
     default_collapsed = { "siblings" },
     hidden = { "structural" },
     max_items = {
@@ -147,10 +155,12 @@ require("archlens").setup({
 
 Nearby definitions are collapsed by default. Section and context expansion is
 preserved when the pane is refreshed. Use an empty `default_collapsed` list to
-start with every section open; `max_items` at the top level remains the fallback
-for sections without an override. `hidden` removes selected relationship kinds
-from the model while reporting their count. IDs listed in `order` appear first;
-unlisted relationship kinds retain their registry order.
+start regular sections open. Set `collapse_secondary = false` to also keep
+unmatched structural candidates open when semantic usage exists. `max_items` at
+the top level remains the fallback for sections without an override. `hidden`
+removes selected relationship kinds from the model while reporting their count.
+IDs listed in `order` appear first; unlisted relationship kinds retain their
+registry order.
 
 If a newly attached language server returns no semantic relationships,
 ArchLens retries once after three seconds. The retry only applies during the

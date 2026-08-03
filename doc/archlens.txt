@@ -66,6 +66,12 @@ opened with `?`. Active provider names remain visible when they fit. At
 narrower widths ordinary running and queued work is summarized by count;
 failures, timeouts, unavailability, cancellation, and retries take priority.
 
+Semantic references covered by incoming-call occurrences are folded into the
+caller row and remain inspectable with `?`. Non-call references stay separate.
+When semantic call or reference coverage exists, unmatched structural
+candidates start collapsed as secondary evidence. They start expanded when
+structural analysis is the only available usage source.
+
 ==============================================================================
 CONFIGURATION                                         *archlens-configuration*
 
@@ -83,6 +89,7 @@ Section policy controls initial collapse state and result limits: >lua
     require("archlens").setup({
       max_items = 8,
       sections = {
+        collapse_secondary = true,
         default_collapsed = { "siblings" },
         hidden = { "structural" },
         max_items = {
@@ -95,9 +102,11 @@ Section policy controls initial collapse state and result limits: >lua
 
 `max_items` is the fallback for every section and expanded context group.
 `sections.max_items` overrides it by relationship ID. Use an empty
-`default_collapsed` list to start with every section open. Hidden
-relationships are omitted from navigation and reported by count. IDs in
-`order` appear first; unlisted relationship kinds retain registry order.
+`default_collapsed` list to start regular sections open. Set
+`collapse_secondary` to false to also keep unmatched structural candidates
+open when semantic usage exists. Hidden relationships are omitted from
+navigation and reported by count. IDs in `order` appear first; unlisted
+relationship kinds retain registry order.
 
                                                      *archlens-config-filters*
 Project scope filters hide external, vendored, and generated results by

@@ -80,6 +80,15 @@ local function run()
           row("sibling:2", "beta", 22),
         },
       },
+      {
+        id = "test_structural",
+        label = "Potential test matches",
+        marker = "⋄",
+        default_collapsed = true,
+        rows = {
+          row("structural:1", "possible match", 31),
+        },
+      },
     },
   }
 
@@ -98,6 +107,14 @@ local function run()
     "default policy should collapse siblings"
   )
   assert(not contains(rendered.lines, "  · alpha"), "collapsed sections should hide rows")
+  assert(
+    contains(rendered.lines, "▸ Potential test matches  1"),
+    "model-level secondary sections should start collapsed"
+  )
+  assert(
+    not contains(rendered.lines, "  ⋄ possible match"),
+    "secondary section rows should stay hidden until requested"
+  )
   assert(
     contains(rendered.lines, "zM/zR collapse/expand all"),
     "the footer should advertise whole-view controls"
@@ -135,11 +152,26 @@ local function run()
   end
   assert(mappings.zM and mappings.zR, "the pane should map zM and zR")
 
+  local structural_line = vim.fn.index(session.rendered.lines, "▸ Potential test matches  1") + 1
+  local toggle_mapping = mappings["<Space>"] or mappings[" "]
+  assert(structural_line > 0 and toggle_mapping, "secondary sections should remain toggleable")
+  vim.api.nvim_win_set_cursor(session.window, { structural_line, 0 })
+  toggle_mapping()
+  equal(
+    session.collapsed.test_structural,
+    false,
+    "opening a secondary section should override its model default"
+  )
+  assert(
+    contains(session.rendered.lines, "  ⋄ possible match"),
+    "opening a secondary section should reveal its candidates"
+  )
+
   mappings.zR()
   equal(session.collapsed, {}, "expand all should open every section")
   equal(
     session.expanded,
-    { outgoing = true, siblings = true, test_references = true },
+    { outgoing = true, siblings = true, test_references = true, test_structural = true },
     "expand all should remove top-level result limits"
   )
   equal(
@@ -164,7 +196,7 @@ local function run()
   equal(session.group_limits, {}, "collapse all should clear progressive nested limits")
   equal(
     session.collapsed,
-    { outgoing = true, siblings = true, test_references = true },
+    { outgoing = true, siblings = true, test_references = true, test_structural = true },
     "collapse all should close every visible section"
   )
   assert(

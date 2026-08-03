@@ -206,7 +206,13 @@ function M.build(model, opts)
 
   for _, section in ipairs(model.sections or {}) do
     add("")
-    local is_collapsed = collapsed[section.id] == true
+    local explicit_collapse = collapsed[section.id]
+    local is_collapsed = explicit_collapse == true
+      or (
+        explicit_collapse == nil
+        and not expanded[section.id]
+        and section.default_collapsed == true
+      )
     local section_detail = { section = section }
     add(
       string.format("%s %s  %d", is_collapsed and "▸" or "▾", section.label, #section.rows),

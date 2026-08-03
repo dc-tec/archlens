@@ -6,6 +6,7 @@ local defaults = {
   width = 56,
   max_items = 8,
   sections = {
+    collapse_secondary = true,
     default_collapsed = { "siblings" },
     hidden = {},
     max_items = {},
@@ -155,6 +156,12 @@ local function validate(options)
     validate_cold_start_retry(options.lsp.cold_start_retry)
   end
   if type(options.sections) == "table" then
+    if
+      options.sections.collapse_secondary ~= nil
+      and type(options.sections.collapse_secondary) ~= "boolean"
+    then
+      error("ArchLens setup: sections.collapse_secondary must be a boolean", 3)
+    end
     validate_section_ids(options.sections.default_collapsed, "sections.default_collapsed")
     validate_section_ids(options.sections.hidden, "sections.hidden")
     validate_section_ids(options.sections.order, "sections.order")

@@ -78,6 +78,26 @@ local function configure_buffer(session, actions)
   vim.bo[buffer].modifiable = false
   vim.bo[buffer].filetype = "archlens"
 
+  local function section_is_collapsed(section_id)
+    if session.collapsed[section_id] ~= nil then
+      return session.collapsed[section_id]
+    end
+    if session.expanded[section_id] then
+      return false
+    end
+    for _, section in ipairs(session.model and session.model.sections or {}) do
+      if section.id == section_id then
+        return section.default_collapsed == true
+      end
+    end
+    return false
+  end
+
+  local function toggle_section_collapse(section_id)
+    session.collapsed[section_id] = not section_is_collapsed(section_id)
+    M.render(session, session.model, session.options)
+  end
+
   local function expand_section(section_id)
     session.expanded[section_id] = true
     session.collapsed[section_id] = false
@@ -139,8 +159,7 @@ local function configure_buffer(session, actions)
     elseif target.action == "expand_group" then
       expand_group(target.group_id, target.section_id)
     elseif target.action == "toggle" then
-      session.collapsed[target.section_id] = not session.collapsed[target.section_id]
-      M.render(session, session.model, session.options)
+      toggle_section_collapse(target.section_id)
     elseif target.row then
       actions.open(target.row)
     end
@@ -175,8 +194,7 @@ local function configure_buffer(session, actions)
     elseif target and target.action == "expand_group" then
       expand_group(target.group_id, target.section_id)
     elseif target and target.action == "toggle" then
-      session.collapsed[target.section_id] = not session.collapsed[target.section_id]
-      M.render(session, session.model, session.options)
+      toggle_section_collapse(target.section_id)
     end
   end
   map(buffer, "<Space>", toggle_section, "ArchLens toggle section")

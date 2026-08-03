@@ -121,6 +121,23 @@ local function run()
     )
   end
 
+  local function add_incoming(snapshot, name, uri, line, ranges)
+    graph.add_edge(
+      snapshot,
+      graph.edge(
+        "incoming",
+        graph.node_from_context(call_context(name, uri, line)),
+        snapshot.focus,
+        {
+          provider = "gopls",
+          method = "callHierarchy/incomingCalls",
+          class = "semantic",
+        },
+        { occurrences = { { uri = uri, ranges = ranges } } }
+      )
+    )
+  end
+
   local function add_location(snapshot, kind, location, fields, provider, edge_fields)
     local related = graph.node_from_location(location, fields)
     local reverse = kind == "references"
@@ -511,6 +528,122 @@ local function run()
   assert(
     contains(project_map.notes, "1 external relationship hidden."),
     "corroborating external evidence should count as one hidden relationship"
+  )
+
+  local caller_uri = "file:///workspace/internal/controller/reconcile_test.go"
+  local call_location = {
+    uri = caller_uri,
+    range = {
+      start = { line = 42, character = 4 },
+      ["end"] = { line = 42, character = 13 },
+    },
+  }
+  local non_call_location = {
+    uri = caller_uri,
+    range = {
+      start = { line = 43, character = 12 },
+      ["end"] = { line = 43, character = 21 },
+    },
+  }
+  local unmatched_structural_location = {
+    uri = "file:///workspace/internal/other_test.go",
+    range = {
+      start = { line = 8, character = 2 },
+      ["end"] = { line = 8, character = 20 },
+    },
+  }
+  local usage_graph = graph.new(context)
+  add_incoming(usage_graph, "TestReconcile", caller_uri, 40, { call_location.range })
+  add_location(usage_graph, "test_references", call_location)
+  add_location(usage_graph, "test_references", non_call_location)
+  local corroborating_call = vim.deepcopy(call_location)
+  corroborating_call.range.start.character = 2
+  corroborating_call.range["end"].character = 24
+  add_location(usage_graph, "test_structural", corroborating_call, {
+    name = "Reconcile(ctx)",
+  })
+  add_location(usage_graph, "test_structural", unmatched_structural_location, {
+    name = "Reconcile(other)",
+  })
+  local usage_map = model.build(context, usage_graph, {})
+  local incoming_section = vim.iter(usage_map.sections):find(function(value)
+    return value.id == "incoming"
+  end)
+  local remaining_references = vim.iter(usage_map.sections):find(function(value)
+    return value.id == "test_references"
+  end)
+  local remaining_structural = vim.iter(usage_map.sections):find(function(value)
+    return value.id == "test_structural"
+  end)
+  assert_equal(#incoming_section.rows, 1, "incoming callers should remain the primary relationship")
+  assert_equal(incoming_section.rows[1].evidence_records, {
+    {
+      provider = "gopls",
+      method = "callHierarchy/incomingCalls",
+      class = "semantic",
+    },
+    {
+      provider = "gopls",
+      method = "textDocument/references",
+      class = "semantic",
+    },
+    {
+      provider = "ast-grep",
+      method = "structural",
+      class = "structural",
+    },
+  }, "covered references should enrich incoming callers without another row")
+  assert_equal(
+    incoming_section.rows[1].occurrences,
+    { { uri = caller_uri, ranges = { call_location.range } } },
+    "consolidated caller details should retain the exact call site"
+  )
+  assert_equal(
+    #remaining_references.rows,
+    1,
+    "non-call semantic references should remain independently visible"
+  )
+  assert_equal(
+    remaining_references.rows[1].location.uri,
+    non_call_location.uri,
+    "reference consolidation must retain the non-call source file"
+  )
+  assert_equal(
+    remaining_references.rows[1].location.range,
+    non_call_location.range,
+    "reference consolidation must retain uses outside incoming call ranges"
+  )
+  assert_equal(
+    #remaining_structural.rows,
+    1,
+    "only unmatched structural candidates should remain after corroboration"
+  )
+  assert_equal(
+    remaining_structural.default_collapsed,
+    true,
+    "unmatched structural candidates should be secondary when semantic usage exists"
+  )
+  local expanded_usage_map = model.build(context, usage_graph, {
+    sections = { collapse_secondary = false },
+  })
+  local expanded_structural = vim.iter(expanded_usage_map.sections):find(function(value)
+    return value.id == "test_structural"
+  end)
+  assert_equal(
+    expanded_structural.default_collapsed,
+    false,
+    "section policy should be able to keep secondary structural candidates open"
+  )
+
+  local structural_only_graph = graph.new(context)
+  add_location(structural_only_graph, "test_structural", unmatched_structural_location, {
+    name = "Reconcile(other)",
+  })
+  local structural_only_map = model.build(context, structural_only_graph, {})
+  assert_equal(
+    structural_only_map.sections[1].default_collapsed,
+    false,
+    "structural candidates should stay open when semantic usage is unavailable"
   )
 
   local syntax_configuration = vim.deepcopy(context)

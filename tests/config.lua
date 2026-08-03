@@ -26,6 +26,11 @@ local function run()
     { "siblings" },
     "nearby definitions should be the only section collapsed by default"
   )
+  assert_equal(
+    second.sections.collapse_secondary,
+    true,
+    "unmatched structural candidates should be secondary to semantic usage by default"
+  )
   assert_equal(second.sections.max_items, {}, "section limits should fall back to max_items")
   assert_equal(second.sections.hidden, {}, "sections should remain visible by default")
   assert_equal(second.sections.order, {}, "relation registry order should remain the default")
@@ -46,6 +51,7 @@ local function run()
       inbound = { max_importers = 12 },
     },
     sections = {
+      collapse_secondary = false,
       default_collapsed = { "references", "siblings" },
       hidden = { "structural" },
       max_items = { references = 12 },
@@ -63,6 +69,11 @@ local function run()
     merged.sections.default_collapsed,
     { "references", "siblings" },
     "configured default-collapsed sections should replace the default list"
+  )
+  assert_equal(
+    merged.sections.collapse_secondary,
+    false,
+    "secondary structural collapsing should remain configurable"
   )
   assert_equal(
     merged.sections.max_items.references,
@@ -93,6 +104,10 @@ local function run()
   )
 
   local invalid_options = {
+    {
+      options = { sections = { collapse_secondary = "yes" } },
+      message = "sections.collapse_secondary must be a boolean",
+    },
     {
       options = { sections = { default_collapsed = { siblings = true } } },
       message = "sections.default_collapsed must be a list of section IDs",

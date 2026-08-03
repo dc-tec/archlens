@@ -13,45 +13,22 @@ No LLM, hosted service, or persistent project index is required.
 
 ## Approach
 
-ArchLens follows the current symbol instead of building a permanent model of
-the repository. Tree-sitter provides immediate file structure, an attached LSP
-adds semantic relationships, and ast-grep finds structural candidates across
-the project. Results appear as each provider completes. Each relationship is
-labeled with its source.
+ArchLens analyzes the symbol under the cursor and its surrounding file context.
+It builds no repository-wide graph.
 
-Module dependencies and dependents come from a bounded in-memory scan. The scan
-is cached while you navigate and rebuilt when ArchLens is refreshed. It does
-not write an index to disk or start language servers for scanned files.
+Tree-sitter adds declarations, members, and module syntax. Attached language
+servers add calls, references, implementations, and type hierarchies. ast-grep
+adds structural matches. ripgrep finds files for reverse module lookup.
+ArchLens adds results as each provider completes and records the source of each
+relationship.
 
-Test and configuration references are grouped by their enclosing function or
-module. Each exact use remains available when a group is expanded. Filtered and
-truncated relationships are reported instead of silently disappearing.
+ArchLens limits project searches and visible rows. It hides external,
+generated, and vendored results by default. The pane reports filtered and
+omitted results.
 
-Semantic references covered by an incoming call are folded into that caller;
-its details retain the call-hierarchy method, reference method, and exact call
-sites. Non-call references remain separate. When semantic calls, references,
-implementations, or type hierarchy relationships are available, unmatched
-structural candidates start collapsed as secondary evidence; they remain
-expanded when structural analysis is the only usage source.
-
-Type-like focuses expose their Tree-sitter children as members. Language
-adapters can project canonical hierarchy relationships into familiar roles
-without changing their evidence: Go interfaces, for example, distinguish
-contracts they satisfy, interfaces that extend them, and concrete types that
-implement them. Unsupported semantic type relationships remain absent.
-
-Press `?` on a relationship to inspect its direction, anchor, provider methods,
-evidence classes, and retained occurrence sites without changing navigation
-state. The `Sources [?]` and `Analysis [?]` lines expose lifecycle state,
-duration, and retry details. Active provider names remain visible when they
-fit; at narrower widths ordinary states are summarized by count while
-failures, timeouts, unavailability, cancellation, and retries take priority.
-`Results [?]` compacts filtering, bounds, and provider caveats into one line;
-its details retain every exact message. Pressing `?` elsewhere opens the full
-pane key reference. Contributions from multiple providers remain independently
-visible.
-
-![ArchLens relationship evidence for a Rust reference](docs/assets/relationship-details.png)
+The graph uses language-neutral relationship types. Language adapters change
+labels and row presentation for language-specific concepts such as Go
+interfaces and Rust traits.
 
 ## Requirements
 
@@ -130,9 +107,42 @@ Inside the pane:
   status, or result summary; elsewhere it opens the complete key reference.
 - `r` refreshes the view; `q` closes it.
 
-Result sets are bounded, and external relationships are hidden by default. The
-pane reports active provider states and keeps a compact, inspectable summary of
-filtering, omissions, timeouts, and unavailable analysis.
+## Interpret results
+
+Each relationship row shows the provider that produced it. Press `?` on a row
+to view its direction, location, provider method, evidence class, and retained
+occurrences.
+
+`Sources [?]` lists the providers that contributed to the view. `Analysis [?]`
+appears while providers are queued, running, or retrying. Its details show the
+state, elapsed time, retry delay, and message for each provider. `Results [?]`
+reports filters, search limits, timeouts, and unavailable analysis. Its details
+show each complete message.
+
+Language-server calls, references, implementations, and type hierarchies are
+semantic relationships. ast-grep results are structural candidates. When
+semantic usage is available, ArchLens collapses unmatched structural matches.
+Expand the section to inspect them.
+
+If a semantic reference identifies an incoming call occurrence, ArchLens adds
+the reference evidence to the caller row. The details window shows the call and
+reference methods and the retained call sites. Other references remain in a
+separate section.
+
+ArchLens groups test and configuration references by their enclosing function
+or module. Expand a group to view each exact use.
+
+For a type focus, `Members` contains the children found by Tree-sitter.
+Language adapters can present type hierarchy relationships with language terms.
+For example, Go interfaces distinguish satisfied contracts, extended
+interfaces, and concrete implementations.
+
+Module dependencies and dependents use a bounded in-memory scan. ArchLens
+caches the scan while you navigate and rebuilds it when you refresh the pane.
+The scan writes no index to disk and starts no language servers for scanned
+files.
+
+![ArchLens relationship evidence for a Rust reference](docs/assets/relationship-details.png)
 
 ## Configuration
 
@@ -178,10 +188,10 @@ configured cold-start window and can be disabled through
 
 ## Language adapters
 
-[`lua/archlens/adapters.lua`](lua/archlens/adapters.lua) is the source of truth
-for language behavior. An adapter maps Neovim filetypes to a canonical language
-and can define Tree-sitter symbols and project markers, module analysis, an
-ast-grep parser and query, relationship presentation, or a combination of them.
+[`lua/archlens/adapters.lua`](lua/archlens/adapters.lua) defines the built-in
+language behavior. Each adapter maps Neovim filetypes to a canonical language.
+It can define Tree-sitter symbols and project markers, module analysis, an
+ast-grep parser and query, and relationship presentation.
 
 Additional adapters can be registered before ArchLens is used:
 

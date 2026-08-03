@@ -125,9 +125,11 @@ included, and additional project-relative path prefixes can be excluded:
 require("archlens").setup({
   sections = {
     default_collapsed = { "siblings" },
+    hidden = { "structural" },
     max_items = {
       references = 12,
     },
+    order = { "incoming", "outgoing", "references" },
   },
   filters = {
     include_vendored = true,
@@ -140,7 +142,14 @@ require("archlens").setup({
 Nearby definitions are collapsed by default. Section and context expansion is
 preserved when the pane is refreshed. Use an empty `default_collapsed` list to
 start with every section open; `max_items` at the top level remains the fallback
-for sections without an override.
+for sections without an override. `hidden` removes selected relationship kinds
+from the model while reporting their count. IDs listed in `order` appear first;
+unlisted relationship kinds retain their registry order.
+
+If a newly attached language server returns no semantic relationships,
+ArchLens retries once after three seconds. The retry only applies during the
+configured cold-start window and can be disabled through
+`lsp.cold_start_retry.enabled`.
 
 ## Language adapters
 
@@ -162,6 +171,41 @@ require("archlens.adapters").register("zig", {
   ast_grep = { language = "zig" },
 })
 ```
+
+## Provider extensions
+
+Project-analysis providers use the same registry as the built-in LSP,
+Tree-sitter module, and ast-grep providers. A provider decides whether it
+applies to the current focus, starts its work, calls `done` once with a graph
+delta, and returns a cancellation function:
+
+```lua
+local graph = require("archlens.graph")
+
+require("archlens.providers").register("ownership", {
+  order = 35,
+  label = "Ownership",
+  queued = false,
+  enabled = function(_, _, config)
+    local options = config.providers.ownership or {}
+    return options.enabled == true
+  end,
+  start = function(context, bufnr, config, done)
+    local result = graph.delta()
+    -- Add canonical graph edges, then complete the provider.
+    done(result)
+    return function() end
+  end,
+})
+```
+
+Register new relationship kinds through
+[`lua/archlens/relations.lua`](lua/archlens/relations.lua). Provider-specific
+options belong under `providers.<id>`.
+
+When more than one attached LSP supports location-based relationships,
+ArchLens queries each client and keeps their evidence separate. Opaque call
+hierarchy items remain with the client that resolved the focused symbol.
 
 ## Development
 

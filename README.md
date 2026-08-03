@@ -9,7 +9,7 @@ No LLM, hosted service, or persistent project index is required.
 > [!NOTE]
 > ArchLens is experimental. Its interface and language support may change.
 
-![ArchLens showing relationships around a Go function](docs/assets/overview.png)
+![ArchLens exploring Go type relationships and following the source cursor](docs/assets/archlens-demo.gif)
 
 ## Approach
 

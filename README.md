@@ -32,6 +32,8 @@ providers that are still pending.
 Each source is optional. ArchLens shows the relationships it can find, labels
 their source, and reports missing or truncated results. It provides navigable
 context around the current symbol rather than an exhaustive project graph.
+Relationship details expose the direction, anchor, provider method, evidence
+class, and retained occurrence sites without changing navigation state.
 
 ## Installation
 
@@ -88,6 +90,7 @@ Inside the pane:
 - `<Tab>` and `<S-Tab>` move between actionable rows.
 - `]s` and `[s` move between sections.
 - `<Space>` or `za` toggles a section or context group.
+- `?` explains the selected relationship, section, or context group.
 - `r` refreshes the view; `q` closes it.
 
 External relationships are hidden and result sets are bounded by default. The
@@ -97,7 +100,7 @@ pane reports omissions.
 
 `require("archlens").setup()` works without options. The configuration API is
 still evolving; current options and defaults live in
-[`lua/archlens/init.lua`](lua/archlens/init.lua).
+[`lua/archlens/config.lua`](lua/archlens/config.lua).
 
 Vendored and generated relationships are hidden by default. They can be
 included, or additional project-relative path prefixes can be excluded:

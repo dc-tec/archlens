@@ -1,4 +1,5 @@
 local renderer = require("archlens.render")
+local details = require("archlens.details")
 
 local M = {}
 local namespace = vim.api.nvim_create_namespace("archlens")
@@ -124,6 +125,16 @@ local function configure_buffer(session, actions)
   map(buffer, "h", actions.back, "ArchLens back")
   map(buffer, "r", actions.refresh, "ArchLens refresh")
   map(buffer, "q", actions.close, "ArchLens close")
+  map(buffer, "?", function()
+    if not valid_window(session.window) or not session.rendered then
+      return
+    end
+    local line = vim.api.nvim_win_get_cursor(session.window)[1]
+    local selection = session.rendered.details and session.rendered.details[line]
+    if selection then
+      details.open(selection, session.model)
+    end
+  end, "ArchLens relationship details")
   local function toggle_section()
     local target = target_at_cursor(session)
     if target and target.action == "expand" then

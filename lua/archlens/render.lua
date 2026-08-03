@@ -43,12 +43,16 @@ function M.build(model, opts)
   local collapsed = opts.collapsed or {}
   local lines = {}
   local targets = {}
+  local details = {}
   local highlights = {}
 
-  local function add(text, target, highlight)
+  local function add(text, target, highlight, detail)
     lines[#lines + 1] = truncate(text, width)
     if target then
       targets[#lines] = target
+    end
+    if detail then
+      details[#lines] = detail
     end
     if highlight then
       highlights[#highlights + 1] = { line = #lines - 1, group = highlight }
@@ -114,26 +118,35 @@ function M.build(model, opts)
   for _, section in ipairs(model.sections or {}) do
     add("")
     local is_collapsed = collapsed[section.id] == true
+    local section_detail = { section = section }
     add(
       string.format("%s %s  %d", is_collapsed and "▸" or "▾", section.label, #section.rows),
       { action = "toggle", section_id = section.id },
-      "Special"
+      "Special",
+      section_detail
     )
     if not is_collapsed and section.anchor then
-      add(string.format("  %s %s", section.anchor.prefix, section.anchor.label), nil, "Comment")
+      add(
+        string.format("  %s %s", section.anchor.prefix, section.anchor.label),
+        nil,
+        "Comment",
+        section_detail
+      )
     end
     local function add_row(row, indent)
+      local row_detail = { section = section, row = row }
       add(
         string.format("%s%s %s", indent, section.marker, row.name),
         { action = "open", row = row },
-        "Normal"
+        "Normal",
+        row_detail
       )
       local badge = row.evidence and row.evidence.provider or "lsp"
       local detail = location_label(row)
       if detail ~= "" then
-        add(string.format("%s  %s · %s", indent, detail, badge), nil, "Comment")
+        add(string.format("%s  %s · %s", indent, detail, badge), nil, "Comment", row_detail)
       else
-        add(string.format("%s  %s", indent, badge), nil, "Comment")
+        add(string.format("%s  %s", indent, badge), nil, "Comment", row_detail)
       end
     end
 
@@ -144,6 +157,7 @@ function M.build(model, opts)
       for index = 1, limit do
         local group = section.groups[index]
         local is_group_expanded = expanded_groups[group.id] == true
+        local group_detail = { section = section, group = group }
         add(
           string.format(
             "  %s %s  %d",
@@ -163,7 +177,8 @@ function M.build(model, opts)
               resolve_on_focus = group.resolve_on_focus,
             },
           },
-          "Identifier"
+          "Identifier",
+          group_detail
         )
         if is_group_expanded then
           local group_limit = math.min(#group.rows, group_limits[group.id] or max_items)
@@ -174,7 +189,7 @@ function M.build(model, opts)
             add(string.format("    … %d more uses", #group.rows - group_limit), {
               action = "expand_group",
               group_id = group.id,
-            }, "MoreMsg")
+            }, "MoreMsg", group_detail)
           end
         end
       end
@@ -188,7 +203,7 @@ function M.build(model, opts)
       add(string.format("  … %d more%s", #items - limit, suffix), {
         action = "expand",
         section_id = section.id,
-      }, "MoreMsg")
+      }, "MoreMsg", section_detail)
     end
   end
 
@@ -199,11 +214,13 @@ function M.build(model, opts)
 
   add("")
   add("<CR> open  f focus  <BS> back  <Tab> next", nil, "Comment")
-  add("<Space> toggle  [s/]s sections  r refresh  q close", nil, "Comment")
+  add("<Space> toggle  [s/]s sections  ? details", nil, "Comment")
+  add("r refresh  q close", nil, "Comment")
 
   return {
     lines = lines,
     targets = targets,
+    details = details,
     highlights = highlights,
   }
 end

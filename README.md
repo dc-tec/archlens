@@ -17,6 +17,13 @@ structure, LSP adds semantic relationships, and ast-grep searches the project
 for related patterns. Results are assembled on demand without a separate
 project index.
 
+Reverse module relationships use a bounded in-memory import scan. The scan is
+cached while you navigate the project and rebuilt when ArchLens is refreshed;
+it does not write an index to disk or start language servers for scanned files.
+
+Test and configuration uses are grouped by their enclosing function or module.
+Expanding a group keeps each exact use site available for navigation.
+
 Local Tree-sitter structure is rendered immediately. LSP and ast-grep results
 are merged into the open pane as they arrive, while the pane identifies any
 providers that are still pending.
@@ -56,6 +63,9 @@ Then add the package to a Nixvim module:
 }
 ```
 
+Ripgrep enables the reverse module scan. The rest of ArchLens remains available
+without it, and the pane reports when imported-by analysis cannot run.
+
 ## Usage
 
 Commands:
@@ -71,12 +81,12 @@ and available analysis providers.
 
 Inside the pane:
 
-- `<CR>` opens a relationship, or toggles the selected section.
+- `<CR>` opens a relationship, or toggles the selected section or context group.
 - `f` focuses a relationship and adds the previous symbol to navigation history.
 - `<BS>` or `h` returns to the previous focus.
 - `<Tab>` and `<S-Tab>` move between actionable rows.
 - `]s` and `[s` move between sections.
-- `<Space>` or `za` toggles a section.
+- `<Space>` or `za` toggles a section or context group.
 - `r` refreshes the view; `q` closes it.
 
 External relationships are hidden and result sets are bounded by default. The

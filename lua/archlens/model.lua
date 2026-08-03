@@ -653,25 +653,7 @@ local function provider_activity(runs)
   return activity
 end
 
-function M.build(context, snapshot, opts)
-  opts = opts or {}
-  snapshot = snapshot or graph.new(context)
-  assert(snapshot.version == 1, "unsupported relationship graph version")
-  local pending_providers = vim.tbl_map(function(provider)
-    return provider.label
-  end, snapshot.pending or {})
-  local resolving_lsp = false
-  for _, provider in ipairs(snapshot.pending or {}) do
-    if provider.id == "lsp" then
-      resolving_lsp = true
-      break
-    end
-  end
-  local filters = vim.deepcopy(opts.filters or {})
-  if filters.include_external == nil then
-    filters.include_external = opts.include_external == true
-  end
-  local adapter_issues, report_adapter_issue = collect_adapter_issues(context)
+local function normalize_graph(snapshot, context, filters, report_adapter_issue)
   local grouped, hidden = normalize_edges(snapshot, context, filters, report_adapter_issue)
   local has_semantic_usage = #grouped.incoming > 0
     or #grouped.test_references > 0
@@ -679,7 +661,61 @@ function M.build(context, snapshot, opts)
     or #grouped.implementations > 0
     or #grouped.supertypes > 0
     or #grouped.subtypes > 0
+  return {
+    grouped = grouped,
+    hidden = hidden,
+    has_semantic_usage = has_semantic_usage,
+  }
+end
 
+local function build_sections(context, normalized, section_policy, report_adapter_issue)
+  local sections = {}
+  local hidden_sections = {}
+  for _, section_id in ipairs(section_policy.hidden or {}) do
+    hidden_sections[section_id] = true
+  end
+
+  local hidden_count = 0
+  for _, relation in ipairs(section_relations(section_policy)) do
+    local rows = normalized.grouped[relation.id]
+    if rows and #rows > 0 then
+      if hidden_sections[relation.id] then
+        hidden_count = hidden_count + #rows
+      else
+        for _, projection in
+          ipairs(projected_sections(context, relation, rows, report_adapter_issue))
+        do
+          sections[#sections + 1] = {
+            id = relation.id,
+            view_id = projection.key == "default" and relation.id
+              or relation.id .. ":" .. projection.key,
+            label = projection.label,
+            marker = relation.marker,
+            rows = projection.rows,
+            groups = container_groups(relation, projection.rows),
+            anchor = section_anchor(projection.rows),
+            show_kind = projection.show_kind,
+            default_collapsed = section_policy.collapse_secondary ~= false
+              and relation.source == "structural"
+              and normalized.has_semantic_usage,
+          }
+        end
+      end
+    end
+  end
+  return sections, hidden_count
+end
+
+local function build_result(
+  context,
+  snapshot,
+  normalized,
+  sections,
+  section_hidden_count,
+  pending_providers,
+  resolving_lsp,
+  adapter_issues
+)
   local notes = {}
   local result_parts = {}
   local result_part_indexes = {}
@@ -728,7 +764,7 @@ function M.build(context, snapshot, opts)
     add_result_part("call hierarchy unavailable", "info")
   end
   for _, hidden_kind in ipairs({ "vendored", "generated", "excluded", "external" }) do
-    local count = hidden[hidden_kind]
+    local count = normalized.hidden[hidden_kind]
     if count > 0 then
       filtered_count = filtered_count + count
       notes[#notes + 1] =
@@ -773,41 +809,6 @@ function M.build(context, snapshot, opts)
       "info"
     )
   end
-
-  local sections = {}
-  local section_policy = opts.sections or {}
-  local hidden_sections = {}
-  for _, section_id in ipairs(section_policy.hidden or {}) do
-    hidden_sections[section_id] = true
-  end
-  local section_hidden_count = 0
-  for _, relation in ipairs(section_relations(section_policy)) do
-    local rows = grouped[relation.id]
-    if rows and #rows > 0 then
-      if hidden_sections[relation.id] then
-        section_hidden_count = section_hidden_count + #rows
-      else
-        for _, projection in
-          ipairs(projected_sections(context, relation, rows, report_adapter_issue))
-        do
-          sections[#sections + 1] = {
-            id = relation.id,
-            view_id = projection.key == "default" and relation.id
-              or relation.id .. ":" .. projection.key,
-            label = projection.label,
-            marker = relation.marker,
-            rows = projection.rows,
-            groups = container_groups(relation, projection.rows),
-            anchor = section_anchor(projection.rows),
-            show_kind = projection.show_kind,
-            default_collapsed = section_policy.collapse_secondary ~= false
-              and relation.source == "structural"
-              and has_semantic_usage,
-          }
-        end
-      end
-    end
-  end
   if section_hidden_count > 0 then
     filtered_count = filtered_count + section_hidden_count
     notes[#notes + 1] = string.format(
@@ -841,6 +842,51 @@ function M.build(context, snapshot, opts)
     part.order = nil
   end
 
+  local result
+  if #notes > 0 then
+    result = {
+      parts = result_parts,
+      notes = notes,
+      severity = result_severity,
+    }
+  end
+  return notes, result
+end
+
+function M.build(context, snapshot, opts)
+  opts = opts or {}
+  snapshot = snapshot or graph.new(context)
+  assert(snapshot.version == 1, "unsupported relationship graph version")
+
+  local pending_providers = vim.tbl_map(function(provider)
+    return provider.label
+  end, snapshot.pending or {})
+  local resolving_lsp = false
+  for _, provider in ipairs(snapshot.pending or {}) do
+    if provider.id == "lsp" then
+      resolving_lsp = true
+      break
+    end
+  end
+
+  local filters = vim.deepcopy(opts.filters or {})
+  if filters.include_external == nil then
+    filters.include_external = opts.include_external == true
+  end
+  local adapter_issues, report_adapter_issue = collect_adapter_issues(context)
+  local normalized = normalize_graph(snapshot, context, filters, report_adapter_issue)
+  local sections, section_hidden_count =
+    build_sections(context, normalized, opts.sections or {}, report_adapter_issue)
+  local notes, result = build_result(
+    context,
+    snapshot,
+    normalized,
+    sections,
+    section_hidden_count,
+    pending_providers,
+    resolving_lsp,
+    adapter_issues
+  )
   local providers = vim.tbl_map(function(contributor)
     return contributor.label
   end, snapshot.contributors or {})
@@ -851,11 +897,7 @@ function M.build(context, snapshot, opts)
     focus = context,
     sections = sections,
     notes = notes,
-    result = #notes > 0 and {
-      parts = result_parts,
-      notes = notes,
-      severity = result_severity,
-    } or nil,
+    result = result,
     providers = providers,
     provider_activity = provider_activity(runs),
     provider_runs = runs,

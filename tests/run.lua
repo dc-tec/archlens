@@ -294,6 +294,180 @@ local function run()
     "subtypes should use the downward marker"
   )
 
+  local go_type_context = vim.deepcopy(context)
+  go_type_context.name = "ClusterActions"
+  go_type_context.kind = vim.lsp.protocol.SymbolKind.Interface
+  go_type_context.kind_name = "Interface"
+  go_type_context.language = "go"
+  go_type_context.supports_calls = false
+  go_type_context.syntax_node_type = "type_spec"
+  go_type_context.syntax = {
+    provider = "Tree-sitter",
+    ancestors = {},
+    children = {
+      vim.tbl_extend("force", call_context("IsHealthy", context.location.uri, 11), {
+        kind = vim.lsp.protocol.SymbolKind.Method,
+        kind_name = "Method",
+      }),
+    },
+    siblings = {},
+  }
+  local go_type_graph = graph.new(go_type_context)
+  local function related_type(name, line, kind)
+    local item = {
+      name = name,
+      kind = kind,
+      uri = context.location.uri,
+      range = {
+        start = { line = line, character = 0 },
+        ["end"] = { line = line + 1, character = 0 },
+      },
+      selectionRange = {
+        start = { line = line, character = 5 },
+        ["end"] = { line = line, character = 5 + #name },
+      },
+    }
+    local related_context = model.context_from_item(item, {
+      id = context.client_id,
+      name = context.client_name,
+      offset_encoding = "utf-8",
+      root_dir = context.root_dir,
+      supports_calls = false,
+    })
+    related_context.language = "go"
+    related_context.wire_type_item = item
+    return graph.node_from_context(related_context)
+  end
+  local satisfied = related_type("ScaleDownPodClient", 40, vim.lsp.protocol.SymbolKind.Interface)
+  local extended = related_type("RaftActions", 50, vim.lsp.protocol.SymbolKind.Interface)
+  local implemented = related_type("Client", 60, vim.lsp.protocol.SymbolKind.Struct)
+  graph.add_edge(
+    go_type_graph,
+    graph.edge("supertypes", go_type_graph.focus, satisfied, {
+      provider = "gopls",
+      method = "typeHierarchy/supertypes",
+      class = "semantic",
+    })
+  )
+  for _, related in ipairs({ extended, implemented }) do
+    graph.add_edge(
+      go_type_graph,
+      graph.edge("subtypes", related, go_type_graph.focus, {
+        provider = "gopls",
+        method = "typeHierarchy/subtypes",
+        class = "semantic",
+      })
+    )
+  end
+  add_location(go_type_graph, "implementations", vim.deepcopy(implemented.location), {
+    name = "type Client struct {",
+  })
+  add_location(go_type_graph, "implementations", {
+    uri = context.location.uri,
+    range = {
+      start = { line = 70, character = 0 },
+      ["end"] = { line = 70, character = 18 },
+    },
+  }, { name = "type Adapter struct {" })
+  add_location(go_type_graph, "structural", {
+    uri = context.location.uri,
+    range = {
+      start = { line = 80, character = 0 },
+      ["end"] = { line = 80, character = 14 },
+    },
+  }, { name = "ClusterActions" })
+  local go_type_map = model.build(go_type_context, go_type_graph, {})
+  assert_equal(
+    vim.tbl_map(function(section)
+      return { section.id, section.view_id, section.label }
+    end, go_type_map.sections),
+    {
+      { "children", "children", "Members" },
+      { "supertypes", "supertypes:satisfies", "Satisfies" },
+      { "subtypes", "subtypes:extended", "Extended by" },
+      { "subtypes", "subtypes:implemented", "Implemented by" },
+      { "implementations", "implementations", "Implementations" },
+      { "structural", "structural", "Structural matches" },
+    },
+    "Go type roles should project into independently addressable view sections"
+  )
+  assert_equal(
+    go_type_map.sections[5].rows[1].name,
+    "Adapter",
+    "Go implementation declarations should render as concise type names"
+  )
+  assert(
+    go_type_map.sections[6].default_collapsed,
+    "semantic type relationships should make structural matches secondary"
+  )
+  assert(
+    not contains(go_type_map.notes, "has no call hierarchy here"),
+    "type focuses should not report an inapplicable call hierarchy"
+  )
+  local go_type_render = render.build(go_type_map, { width = 100 })
+  assert(contains(go_type_render.lines, "▾ Members  1"), "type children should render as members")
+  assert(contains(go_type_render.lines, "▾ Satisfies  1"), "Go parent contracts should render")
+  assert(
+    contains(go_type_render.lines, "▾ Extended by  1"),
+    "Go interface extensions should render"
+  )
+  assert(
+    contains(go_type_render.lines, "  ↓ RaftActions  Interface"),
+    "projected type rows should retain their related kind"
+  )
+  assert(
+    contains(go_type_render.lines, "▾ Implemented by  1"),
+    "Go concrete type-hierarchy results should render as implementations"
+  )
+  local collapsed_go_types = render.build(go_type_map, {
+    width = 100,
+    collapsed = { subtypes = true },
+  })
+  assert(
+    contains(collapsed_go_types.lines, "▸ Extended by  1")
+      and contains(collapsed_go_types.lines, "▸ Implemented by  1"),
+    "canonical collapse policy should apply to every projected relation section"
+  )
+
+  local no_call_context = vim.deepcopy(context)
+  no_call_context.supports_calls = false
+  local no_call_map = model.build(no_call_context, graph.new(no_call_context), {})
+  assert(
+    contains(no_call_map.notes, "has no call hierarchy here"),
+    "callable focuses should still explain unavailable call hierarchy"
+  )
+
+  local ocaml_type_context = vim.deepcopy(go_type_context)
+  ocaml_type_context.name = "pull"
+  ocaml_type_context.kind = vim.lsp.protocol.SymbolKind.TypeParameter
+  ocaml_type_context.kind_name = "Type"
+  ocaml_type_context.language = "ocaml"
+  ocaml_type_context.location.range = {
+    start = { line = 10, character = 5 },
+    ["end"] = { line = 10, character = 9 },
+  }
+  local ocaml_type_graph = graph.new(ocaml_type_context)
+  add_location(ocaml_type_graph, "references", {
+    uri = ocaml_type_context.location.uri,
+    range = {
+      start = { line = 10, character = 0 },
+      ["end"] = { line = 10, character = 11 },
+    },
+  }, { name = "type pull =" })
+  add_location(ocaml_type_graph, "references", {
+    uri = ocaml_type_context.location.uri,
+    range = {
+      start = { line = 20, character = 8 },
+      ["end"] = { line = 20, character = 12 },
+    },
+  }, { name = "pull" })
+  local ocaml_type_map = model.build(ocaml_type_context, ocaml_type_graph, {})
+  assert_equal(
+    #ocaml_type_map.sections[1].rows,
+    1,
+    "overlapping type declarations should be suppressed while real references remain"
+  )
+
   local implementation_context = vim.deepcopy(context)
   implementation_context.syntax = {
     provider = "Tree-sitter",

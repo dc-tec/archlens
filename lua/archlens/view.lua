@@ -86,7 +86,10 @@ local function configure_buffer(session, actions)
       return false
     end
     for _, section in ipairs(session.model and session.model.sections or {}) do
-      if section.id == section_id then
+      if (section.view_id or section.id) == section_id then
+        if section.view_id and session.collapsed[section.id] ~= nil then
+          return session.collapsed[section.id]
+        end
         return section.default_collapsed == true
       end
     end
@@ -127,7 +130,7 @@ local function configure_buffer(session, actions)
     session.group_limits = {}
     session.collapsed = {}
     for _, section in ipairs(session.model and session.model.sections or {}) do
-      session.collapsed[section.id] = true
+      session.collapsed[section.view_id or section.id] = true
     end
     M.render(session, session.model, session.options)
   end
@@ -138,7 +141,7 @@ local function configure_buffer(session, actions)
     session.group_limits = {}
     session.collapsed = {}
     for _, section in ipairs(session.model and session.model.sections or {}) do
-      session.expanded[section.id] = true
+      session.expanded[section.view_id or section.id] = true
       for _, group in ipairs(section.groups or {}) do
         session.expanded_groups[group.id] = true
         session.group_limits[group.id] = #group.rows
@@ -157,7 +160,7 @@ local function configure_buffer(session, actions)
     elseif target.action == "toggle_group" then
       toggle_group(target.group_id)
     elseif target.action == "expand_group" then
-      expand_group(target.group_id, target.section_id)
+      expand_group(target.group_id, target.relation_id or target.section_id)
     elseif target.action == "toggle" then
       toggle_section_collapse(target.section_id)
     elseif target.row then
@@ -192,7 +195,7 @@ local function configure_buffer(session, actions)
     elseif target and target.action == "toggle_group" then
       toggle_group(target.group_id)
     elseif target and target.action == "expand_group" then
-      expand_group(target.group_id, target.section_id)
+      expand_group(target.group_id, target.relation_id or target.section_id)
     elseif target and target.action == "toggle" then
       toggle_section_collapse(target.section_id)
     end

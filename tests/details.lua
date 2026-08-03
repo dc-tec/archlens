@@ -114,6 +114,23 @@ assert(contains(structural_lines, "Direction   Incoming — related item → foc
 assert(contains(structural_lines, "Anchor      Focus — IsBlueGreenStrategy"))
 assert(contains(structural_lines, "Confidence  Structural candidate"))
 
+local projected_subtype = vim.deepcopy(section)
+projected_subtype.id = "subtypes"
+projected_subtype.view_id = "subtypes:extended"
+projected_subtype.label = "Extended by"
+projected_subtype.anchor = nil
+projected_subtype.rows[1].name = "RaftActions"
+projected_subtype.rows[1].evidence = {
+  provider = "gopls",
+  method = "typeHierarchy/subtypes",
+  class = "semantic",
+}
+local projected_lines =
+  details.lines({ section = projected_subtype, row = projected_subtype.rows[1] }, model)
+assert(contains(projected_lines, "Direction   Incoming — related item → focus"))
+assert(contains(projected_lines, "Method      typeHierarchy/subtypes"))
+assert(contains(projected_lines, "Item        RaftActions"))
+
 local corroborated = vim.deepcopy(structural)
 corroborated.id = "references"
 corroborated.label = "Referenced across project"

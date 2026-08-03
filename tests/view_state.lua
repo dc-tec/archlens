@@ -206,6 +206,72 @@ local function run()
 
   vim.api.nvim_win_close(session.window, true)
   vim.api.nvim_set_current_win(source_window)
+
+  local projected_model = {
+    title = "ArchLens",
+    sections = {
+      {
+        id = "subtypes",
+        view_id = "subtypes:extended",
+        label = "Extended by",
+        marker = "↓",
+        rows = { row("subtype:interface", "Contract", 41) },
+      },
+      {
+        id = "subtypes",
+        view_id = "subtypes:implemented",
+        label = "Implemented by",
+        marker = "↓",
+        rows = { row("subtype:struct", "Concrete", 42) },
+      },
+    },
+  }
+  local projected_session = {
+    expanded = {},
+    expanded_groups = {},
+    group_limits = {},
+    collapsed = {},
+  }
+  view.ensure(projected_session, options, {
+    open = noop,
+    focus = noop,
+    back = noop,
+    refresh = noop,
+    close = noop,
+    dismiss = noop,
+  })
+  view.render(projected_session, projected_model, options)
+  local projected_mappings = {}
+  for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(projected_session.buffer, "n")) do
+    projected_mappings[mapping.lhs] = mapping.callback
+  end
+  local extended_line = vim.fn.index(projected_session.rendered.lines, "▾ Extended by  1") + 1
+  assert(extended_line > 0, "the first projected subtype section should render")
+  vim.api.nvim_win_set_cursor(projected_session.window, { extended_line, 0 })
+  local projected_toggle = projected_mappings["<Space>"] or projected_mappings[" "]
+  projected_toggle()
+  equal(
+    projected_session.collapsed,
+    { ["subtypes:extended"] = true },
+    "projected sections should keep independent collapse state"
+  )
+  assert(
+    contains(projected_session.rendered.lines, "▸ Extended by  1")
+      and contains(projected_session.rendered.lines, "▾ Implemented by  1"),
+    "collapsing one projected section must not collapse its sibling"
+  )
+  projected_mappings.zM()
+  equal(projected_session.collapsed, {
+    ["subtypes:extended"] = true,
+    ["subtypes:implemented"] = true,
+  }, "collapse all should address projected view identities")
+  projected_mappings.zR()
+  equal(projected_session.expanded, {
+    ["subtypes:extended"] = true,
+    ["subtypes:implemented"] = true,
+  }, "expand all should address projected view identities")
+  vim.api.nvim_win_close(projected_session.window, true)
+  vim.api.nvim_set_current_win(source_window)
 end
 
 local ok, err = xpcall(run, debug.traceback)

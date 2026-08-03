@@ -68,9 +68,16 @@ failures, timeouts, unavailability, cancellation, and retries take priority.
 
 Semantic references covered by incoming-call occurrences are folded into the
 caller row and remain inspectable with `?`. Non-call references stay separate.
-When semantic call or reference coverage exists, unmatched structural
-candidates start collapsed as secondary evidence. They start expanded when
-structural analysis is the only available usage source.
+When semantic calls, references, implementations, or type hierarchy
+relationships exist, unmatched structural candidates start collapsed as
+secondary evidence. They start expanded when structural analysis is the only
+available usage source.
+
+Type-like focuses show their Tree-sitter children as members. Language
+adapters may project canonical type hierarchy relationships into familiar
+roles. For example, Go interfaces distinguish satisfied contracts, extending
+interfaces, and concrete implementations. Unsupported semantic type
+relationships remain absent.
 
 ==============================================================================
 CONFIGURATION                                         *archlens-configuration*
@@ -183,7 +190,8 @@ pane from opening.
 LANGUAGE ADAPTERS                                          *archlens-adapters*
 
 Language adapters define Tree-sitter symbols, root markers, module analysis,
-and ast-grep behavior. Register an additional adapter before opening ArchLens:
+relationship presentation, and ast-grep behavior. Register an additional
+adapter before opening ArchLens:
 >lua
 
     require("archlens.adapters").register("zig", {
@@ -196,6 +204,14 @@ and ast-grep behavior. Register an additional adapter before opening ArchLens:
       ast_grep = { language = "zig" },
     })
 <
+
+Optional `presentation.section(context, relation, row)` and
+`presentation.row(context, relation, row)` hooks adapt relationship labels and
+concise row names to language semantics. A section hook may return `key`,
+`label`, `order`, or `show_kind`; a row hook may return `name` or `kind_name`.
+A presentation key creates an independently collapsible view section while
+the underlying relationship ID, direction, evidence, filtering, and details
+remain canonical. Presentation hooks should treat their inputs as read-only.
 
 The focused relationship graph is defined in `lua/archlens/graph.lua`.
 Relationship names, directions, and ordering are registered in

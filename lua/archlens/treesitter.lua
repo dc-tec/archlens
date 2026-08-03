@@ -8,6 +8,7 @@ local kind_by_label = {
   Class = vim.lsp.protocol.SymbolKind.Class,
   Constant = vim.lsp.protocol.SymbolKind.Constant,
   Enum = vim.lsp.protocol.SymbolKind.Enum,
+  EnumMember = vim.lsp.protocol.SymbolKind.EnumMember,
   Field = vim.lsp.protocol.SymbolKind.Field,
   Function = vim.lsp.protocol.SymbolKind.Function,
   Implementation = vim.lsp.protocol.SymbolKind.Namespace,
@@ -42,29 +43,44 @@ local function synthetic_name(node, bufnr, adapter)
   return adapter.treesitter.synthetic_name(node:type(), text)
 end
 
-local function name_node(node, bufnr, adapter)
+local function name_candidates(node, bufnr, adapter)
   for _, field in ipairs(adapter.treesitter.name_fields) do
     local nodes = node:field(field)
-    if nodes and nodes[1] then
-      return nodes[1], node_text(nodes[1], bufnr)
+    local candidates = {}
+    for _, target in ipairs(nodes or {}) do
+      local name = node_text(target, bufnr)
+      if name and name ~= "" then
+        candidates[#candidates + 1] = { target = target, name = name }
+      end
+    end
+    if #candidates > 0 then
+      return candidates
     end
   end
+  local candidates = {}
   for index = 0, node:named_child_count() - 1 do
     local child = node:named_child(index)
     if adapter.treesitter.name_node_types[child:type()] then
-      return child, node_text(child, bufnr)
+      local name = node_text(child, bufnr)
+      if name and name ~= "" then
+        candidates[#candidates + 1] = { target = child, name = name }
+      end
     end
+  end
+  if #candidates > 0 then
+    return candidates
   end
   for index = 0, node:named_child_count() - 1 do
     local child = node:named_child(index)
     if adapter.treesitter.symbol_types[child:type()] then
-      local target, name = name_node(child, bufnr, adapter)
-      if name and name ~= "" then
-        return target, name
+      local nested = name_candidates(child, bufnr, adapter)
+      if #nested > 0 then
+        return nested
       end
     end
   end
-  return nil, synthetic_name(node, bufnr, adapter)
+  local name = synthetic_name(node, bufnr, adapter)
+  return name and { { name = name } } or {}
 end
 
 local function node_range(node)
@@ -73,6 +89,18 @@ local function node_range(node)
     start = { line = start_row, character = start_col },
     ["end"] = { line = end_row, character = end_col },
   }
+end
+
+local function name_candidate(node, bufnr, adapter, position)
+  local candidates = name_candidates(node, bufnr, adapter)
+  if position then
+    for _, candidate in ipairs(candidates) do
+      if candidate.target and model.range_contains(node_range(candidate.target), position) then
+        return candidate
+      end
+    end
+  end
+  return candidates[1]
 end
 
 local function root_for(bufnr, adapter)
@@ -97,12 +125,13 @@ local function is_symbol(adapter, node, bufnr)
   if not label_for(adapter, node) then
     return false
   end
-  local _, name = name_node(node, bufnr, adapter)
-  return name ~= nil and name ~= ""
+  return #name_candidates(node, bufnr, adapter) > 0
 end
 
-local function item_from_node(node, bufnr, adapter)
-  local name_target, name = name_node(node, bufnr, adapter)
+local function item_from_node(node, bufnr, adapter, candidate)
+  candidate = candidate or name_candidate(node, bufnr, adapter)
+  local name_target = candidate and candidate.target
+  local name = candidate and candidate.name
   local range = node_range(node)
   return {
     name = name,
@@ -113,8 +142,8 @@ local function item_from_node(node, bufnr, adapter)
   }
 end
 
-local function context_from_node(node, bufnr, adapter, provider)
-  local context = model.context_from_item(item_from_node(node, bufnr, adapter), provider)
+local function context_from_node(node, bufnr, adapter, provider, candidate)
+  local context = model.context_from_item(item_from_node(node, bufnr, adapter, candidate), provider)
   context.language = adapter.language
   context.syntax_node_type = node:type()
   context.kind_name = label_for(adapter, node) or context.kind_name
@@ -134,13 +163,35 @@ local function same_location(left, right)
     and vim.deep_equal(left_range, right_range)
 end
 
+local function same_symbol_identity(left, right)
+  local left_location = left and left.location
+  local right_location = right and right.location
+  local left_range = left_location and left_location.range
+  local right_range = right_location and right_location.range
+  return left
+    and right
+    and left.name == right.name
+    and left_location
+    and right_location
+    and left_location.uri == right_location.uri
+    and left_range
+    and right_range
+    and (
+      same_location(left, right)
+      or model.range_contains(left_range, right_range.start)
+      or model.range_contains(right_range, left_range.start)
+    )
+end
+
 local function direct_symbols(container, current, bufnr, adapter, provider)
   local rows = {}
   local function visit(node)
     for index = 0, node:named_child_count() - 1 do
       local child = node:named_child(index)
       if child:id() ~= current:id() and is_symbol(adapter, child, bufnr) then
-        rows[#rows + 1] = context_from_node(child, bufnr, adapter, provider)
+        for _, candidate in ipairs(name_candidates(child, bufnr, adapter)) do
+          rows[#rows + 1] = context_from_node(child, bufnr, adapter, provider, candidate)
+        end
       elseif child:id() ~= current:id() then
         visit(child)
       end
@@ -148,6 +199,19 @@ local function direct_symbols(container, current, bufnr, adapter, provider)
   end
   visit(container)
   return rows
+end
+
+local function first_symbol_descendant(node, bufnr, adapter)
+  for index = 0, node:named_child_count() - 1 do
+    local child = node:named_child(index)
+    if is_symbol(adapter, child, bufnr) then
+      return child
+    end
+    local nested = first_symbol_descendant(child, bufnr, adapter)
+    if nested then
+      return nested
+    end
+  end
 end
 
 local function symbol_parent(node, bufnr, adapter)
@@ -185,6 +249,17 @@ local function merge_base(syntax_context, base_context)
       )
     )
   local merged = use_syntax_identity and syntax_context or vim.deepcopy(base_context)
+  if
+    use_syntax_identity
+    and not base_context.file_fallback
+    and base_context.kind
+    and base_context.kind ~= syntax_context.kind
+    and same_symbol_identity(syntax_context, base_context)
+  then
+    merged.kind = base_context.kind
+    merged.kind_name = base_context.kind_name
+    merged.detail = base_context.detail or merged.detail
+  end
   merged.client_id = base_context.client_id
   merged.client_name = base_context.client_name
   merged.position_encoding = base_context.position_encoding
@@ -233,6 +308,10 @@ function M.resolve(bufnr, position, base_context)
     position.character
   )
   while node and not is_symbol(adapter, node, bufnr) do
+    if adapter.treesitter.focus_wrappers[node:type()] then
+      node = first_symbol_descendant(node, bufnr, adapter)
+      break
+    end
     node = node:parent()
   end
   if not node then
@@ -246,13 +325,17 @@ function M.resolve(bufnr, position, base_context)
     root_dir = base_context and base_context.root_dir or root_for(bufnr, adapter),
     supports_calls = false,
   }
-  local syntax_context = context_from_node(node, bufnr, adapter, provider)
+  local candidate = name_candidate(node, bufnr, adapter, position)
+  local syntax_context = context_from_node(node, bufnr, adapter, provider, candidate)
   local context = merge_base(syntax_context, fallback_context)
 
   local ancestors = {}
   local parent = symbol_parent(node, bufnr, adapter)
   while parent do
-    table.insert(ancestors, 1, context_from_node(parent, bufnr, adapter, provider))
+    local ancestor = context_from_node(parent, bufnr, adapter, provider)
+    if not same_location(ancestor, syntax_context) then
+      table.insert(ancestors, 1, ancestor)
+    end
     parent = symbol_parent(parent, bufnr, adapter)
   end
 
@@ -478,13 +561,16 @@ function M.enclosing_containers(path, positions)
     end
     local container = function_node or module_node
     if container then
-      local name_target, name = name_node(container, parser_source, adapter)
+      local candidate = name_candidate(container, parser_source, adapter, position)
+      local name_target = candidate and candidate.target
+      local name = candidate and candidate.name
       if name and name ~= "" then
         local trail = {}
         current = container:parent()
         while current do
           if label_for(adapter, current) == "Module" then
-            local _, module_name = name_node(current, parser_source, adapter)
+            local module_candidate = name_candidate(current, parser_source, adapter)
+            local module_name = module_candidate and module_candidate.name
             if module_name and module_name ~= "" then
               table.insert(trail, 1, module_name)
             end

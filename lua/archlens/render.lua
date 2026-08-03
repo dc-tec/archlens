@@ -206,17 +206,17 @@ function M.build(model, opts)
 
   for _, section in ipairs(model.sections or {}) do
     add("")
-    local explicit_collapse = collapsed[section.id]
+    local state_id = section.view_id or section.id
+    local explicit_collapse = collapsed[state_id]
+    if explicit_collapse == nil and state_id ~= section.id then
+      explicit_collapse = collapsed[section.id]
+    end
     local is_collapsed = explicit_collapse == true
-      or (
-        explicit_collapse == nil
-        and not expanded[section.id]
-        and section.default_collapsed == true
-      )
+      or (explicit_collapse == nil and not expanded[state_id] and section.default_collapsed == true)
     local section_detail = { section = section }
     add(
       string.format("%s %s  %d", is_collapsed and "▸" or "▾", section.label, #section.rows),
-      { action = "toggle", section_id = section.id },
+      { action = "toggle", section_id = state_id, relation_id = section.id },
       "Special",
       section_detail
     )
@@ -230,8 +230,12 @@ function M.build(model, opts)
     end
     local function add_row(row, indent)
       local row_detail = { section = section, row = row }
+      local name = row.name
+      if section.show_kind and row.kind_name and row.kind_name ~= "" then
+        name = string.format("%s  %s", name, row.kind_name)
+      end
       add(
-        string.format("%s%s %s", indent, section.marker, row.name),
+        string.format("%s%s %s", indent, section.marker, name),
         { action = "open", row = row },
         "Normal",
         row_detail
@@ -248,7 +252,7 @@ function M.build(model, opts)
     local items = section.groups or section.rows
     local item_limit = section_max_items[section.id] or max_items
     local limit = is_collapsed and 0
-      or (expanded[section.id] and #items or math.min(#items, item_limit))
+      or (expanded[state_id] and #items or math.min(#items, item_limit))
     if section.groups then
       for index = 1, limit do
         local group = section.groups[index]
@@ -264,7 +268,8 @@ function M.build(model, opts)
           {
             action = "toggle_group",
             group_id = group.id,
-            section_id = section.id,
+            section_id = state_id,
+            relation_id = section.id,
             row = {
               id = group.id,
               name = group.name,
@@ -286,7 +291,8 @@ function M.build(model, opts)
             add(string.format("    … %d more uses", #group.rows - group_limit), {
               action = "expand_group",
               group_id = group.id,
-              section_id = section.id,
+              section_id = state_id,
+              relation_id = section.id,
             }, "MoreMsg", group_detail)
           end
         end
@@ -300,7 +306,8 @@ function M.build(model, opts)
       local suffix = section.groups and " contexts" or ""
       add(string.format("  … %d more%s", #items - limit, suffix), {
         action = "expand",
-        section_id = section.id,
+        section_id = state_id,
+        relation_id = section.id,
       }, "MoreMsg", section_detail)
     end
   end

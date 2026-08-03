@@ -29,10 +29,16 @@ truncated relationships are reported instead of silently disappearing.
 
 Semantic references covered by an incoming call are folded into that caller;
 its details retain the call-hierarchy method, reference method, and exact call
-sites. Non-call references remain separate. When semantic calls or references
-are available, unmatched structural candidates start collapsed as secondary
-evidence; they remain expanded when structural analysis is the only usage
-source.
+sites. Non-call references remain separate. When semantic calls, references,
+implementations, or type hierarchy relationships are available, unmatched
+structural candidates start collapsed as secondary evidence; they remain
+expanded when structural analysis is the only usage source.
+
+Type-like focuses expose their Tree-sitter children as members. Language
+adapters can project canonical hierarchy relationships into familiar roles
+without changing their evidence: Go interfaces, for example, distinguish
+contracts they satisfy, interfaces that extend them, and concrete types that
+implement them. Unsupported semantic type relationships remain absent.
 
 Press `?` on a relationship to inspect its direction, anchor, provider methods,
 evidence classes, and retained occurrence sites without changing navigation
@@ -172,7 +178,7 @@ configured cold-start window and can be disabled through
 [`lua/archlens/adapters.lua`](lua/archlens/adapters.lua) is the source of truth
 for language behavior. An adapter maps Neovim filetypes to a canonical language
 and can define Tree-sitter symbols and project markers, module analysis, an
-ast-grep parser and query, or a combination of them.
+ast-grep parser and query, relationship presentation, or a combination of them.
 
 Additional adapters can be registered before ArchLens is used:
 
@@ -187,6 +193,14 @@ require("archlens.adapters").register("zig", {
   ast_grep = { language = "zig" },
 })
 ```
+
+Optional `presentation.section(context, relation, row)` and
+`presentation.row(context, relation, row)` hooks can adapt labels and concise
+row names to language semantics. Section hooks may return `key`, `label`,
+`order`, or `show_kind`; row hooks may return `name` or `kind_name`. A
+presentation key creates an independently collapsible view section while the
+underlying relationship ID, direction, evidence, filtering, and details remain
+canonical. Hooks should treat their inputs as read-only.
 
 ## Provider extensions
 

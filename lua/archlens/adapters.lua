@@ -30,13 +30,126 @@ local default_name_node_types = {
   value_name = true,
 }
 
+local ocaml_name_node_types = vim.tbl_extend("force", vim.deepcopy(default_name_node_types), {
+  constructor_name = true,
+  field_name = true,
+  tag = true,
+})
+
 local function declaration_name(node_type, text)
   if node_type == "impl_item" then
-    return text:match("^%s*impl%s+(.+)$")
+    return text:gsub("%s*{%s*$", ""):match("^%s*impl%s+(.+)$")
   end
   return text:match("^%s*module%s+([%w_']+)")
     or text:match("^%s*module%s+type%s+([%w_']+)")
     or text:match("^%s*type%s+([%w_']+)")
+end
+
+local type_kinds = {
+  [vim.lsp.protocol.SymbolKind.Class] = true,
+  [vim.lsp.protocol.SymbolKind.Enum] = true,
+  [vim.lsp.protocol.SymbolKind.Interface] = true,
+  [vim.lsp.protocol.SymbolKind.Object] = true,
+  [vim.lsp.protocol.SymbolKind.Struct] = true,
+  [vim.lsp.protocol.SymbolKind.TypeParameter] = true,
+}
+
+local function type_focus(context)
+  return type_kinds[context.kind] == true
+    or context.syntax_node_type == "impl_item"
+    or context.syntax_node_type == "type_binding"
+    or context.syntax_node_type == "type_spec"
+end
+
+local function member_section(context, relation)
+  if type_focus(context) and relation.id == "children" then
+    return { label = "Members" }
+  end
+end
+
+local function go_section_presentation(context, relation, row)
+  local member = member_section(context, relation)
+  if member then
+    return member
+  end
+  if context.kind ~= vim.lsp.protocol.SymbolKind.Interface then
+    return nil
+  end
+  if relation.id == "supertypes" then
+    return { key = "satisfies", label = "Satisfies", order = 10 }
+  end
+  if relation.id == "subtypes" then
+    if row.kind == vim.lsp.protocol.SymbolKind.Interface then
+      return { key = "extended", label = "Extended by", order = 10, show_kind = true }
+    end
+    if
+      row.kind == vim.lsp.protocol.SymbolKind.Class
+      or row.kind == vim.lsp.protocol.SymbolKind.Enum
+      or row.kind == vim.lsp.protocol.SymbolKind.Object
+      or row.kind == vim.lsp.protocol.SymbolKind.Struct
+    then
+      return { key = "implemented", label = "Implemented by", order = 20, show_kind = true }
+    end
+    return {
+      key = "related",
+      label = "Implemented or extended by",
+      order = 30,
+      show_kind = true,
+    }
+  end
+end
+
+local function go_row_presentation(_, relation, row)
+  if relation.id == "subtypes" and row.kind == vim.lsp.protocol.SymbolKind.Class then
+    return { kind_name = "Type" }
+  end
+  if relation.id ~= "implementations" then
+    return nil
+  end
+  local name = row.name:match("^type%s+([%w_]+)")
+  if not name then
+    return nil
+  end
+  local declaration = row.name:match("%s(struct)%s*[{%[]")
+    or row.name:match("%s(interface)%s*[{%[]")
+  return {
+    name = name,
+    kind_name = declaration == "struct" and "Struct"
+      or declaration == "interface" and "Interface"
+      or "Type",
+  }
+end
+
+local function rust_section_presentation(context, relation)
+  local member = member_section(context, relation)
+  if member then
+    return member
+  end
+  if context.kind == vim.lsp.protocol.SymbolKind.Interface and relation.id == "implementations" then
+    return { label = "Implemented by" }
+  end
+end
+
+local function rust_row_presentation(_, relation, row)
+  if relation.id ~= "implementations" then
+    return nil
+  end
+  local opens_body = row.name:match("{%s*$") ~= nil
+  local header = row.name:gsub("%s*{%s*$", "")
+  local name = header:match("^impl.-%sfor%s+(.+)$")
+  if name then
+    name = name:gsub("%s+where%s+.*$", "")
+  elseif opens_body then
+    name = header:match("^impl%s+(.+)$")
+  end
+  if not name or name == "" then
+    return nil
+  end
+  return { name = vim.trim(name), kind_name = "Implementation" }
+end
+
+local function ocaml_section_presentation(context, relation)
+  return member_section(context, relation)
 end
 
 local function go_query(context)
@@ -471,6 +584,17 @@ local function normalize(language, adapter)
     )
     normalized.treesitter.root_markers = normalized.treesitter.root_markers
       or vim.deepcopy(default_root_markers)
+    normalized.treesitter.focus_wrappers = normalized.treesitter.focus_wrappers or {}
+    assert(
+      type(normalized.treesitter.focus_wrappers) == "table",
+      "Tree-sitter focus_wrappers must be a table"
+    )
+    for node_type, enabled in pairs(normalized.treesitter.focus_wrappers) do
+      assert(
+        type(node_type) == "string" and node_type ~= "" and enabled == true,
+        "Tree-sitter focus_wrappers must map node types to true"
+      )
+    end
     normalized.treesitter.name_fields = normalized.treesitter.name_fields
       or vim.deepcopy(default_name_fields)
     normalized.treesitter.name_node_types = normalized.treesitter.name_node_types
@@ -518,6 +642,17 @@ local function normalize(language, adapter)
   end
   if normalized.configuration ~= nil then
     assert(type(normalized.configuration) == "function", "adapter configuration must be a function")
+  end
+  if normalized.presentation ~= nil then
+    assert(type(normalized.presentation) == "table", "adapter presentation must be a table")
+    for _, field in ipairs({ "row", "section" }) do
+      if normalized.presentation[field] ~= nil then
+        assert(
+          type(normalized.presentation[field]) == "function",
+          "adapter presentation " .. field .. " must be a function"
+        )
+      end
+    end
   end
 
   return normalized
@@ -598,6 +733,62 @@ function M.import_scan_specs(filetype, path)
   return specs
 end
 
+function M.row_presentation(context, relation, row)
+  local adapter = registry[context.language]
+  local project = adapter and adapter.presentation and adapter.presentation.row
+  if not project then
+    return nil
+  end
+  local presentation = project(context, relation, row)
+  if presentation == nil then
+    return nil
+  end
+  assert(type(presentation) == "table", "adapter row presentation must return a table")
+  for _, field in ipairs({ "kind_name", "name" }) do
+    if presentation[field] ~= nil then
+      assert(
+        type(presentation[field]) == "string" and presentation[field] ~= "",
+        "adapter row presentation " .. field .. " must be a non-empty string"
+      )
+    end
+  end
+  return presentation
+end
+
+function M.section_presentation(context, relation, row)
+  local adapter = registry[context.language]
+  local project = adapter and adapter.presentation and adapter.presentation.section
+  if not project then
+    return nil
+  end
+  local presentation = project(context, relation, row)
+  if presentation == nil then
+    return nil
+  end
+  assert(type(presentation) == "table", "adapter section presentation must return a table")
+  for _, field in ipairs({ "key", "label" }) do
+    if presentation[field] ~= nil then
+      assert(
+        type(presentation[field]) == "string" and presentation[field] ~= "",
+        "adapter section presentation " .. field .. " must be a non-empty string"
+      )
+    end
+  end
+  if presentation.order ~= nil then
+    assert(
+      type(presentation.order) == "number",
+      "adapter section presentation order must be a number"
+    )
+  end
+  if presentation.show_kind ~= nil then
+    assert(
+      type(presentation.show_kind) == "boolean",
+      "adapter section presentation show_kind must be boolean"
+    )
+  end
+  return presentation
+end
+
 function M.ast_grep_query(context, language)
   local adapter = registry[language]
   local provider = adapter and adapter.ast_grep
@@ -609,11 +800,18 @@ end
 
 M.register("go", {
   configuration = go_configuration,
+  presentation = {
+    row = go_row_presentation,
+    section = go_section_presentation,
+  },
   treesitter = {
+    focus_wrappers = { type_declaration = true },
+    name_fields = { "name", "pattern", "attrpath", "type" },
     symbol_types = {
+      field_declaration = "Field",
       function_declaration = "Function",
+      method_elem = "Method",
       method_declaration = "Method",
-      type_declaration = "Type",
       type_spec = "Type",
     },
     imports = {
@@ -665,14 +863,20 @@ M.register("nix", {
 })
 
 M.register("ocaml", {
+  presentation = { section = ocaml_section_presentation },
   treesitter = {
+    focus_wrappers = { type_definition = true },
+    name_node_types = ocaml_name_node_types,
     symbol_types = {
       class_definition = "Class",
+      constructor_declaration = "EnumMember",
+      field_declaration = "Field",
       let_binding = "Value",
       method_definition = "Method",
       module_definition = "Module",
       module_type_definition = "Module",
-      type_definition = "Type",
+      tag_specification = "EnumMember",
+      type_binding = "Type",
     },
     imports = {
       extensions = { ".ml" },
@@ -694,12 +898,18 @@ M.register("ocaml", {
 M.register("ocaml_interface", {
   filetypes = { "ocamlinterface" },
   filename_extensions = { ".mli" },
+  presentation = { section = ocaml_section_presentation },
   treesitter = {
+    focus_wrappers = { type_definition = true },
+    name_node_types = ocaml_name_node_types,
     symbol_types = {
       class_specification = "Class",
+      constructor_declaration = "EnumMember",
+      field_declaration = "Field",
       module_specification = "Module",
       module_type_definition = "Module",
-      type_definition = "Type",
+      tag_specification = "EnumMember",
+      type_binding = "Type",
       value_specification = "Value",
     },
     imports = {
@@ -721,17 +931,24 @@ M.register("ocaml_interface", {
 
 M.register("rust", {
   configuration = rust_configuration,
+  presentation = {
+    row = rust_row_presentation,
+    section = rust_section_presentation,
+  },
   treesitter = {
     symbol_types = {
       const_item = "Constant",
       enum_item = "Enum",
+      enum_variant = "EnumMember",
       field_declaration = "Field",
       function_item = "Function",
+      function_signature_item = "Method",
       impl_item = "Implementation",
       mod_item = "Module",
       static_item = "Constant",
       struct_item = "Struct",
       trait_item = "Interface",
+      associated_type = "Type",
       type_item = "Type",
     },
     imports = {

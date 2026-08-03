@@ -1,3 +1,4 @@
+local adapters = require("archlens.adapters")
 local graph = require("archlens.graph")
 local relations = require("archlens.relations")
 local scope = require("archlens.scope")
@@ -188,18 +189,10 @@ local function row_from_edge(edge, relation, context, cache)
   if not node.context then
     name = source_line(location, cache) or name or context.name
   end
-  local id
-  if edge.evidence.class == "syntax" then
-    id = table.concat({ edge.kind, graph.location_key(location), name or "" }, ":")
-  elseif relation.sort == "name" then
-    id = table.concat({ edge.kind, graph.location_key(location), name or "" }, ":")
-  else
-    id = table.concat({ edge.kind, edge.evidence.method, graph.location_key(location) }, ":")
-  end
-  return {
-    id = id,
+  local row = {
     name = name,
     detail = node.detail,
+    kind = node.kind,
     kind_name = node.kind_name or relation.kind_name,
     path_label = node.path_label or relative_path(context.root_dir, path),
     line = node.line or line,
@@ -212,6 +205,21 @@ local function row_from_edge(edge, relation, context, cache)
     occurrences = vim.deepcopy(edge.occurrences or {}),
     presentation = vim.deepcopy(edge.presentation),
   }
+  local projected = adapters.row_presentation(context, relation, row)
+  if projected then
+    row.name = projected.name or row.name
+    row.kind_name = projected.kind_name or row.kind_name
+  end
+  local id
+  if edge.evidence.class == "syntax" then
+    id = table.concat({ edge.kind, graph.location_key(location), row.name or "" }, ":")
+  elseif relation.sort == "name" then
+    id = table.concat({ edge.kind, graph.location_key(location), row.name or "" }, ":")
+  else
+    id = table.concat({ edge.kind, edge.evidence.method, graph.location_key(location) }, ":")
+  end
+  row.id = id
+  return row
 end
 
 local function occurrence_key(occurrence)
@@ -425,7 +433,19 @@ local function normalize_edges(snapshot, context, filters)
       local key = graph.location_key(location)
       local dedupe_key = relation.sort == "name" and table.concat({ key, node.name or "" }, ":")
         or key
-      local suppress_self = relation.suppress_self == true and key == self_key
+      local suppress_overlapping_self = relation.id == "configuration_consumers"
+        or relation.id == "references"
+        or relation.id == "test_references"
+      local suppress_self = relation.suppress_self == true
+        and (
+          key == self_key
+          or (
+            suppress_overlapping_self
+            and context.location
+            and location.uri == context.location.uri
+            and ranges_overlap(location.range, context.location.range)
+          )
+        )
       if not suppress_self and not seen[relation.id][dedupe_key] then
         local row = row_from_edge(edge, relation, context, cache)
         if row then
@@ -503,6 +523,37 @@ local function normalize_edges(snapshot, context, filters)
   coalesce_call_references(grouped)
 
   return grouped, hidden
+end
+
+local function projected_sections(context, relation, rows)
+  local sections = {}
+  local by_key = {}
+  for index, row in ipairs(rows) do
+    local projection = adapters.section_presentation(context, relation, row) or {}
+    local key = projection.key or "default"
+    local section = by_key[key]
+    if not section then
+      section = {
+        key = key,
+        label = projection.label or relation.label,
+        order = projection.order or 0,
+        first = index,
+        rows = {},
+        show_kind = projection.show_kind == true,
+      }
+      sections[#sections + 1] = section
+      by_key[key] = section
+    end
+    section.rows[#section.rows + 1] = row
+    section.show_kind = section.show_kind or projection.show_kind == true
+  end
+  table.sort(sections, function(left, right)
+    if left.order ~= right.order then
+      return left.order < right.order
+    end
+    return left.first < right.first
+  end)
+  return sections
 end
 
 function M.loading(context, message)
@@ -606,6 +657,9 @@ function M.build(context, snapshot, opts)
   local has_semantic_usage = #grouped.incoming > 0
     or #grouped.test_references > 0
     or #grouped.references > 0
+    or #grouped.implementations > 0
+    or #grouped.supertypes > 0
+    or #grouped.subtypes > 0
 
   local notes = {}
   if context.configuration and not context.client_id and not resolving_lsp then
@@ -618,6 +672,7 @@ function M.build(context, snapshot, opts)
     not context.module_context
     and not context.configuration
     and not context.supports_calls
+    and (context.kind == vim.lsp.protocol.SymbolKind.Constructor or context.kind == vim.lsp.protocol.SymbolKind.Function or context.kind == vim.lsp.protocol.SymbolKind.Method)
     and not resolving_lsp
   then
     notes[#notes + 1] = string.format(
@@ -660,17 +715,22 @@ function M.build(context, snapshot, opts)
       if hidden_sections[relation.id] then
         section_hidden_count = section_hidden_count + #rows
       else
-        sections[#sections + 1] = {
-          id = relation.id,
-          label = relation.label,
-          marker = relation.marker,
-          rows = rows,
-          groups = container_groups(relation, rows),
-          anchor = section_anchor(rows),
-          default_collapsed = section_policy.collapse_secondary ~= false
-            and relation.source == "structural"
-            and has_semantic_usage,
-        }
+        for _, projection in ipairs(projected_sections(context, relation, rows)) do
+          sections[#sections + 1] = {
+            id = relation.id,
+            view_id = projection.key == "default" and relation.id
+              or relation.id .. ":" .. projection.key,
+            label = projection.label,
+            marker = relation.marker,
+            rows = projection.rows,
+            groups = container_groups(relation, projection.rows),
+            anchor = section_anchor(projection.rows),
+            show_kind = projection.show_kind,
+            default_collapsed = section_policy.collapse_secondary ~= false
+              and relation.source == "structural"
+              and has_semantic_usage,
+          }
+        end
       end
     end
   end

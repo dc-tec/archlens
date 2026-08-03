@@ -132,6 +132,181 @@ for _, case in ipairs(cases) do
   contexts[case.file] = context
 end
 
+local function resolve_fixture(file, filetype, position)
+  vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/" .. file))
+  vim.bo.filetype = filetype
+  return assert(treesitter.resolve(0, position), file .. " did not resolve through Tree-sitter")
+end
+
+local go_interface = resolve_fixture("types.go", "go", { line = 2, character = 0 })
+assert_equal(go_interface.name, "Contract", "Go type-keyword focus should select the type spec")
+assert_equal(
+  go_interface.kind_name,
+  "Type",
+  "syntax-only Go interfaces retain the generic type kind"
+)
+assert(
+  vim.deep_equal(names(go_interface.syntax.children), { "First", "Second" }),
+  "Go interface methods should be exposed as type members"
+)
+assert_equal(#go_interface.syntax.ancestors, 0, "Go type wrappers must stay out of the focus trail")
+local semantic_go_interface = require("archlens.model").context_from_item({
+  name = "Contract",
+  kind = vim.lsp.protocol.SymbolKind.Interface,
+  uri = vim.uri_from_bufnr(0),
+  range = {
+    start = { line = 2, character = 0 },
+    ["end"] = { line = 5, character = 1 },
+  },
+  selectionRange = {
+    start = { line = 2, character = 5 },
+    ["end"] = { line = 2, character = 13 },
+  },
+}, {
+  id = 10,
+  name = "gopls",
+  offset_encoding = "utf-8",
+  root_dir = fixture_root,
+  supports_calls = false,
+})
+local enriched_go_interface =
+  treesitter.resolve(0, { line = 2, character = 6 }, semantic_go_interface)
+assert_equal(
+  enriched_go_interface.kind,
+  vim.lsp.protocol.SymbolKind.Interface,
+  "Tree-sitter range enrichment should preserve the semantic interface kind"
+)
+assert_equal(
+  enriched_go_interface.kind_name,
+  "Interface",
+  "type presentation should retain the semantic interface label"
+)
+assert_equal(
+  #enriched_go_interface.syntax.ancestors,
+  0,
+  "semantic type enrichment should not reintroduce a duplicate wrapper ancestor"
+)
+
+local go_struct = resolve_fixture("types.go", "go", { line = 7, character = 5 })
+assert(
+  vim.deep_equal(names(go_struct.syntax.children), {
+    "Left",
+    "Right",
+    "Embedded",
+    "pkg.Qualified",
+  }),
+  "Go struct members should include grouped and embedded fields"
+)
+local go_second_field = resolve_fixture("types.go", "go", { line = 8, character = 8 })
+assert_equal(go_second_field.name, "Right", "Go grouped fields should resolve the selected name")
+assert_equal(go_second_field.kind_name, "Field", "Go grouped fields should retain their kind")
+local broad_go_parent = require("archlens.model").context_from_item({
+  name = "Point",
+  kind = vim.lsp.protocol.SymbolKind.Struct,
+  uri = vim.uri_from_bufnr(0),
+  range = {
+    start = { line = 7, character = 0 },
+    ["end"] = { line = 11, character = 1 },
+  },
+  selectionRange = {
+    start = { line = 7, character = 5 },
+    ["end"] = { line = 7, character = 10 },
+  },
+}, {
+  id = 12,
+  name = "gopls",
+  offset_encoding = "utf-8",
+  root_dir = fixture_root,
+  supports_calls = false,
+})
+local enriched_go_field = treesitter.resolve(0, { line = 8, character = 8 }, broad_go_parent)
+assert_equal(enriched_go_field.name, "Right", "Tree-sitter should retain the narrower field focus")
+assert_equal(
+  enriched_go_field.kind_name,
+  "Field",
+  "a broader semantic parent must not lend its type kind to a nested field"
+)
+
+local rust_trait = resolve_fixture("types.rs", "rust", { line = 0, character = 11 })
+assert(
+  vim.deep_equal(names(rust_trait.syntax.children), {
+    "Output",
+    "NAME",
+    "required",
+    "defaulted",
+  }),
+  "Rust traits should expose associated items and required and default methods"
+)
+local rust_enum = resolve_fixture("types.rs", "rust", { line = 16, character = 10 })
+assert(
+  vim.deep_equal(names(rust_enum.syntax.children), { "Ready", "Failed" }),
+  "Rust enums should expose their variants"
+)
+for _, child in ipairs(rust_enum.syntax.children) do
+  assert_equal(child.kind_name, "EnumMember", "Rust variants should retain their member kind")
+end
+
+local ocaml_variant = resolve_fixture("types.ml", "ocaml", { line = 0, character = 0 })
+assert_equal(ocaml_variant.name, "status", "OCaml type-keyword focus should select the binding")
+assert(
+  vim.deep_equal(names(ocaml_variant.syntax.children), { "Ready", "Failed" }),
+  "OCaml variants should expose their constructors"
+)
+assert_equal(
+  #ocaml_variant.syntax.ancestors,
+  0,
+  "OCaml type wrappers must stay out of the focus trail"
+)
+local ocaml_record = resolve_fixture("types.ml", "ocaml", { line = 2, character = 5 })
+assert(
+  vim.deep_equal(names(ocaml_record.syntax.children), { "first", "second" }),
+  "OCaml records should expose their fields"
+)
+local semantic_ocaml_type = require("archlens.model").context_from_item({
+  name = "record",
+  kind = vim.lsp.protocol.SymbolKind.TypeParameter,
+  uri = vim.uri_from_bufnr(0),
+  range = {
+    start = { line = 2, character = 0 },
+    ["end"] = { line = 5, character = 1 },
+  },
+  selectionRange = {
+    start = { line = 2, character = 5 },
+    ["end"] = { line = 2, character = 11 },
+  },
+}, {
+  id = 11,
+  name = "ocamllsp",
+  offset_encoding = "utf-8",
+  root_dir = fixture_root,
+  supports_calls = false,
+})
+local enriched_ocaml_type = treesitter.resolve(0, { line = 2, character = 6 }, semantic_ocaml_type)
+assert_equal(
+  enriched_ocaml_type.kind_name,
+  "Type",
+  "Tree-sitter should retain a clearer language label for an equivalent semantic kind"
+)
+local ocaml_poly = resolve_fixture("types.ml", "ocaml", { line = 7, character = 5 })
+assert(
+  vim.deep_equal(names(ocaml_poly.syntax.children), { "`One", "`Two" }),
+  "OCaml polymorphic variants should expose their tags"
+)
+local ocaml_recursive = resolve_fixture("types.ml", "ocaml", { line = 10, character = 5 })
+assert_equal(ocaml_recursive.name, "second", "OCaml recursive bindings should focus independently")
+assert_equal(#ocaml_recursive.syntax.ancestors, 0, "a sibling type binding is not an ancestor")
+
+local ocaml_interface_record = resolve_fixture("types.mli", "ocaml", { line = 2, character = 5 })
+assert_equal(
+  ocaml_interface_record.language,
+  "ocaml_interface",
+  "OCaml interface members should use the interface grammar"
+)
+assert(
+  vim.deep_equal(names(ocaml_interface_record.syntax.children), { "first", "second" }),
+  "OCaml interface records should expose their fields"
+)
+
 vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/main.go"))
 vim.bo.filetype = "go"
 local type_context = vim.deepcopy(contexts["main.go"])

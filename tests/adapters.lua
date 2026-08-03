@@ -30,11 +30,15 @@ equal(adapters.root_markers("unknown"), {
 })
 
 equal(adapters.get("go").treesitter.symbol_types, {
+  field_declaration = "Field",
   function_declaration = "Function",
+  method_elem = "Method",
   method_declaration = "Method",
-  type_declaration = "Type",
   type_spec = "Type",
 })
+equal(adapters.get("go").treesitter.focus_wrappers, { type_declaration = true })
+equal(adapters.get("go").treesitter.name_fields, { "name", "pattern", "attrpath", "type" })
+equal(adapters.get("go").treesitter.name_node_types.constructor_name, nil)
 local configuration_buffer = vim.api.nvim_create_buf(false, true)
 vim.api.nvim_buf_set_lines(configuration_buffer, 0, -1, false, {
   '    Enabled bool `json:"enabled"`',
@@ -117,7 +121,14 @@ equal(
 equal(adapters.imports_for_filetype("unknown"), nil)
 equal(adapters.get("rust").treesitter.symbol_types.impl_item, "Implementation")
 equal(adapters.get("rust").treesitter.symbol_types.field_declaration, "Field")
+equal(adapters.get("rust").treesitter.symbol_types.function_signature_item, "Method")
+equal(adapters.get("rust").treesitter.symbol_types.enum_variant, "EnumMember")
 equal(adapters.get("ocaml_interface").treesitter.symbol_types.value_specification, "Value")
+equal(adapters.get("ocaml_interface").treesitter.symbol_types.type_binding, "Type")
+equal(adapters.get("ocaml_interface").treesitter.symbol_types.field_declaration, "Field")
+equal(adapters.get("ocaml_interface").treesitter.name_node_types.constructor_name, true)
+equal(adapters.get("ocaml_interface").treesitter.name_node_types.field_name, true)
+equal(adapters.get("ocaml_interface").treesitter.name_node_types.tag, true)
 equal(adapters.get("ocaml_interface").filename_extensions, { ".mli" })
 equal(adapters.get("nix").treesitter.root_markers, {
   ".git",
@@ -148,6 +159,80 @@ equal(
   "ast-grep has no OCaml parser; semantic references and Tree-sitter context remain available."
 )
 equal(adapters.get("ocaml_interface").ast_grep.unsupported_note, unsupported)
+
+local go_interface = {
+  kind = vim.lsp.protocol.SymbolKind.Interface,
+  language = "go",
+  syntax_node_type = "type_spec",
+}
+equal(adapters.section_presentation(go_interface, { id = "supertypes" }, {}), {
+  key = "satisfies",
+  label = "Satisfies",
+  order = 10,
+})
+equal(
+  adapters.section_presentation(go_interface, { id = "subtypes" }, {
+    kind = vim.lsp.protocol.SymbolKind.Interface,
+  }),
+  { key = "extended", label = "Extended by", order = 10, show_kind = true }
+)
+equal(
+  adapters.section_presentation(go_interface, { id = "subtypes" }, {
+    kind = vim.lsp.protocol.SymbolKind.Struct,
+  }),
+  { key = "implemented", label = "Implemented by", order = 20, show_kind = true }
+)
+equal(adapters.section_presentation(go_interface, { id = "children" }, {}), {
+  label = "Members",
+})
+equal(
+  adapters.row_presentation(go_interface, { id = "implementations" }, {
+    name = "type Client struct {",
+  }),
+  { name = "Client", kind_name = "Struct" }
+)
+equal(
+  adapters.row_presentation(go_interface, { id = "implementations" }, {
+    name = "type Identifier string",
+  }),
+  { name = "Identifier", kind_name = "Type" }
+)
+equal(
+  adapters.row_presentation(go_interface, { id = "subtypes" }, {
+    kind = vim.lsp.protocol.SymbolKind.Class,
+    kind_name = "Class",
+    name = "Client",
+  }),
+  { kind_name = "Type" }
+)
+
+local rust_trait = {
+  kind = vim.lsp.protocol.SymbolKind.Interface,
+  language = "rust",
+  syntax_node_type = "trait_item",
+}
+equal(adapters.section_presentation(rust_trait, { id = "implementations" }, {}), {
+  label = "Implemented by",
+})
+equal(
+  adapters.row_presentation(rust_trait, { id = "implementations" }, {
+    name = "impl Provider for AgeProvider {",
+  }),
+  { name = "AgeProvider", kind_name = "Implementation" }
+)
+equal(
+  adapters.row_presentation(rust_trait, { id = "implementations" }, {
+    name = "impl Provider",
+  }),
+  nil,
+  "multiline implementation headers should retain their source text rather than infer a false target"
+)
+equal(
+  adapters.row_presentation(rust_trait, { id = "implementations" }, {
+    name = "impl Provider for Wrapped<T> where T: Send {",
+  }),
+  { name = "Wrapped<T>", kind_name = "Implementation" }
+)
 
 local method_pattern, method_selector = ast_grep._query_for({
   name = "Serve",
@@ -204,6 +289,18 @@ equal(tsx_selector, "jsx_self_closing_element")
 
 local duplicate_ok = pcall(adapters.register, "zig", {})
 equal(duplicate_ok, false)
+
+local presentation_ok = pcall(adapters.register, "invalid_presentation", {
+  presentation = { section = true },
+})
+equal(presentation_ok, false, "adapter presentation hooks must be functions")
+local wrappers_ok = pcall(adapters.register, "invalid_wrappers", {
+  treesitter = {
+    focus_wrappers = { wrapper = false },
+    symbol_types = { declaration = "Type" },
+  },
+})
+equal(wrappers_ok, false, "focus wrappers must be explicit node-type flags")
 
 local ast_only_buffer = vim.api.nvim_create_buf(false, true)
 vim.bo[ast_only_buffer].filetype = "lua"

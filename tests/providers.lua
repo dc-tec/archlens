@@ -208,13 +208,23 @@ providers.register("custom", {
   enabled = function(_, _, current_config)
     return current_config.providers.custom.enabled
   end,
-  start = function(_, _, _, done, report)
+  start = function(_, _, current_config, done, report)
     custom_started = custom_started + 1
+    local options = current_config.providers.custom or {}
     report("retrying", { retry_delay_ms = 25, message = "Waiting for the project tool." })
     local result = graph.delta()
     graph.add_contributor(result, "custom", "Custom relationships")
     graph.add_note(result, "Custom provider completed.")
-    done(result)
+    if options.defer_completion then
+      return function()
+        report("running", { message = "Cancelled provider reported too late." })
+        done(result, options.outcome)
+      end
+    end
+    done(options.invalid_delta and {} or result, options.outcome)
+    if options.error_after_done then
+      error("error after completion")
+    end
     return function() end
   end,
 })
@@ -273,6 +283,68 @@ assert(
     :find("Custom provider completed.", 1, true),
   "custom provider deltas should merge into the focused graph"
 )
+
+config.providers.custom.outcome = {
+  state = "timed_out",
+  message = "Custom analysis exceeded its deadline.",
+}
+local timed_out_updates = run_provider(syntax_context)
+local timed_out_run = timed_out_updates[#timed_out_updates].provider_runs[1]
+equal(timed_out_run.state, "timed_out", "providers should publish explicit timeout outcomes")
+equal(timed_out_run.duration_ms, 0, "terminal outcomes should retain provider duration")
+equal(
+  timed_out_run.message,
+  "Custom analysis exceeded its deadline.",
+  "terminal outcomes should retain their message"
+)
+equal(timed_out_run.retry_delay_ms, nil, "terminal outcomes should clear retry metadata")
+assert(
+  table
+    .concat(timed_out_updates[#timed_out_updates].notes, "\n")
+    :find("Custom provider completed.", 1, true),
+  "partial provider results should merge for exceptional terminal outcomes"
+)
+
+config.providers.custom.outcome = { state = "running" }
+local invalid_outcome_updates = run_provider(syntax_context)
+local invalid_outcome_run = invalid_outcome_updates[#invalid_outcome_updates].provider_runs[1]
+equal(invalid_outcome_run.state, "failed", "invalid terminal outcomes should fail the provider")
+assert(
+  invalid_outcome_run.message:find("unsupported terminal provider state", 1, true),
+  "invalid outcomes should explain the provider contract"
+)
+
+config.providers.custom.outcome = nil
+config.providers.custom.invalid_delta = true
+local invalid_delta_updates = run_provider(syntax_context)
+local invalid_delta_run = invalid_delta_updates[#invalid_delta_updates].provider_runs[1]
+equal(invalid_delta_run.state, "failed", "invalid graph deltas must not leave providers running")
+assert(
+  invalid_delta_run.message:find("invalid graph delta", 1, true),
+  "invalid graph deltas should retain the merge failure"
+)
+
+config.providers.custom.invalid_delta = false
+config.providers.custom.error_after_done = true
+local completed_before_error = run_provider(syntax_context)
+equal(
+  completed_before_error[#completed_before_error].provider_runs[1].state,
+  "completed",
+  "an exception after synchronous completion must not replace the terminal state"
+)
+
+config.providers.custom.error_after_done = false
+config.providers.custom.defer_completion = true
+local cancelled_updates, custom_cancellations = run_provider(syntax_context)
+local renders_before_cancel = #cancelled_updates
+equal(#custom_cancellations, 1, "active providers should register one cancellation wrapper")
+custom_cancellations[1]()
+equal(
+  #cancelled_updates,
+  renders_before_cancel,
+  "provider callbacks from cancellation must not redraw the abandoned run"
+)
+config.providers.custom.defer_completion = false
 
 config.providers.custom.enabled = false
 config.providers.broken = { enabled = true }
@@ -357,6 +429,71 @@ equal(references.rows[1].evidence_records, {
     class = "semantic",
   },
 }, "multi-client corroboration should retain independent evidence records")
+
+local degraded_updates = run_provider()
+relationship_callbacks[6](reference_delta(request_contexts[6]), metadata)
+relationship_callbacks[7](graph.delta(), {
+  request_count = 1,
+  request_labels = { "Project references" },
+  outcome = {
+    state = "timed_out",
+    message = "Relationship requests exceeded the deadline.",
+  },
+})
+local degraded_run = degraded_updates[#degraded_updates].provider_runs[1]
+equal(degraded_run.state, "timed_out", "one timed-out client should degrade the shared LSP run")
+assert(
+  degraded_run.message:find("secondary%-lsp: Relationship requests exceeded the deadline%."),
+  "multi-client outcomes should identify the affected language server"
+)
+local degraded_model =
+  require("archlens.model").build(context, degraded_updates[#degraded_updates], {
+    include_external = true,
+  })
+assert(
+  vim.iter(degraded_model.sections):find(function(section)
+    return section.id == "references"
+  end),
+  "a timed-out multi-client run should retain successful client relationships"
+)
+
+local partially_available_updates = run_provider()
+relationship_callbacks[8](reference_delta(request_contexts[8]), metadata)
+relationship_callbacks[9](graph.delta(), {
+  request_count = 0,
+  request_labels = {},
+  outcome = { state = "unavailable", message = "Relationship analysis is unavailable." },
+})
+equal(
+  partially_available_updates[#partially_available_updates].provider_runs[1].state,
+  "completed",
+  "one available client should keep the shared LSP run completed"
+)
+assert(
+  table
+    .concat(partially_available_updates[#partially_available_updates].notes, "\n")
+    :find("secondary%-lsp: Relationship analysis is unavailable%."),
+  "partial multi-client availability should remain an inspectable result caveat"
+)
+
+local unavailable_updates = run_provider()
+relationship_callbacks[10](graph.delta(), {
+  request_count = 0,
+  request_labels = {},
+  outcome = { state = "unavailable", message = "Primary analysis is unavailable." },
+})
+relationship_callbacks[11](graph.delta(), {
+  request_count = 0,
+  request_labels = {},
+  outcome = { state = "unavailable", message = "Secondary analysis is unavailable." },
+})
+local unavailable_run = unavailable_updates[#unavailable_updates].provider_runs[1]
+equal(unavailable_run.state, "unavailable", "all unavailable clients should degrade the LSP run")
+assert(
+  unavailable_run.message:find("cold%-lsp: Primary analysis is unavailable%.")
+    and unavailable_run.message:find("secondary%-lsp: Secondary analysis is unavailable%."),
+  "an unavailable multi-client outcome should retain every client message"
+)
 
 print("archlens.nvim provider retry tests passed")
 vim.cmd("quitall!")

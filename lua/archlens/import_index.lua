@@ -280,7 +280,10 @@ local function enumerate(root, specs, _, filters, options, callback)
   local command = options.command or "rg"
   if vim.fn.executable(command) ~= 1 then
     vim.schedule(function()
-      callback({}, command .. " is unavailable; install ripgrep or disable reverse module analysis")
+      callback({}, nil, false, {
+        state = "unavailable",
+        message = command .. " is unavailable; install ripgrep or disable reverse module analysis.",
+      })
     end)
     return function() end
   end
@@ -393,6 +396,7 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
     reverse = {},
     notes = {},
     note_records = {},
+    outcome = nil,
     subscribers = {},
   }
   indexes[cache_key] = index
@@ -400,15 +404,19 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
   local cancel_enumeration = function() end
   local timer
 
-  local function finish()
+  local function finish(outcome)
     if finished then
       return
     end
     finished = true
     index.ready = true
+    index.outcome = outcome
     if timer and not timer:is_closing() then
       timer:stop()
       timer:close()
+    end
+    if outcome and indexes[cache_key] == index then
+      indexes[cache_key] = nil
     end
     notify(index)
   end
@@ -418,16 +426,13 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
       return
     end
     cancel_enumeration()
-    add_index_note(
-      index,
-      string.format(
+    finish({
+      state = "timed_out",
+      message = string.format(
         "Project module scan stopped after %d ms; module-dependent results may be incomplete.",
         options.timeout_ms
       ),
-      "module scan limited",
-      "warn"
-    )
-    finish()
+    })
   end
 
   timer = vim.defer_fn(timed_out, options.timeout_ms)
@@ -437,8 +442,12 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
     by_extension,
     filters,
     options,
-    function(paths, err, enumeration_limited)
+    function(paths, err, enumeration_limited, outcome)
       if finished then
+        return
+      end
+      if outcome then
+        finish(outcome)
         return
       end
       if err then
@@ -696,13 +705,13 @@ function M.relationships(context, bufnr, options, callback)
   local index = indexes[cache_key]
     or build_index(cache_key, root, specs, by_extension, filters, options)
   if index.ready then
-    callback(materialize(index, context, target_path, keys, anchor_label, options))
+    callback(materialize(index, context, target_path, keys, anchor_label, options), index.outcome)
     return function() end
   end
 
   local subscriber = {
     callback = function(value)
-      callback(materialize(value, context, target_path, keys, anchor_label, options))
+      callback(materialize(value, context, target_path, keys, anchor_label, options), value.outcome)
     end,
     cancelled = false,
   }

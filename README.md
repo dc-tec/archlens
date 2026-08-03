@@ -115,10 +115,11 @@ occurrences. ArchLens keeps one details window open. Opening another details or
 help view replaces it. Closing the window returns focus to the ArchLens pane.
 
 `Sources [?]` lists the providers that contributed to the view. `Analysis [?]`
-appears while providers are queued, running, or retrying. Its details show the
-state, elapsed time, retry delay, and message for each provider. `Results [?]`
-reports filters, search limits, timeouts, and unavailable analysis. Its details
-show each complete message.
+appears while providers are active or when a provider ends with an exceptional
+outcome. Its details show the state, elapsed time, duration, retry delay, and
+message for each provider. Completed providers do not leave a persistent status
+line. `Results [?]` reports filters, search limits, and partial-analysis
+caveats. Its details show each complete message.
 
 Language-server calls, references, implementations, and type hierarchies are
 semantic relationships. ast-grep results are structural candidates. When
@@ -221,7 +222,7 @@ canonical. Hooks should treat their inputs as read-only.
 Project-analysis providers use the same registry as the built-in LSP,
 Tree-sitter module, and ast-grep providers. A provider decides whether it
 applies to the current focus, starts its work, calls `done` once with a graph
-delta, and returns a cancellation function:
+delta and optional terminal outcome, and returns a cancellation function:
 
 ```lua
 local graph = require("archlens.graph")
@@ -250,7 +251,22 @@ options belong under `providers.<id>`.
 
 The optional `report` callback accepts `"running"` or `"retrying"`. A retry may
 include `retry_delay_ms` and a short `message`. ArchLens records queued,
-completed, and failed states around the provider call.
+completed, and start-failure states around the provider call.
+
+Calling `done(result)` marks the provider completed. When the provider can
+classify another terminal outcome, pass `state` and an optional `message`:
+
+```lua
+done(result, {
+  state = "timed_out",
+  message = "Ownership analysis exceeded 1000 ms.",
+})
+```
+
+Terminal states are `completed`, `failed`, `timed_out`, `unavailable`, and
+`cancelled`. ArchLens retains partial graph results for every terminal state.
+Use `unavailable` only when the provider applies but a required dependency or
+capability is unavailable. Disabled or inapplicable providers should not start.
 
 When more than one attached LSP supports location-based relationships,
 ArchLens queries each client and keeps their evidence separate. Opaque call

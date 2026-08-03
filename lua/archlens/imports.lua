@@ -221,7 +221,7 @@ function M.relationships(context, bufnr, options, callback)
     end
   end
 
-  local function add_notes()
+  local function add_notes(all_require_lsp)
     if unresolved > 0 then
       graph.add_note(
         result,
@@ -233,7 +233,7 @@ function M.relationships(context, bufnr, options, callback)
         { summary = "module dependencies incomplete", severity = "warn" }
       )
     end
-    if requires_lsp > 0 then
+    if requires_lsp > 0 and not all_require_lsp then
       graph.add_note(
         result,
         string.format(
@@ -269,6 +269,21 @@ function M.relationships(context, bufnr, options, callback)
     end
   end
 
+  local function unavailable_outcome()
+    if #sites == 0 or requires_lsp ~= #sites then
+      return nil
+    end
+    return {
+      state = "unavailable",
+      message = string.format(
+        "%d module dependency target%s require%s a definition-capable language server.",
+        requires_lsp,
+        requires_lsp == 1 and "" or "s",
+        requires_lsp == 1 and "s" or ""
+      ),
+    }
+  end
+
   local function complete()
     if completed or active ~= 0 or next_site <= #sites then
       return
@@ -279,8 +294,9 @@ function M.relationships(context, bufnr, options, callback)
       timer:close()
     end
     materialize()
-    add_notes()
-    callback(result)
+    local outcome = unavailable_outcome()
+    add_notes(outcome ~= nil)
+    callback(result, outcome)
   end
 
   local pump
@@ -357,13 +373,14 @@ function M.relationships(context, bufnr, options, callback)
       completed = true
       stop_requests()
       materialize()
-      add_notes()
-      graph.add_note(
-        result,
-        string.format("Module dependency resolution exceeded %d ms and was stopped.", timeout_ms),
-        { summary = "module resolution timed out", severity = "warn" }
-      )
-      callback(result)
+      add_notes(false)
+      callback(result, {
+        state = "timed_out",
+        message = string.format(
+          "Module dependency resolution exceeded %d ms and was stopped.",
+          timeout_ms
+        ),
+      })
     end, timeout_ms)
   end
 

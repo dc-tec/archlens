@@ -64,9 +64,11 @@ keeps one details window open. Opening another details or help view replaces
 it. Closing the window returns focus to the ArchLens pane.
 
 `Sources [?]` and `Analysis [?]` mark provider lifecycle details that can be
-opened with `?`. Active provider names remain visible when they fit. At
-narrower widths ordinary running and queued work is summarized by count;
-failures, timeouts, unavailability, cancellation, and retries take priority.
+opened with `?`. `Analysis [?]` appears while providers are active or when a
+provider ends with an exceptional outcome. Active provider names remain visible
+when they fit. At narrower widths ordinary running and queued work is summarized
+by count; failures, timeouts, unavailability, cancellation, and retries take
+priority. Completed providers do not leave persistent status noise.
 
 `Results [?]` compacts relationship filtering, provider caveats, and bounded
 analysis into one line. Its details retain each exact message. The persistent
@@ -229,8 +231,8 @@ PROVIDER EXTENSIONS                                       *archlens-providers*
 
 Built-in and custom project-analysis providers share one ordered registry.
 A provider decides whether it applies, starts its work, calls `done` once with
-a graph delta, and returns a cancellation function. It may use `report` to
-publish a running or retrying state: >lua
+a graph delta and optional terminal outcome, and returns a cancellation
+function. It may use `report` to publish a running or retrying state: >lua
 
     local graph = require("archlens.graph")
 
@@ -256,7 +258,21 @@ Provider options belong under `providers.<id>`. Register relationship kinds
 through `require("archlens.relations").register()` before returning edges.
 The optional `report` callback accepts `"running"` or `"retrying"`; retry
 metadata may contain `retry_delay_ms` and a short `message`. ArchLens records
-queued, completed, and failed states around the provider call.
+queued, completed, and start-failure states around the provider call.
+
+`done(result)` marks the provider completed. A provider that can classify
+another terminal outcome may pass `state` and an optional `message`: >lua
+
+    done(result, {
+      state = "timed_out",
+      message = "Ownership analysis exceeded 1000 ms.",
+    })
+<
+Terminal states are `completed`, `failed`, `timed_out`, `unavailable`, and
+`cancelled`. Partial graph results are retained for every terminal state. Use
+`unavailable` only when the provider applies but a required dependency or
+capability is unavailable. Disabled or inapplicable providers should not
+start.
 
 Every applicable attached LSP contributes location-based relationships.
 Provider evidence remains separate when clients return the same row. Opaque

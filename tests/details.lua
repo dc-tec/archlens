@@ -103,6 +103,30 @@ assert(contains(analysis_lines, "State       Retrying"))
 assert(contains(analysis_lines, "Elapsed     1.2 s"))
 assert(contains(analysis_lines, "Retry       in 3.0 s"))
 
+local terminal_lines = details.lines({
+  provider_runs = {
+    {
+      id = "imports",
+      label = "Module dependencies",
+      state = "timed_out",
+      duration_ms = 5000,
+      message = "Module dependency resolution exceeded 5000 ms.",
+    },
+    {
+      id = "ast_grep",
+      label = "ast-grep",
+      state = "unavailable",
+      duration_ms = 2,
+      message = "ast-grep is unavailable.",
+    },
+  },
+}, model)
+assert(contains(terminal_lines, "State       Timed out"))
+assert(contains(terminal_lines, "Duration    5.0 s"))
+assert(contains(terminal_lines, "Message     Module dependency resolution exceeded 5000 ms."))
+assert(contains(terminal_lines, "State       Unavailable"))
+assert(contains(terminal_lines, "Message     ast-grep is unavailable."))
+
 local result_lines = details.lines({ result = model.result }, model)
 assert(contains(result_lines, "Summary     module scan limited · 8 filtered"))
 assert(contains(result_lines, "  • 5 vendored relationships hidden."))
@@ -335,6 +359,18 @@ local retry_rendered = render.build(busy_model, { width = 54 })
 assert(
   contains(retry_rendered.lines, "Analysis [?]: ast-grep retrying · 3 running"),
   "exceptional provider states should remain named ahead of ordinary activity"
+)
+
+local unavailable_model = vim.deepcopy(model)
+unavailable_model.provider_activity = { "gopls unavailable", "ast-grep unavailable" }
+unavailable_model.provider_runs = {
+  { id = "lsp", label = "gopls", state = "unavailable" },
+  { id = "ast_grep", label = "ast-grep", state = "unavailable" },
+}
+local unavailable_rendered = render.build(unavailable_model, { width = 50 })
+assert(
+  contains(unavailable_rendered.lines, "Analysis [?]: gopls + ast-grep unavailable"),
+  "compact exceptional activity should retain every provider identity"
 )
 
 local view = require("archlens.view")

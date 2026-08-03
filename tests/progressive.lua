@@ -27,7 +27,10 @@ local function run()
   local graph = require("archlens.graph")
   local source_buffer = vim.api.nvim_get_current_buf()
   local source_window = vim.api.nvim_get_current_win()
-  local source_path = vim.fn.tempname() .. ".lua"
+  local temporary_path = vim.fn.tempname()
+  local temporary_root = vim.fs.dirname(temporary_path)
+  temporary_root = vim.uv.fs_realpath(temporary_root) or temporary_root
+  local source_path = vim.fs.joinpath(temporary_root, vim.fs.basename(temporary_path) .. ".lua")
   vim.api.nvim_buf_set_name(source_buffer, source_path)
   vim.bo[source_buffer].filetype = "lua"
   vim.api.nvim_buf_set_lines(source_buffer, 0, -1, false, {
@@ -406,9 +409,12 @@ local function run()
   stale_lsp(semantic_delta(base_context, {}, {}))
   stale_imports(graph.delta())
   stale_importers(graph.delta())
-  stale_structural(structural_delta(base_context, {
-    vim.tbl_extend("force", location(2), { provider = "ast-grep", text = "StaleAstGrep()" }),
-  }, true))
+  stale_structural(
+    structural_delta(base_context, {
+      vim.tbl_extend("force", location(2), { provider = "ast-grep", text = "StaleAstGrep()" }),
+    }, true),
+    { state = "timed_out", message = "Stale structural timeout." }
+  )
   assert_equal(
     #rendered,
     renders_before_stale,
@@ -475,7 +481,24 @@ local function run()
   relationship_callbacks[4](semantic_delta(semantic_implementation, {}, {}))
   import_callbacks[4](graph.delta())
   importer_callbacks[4](graph.delta())
-  structural_callbacks[4](structural_delta(semantic_implementation, {}, true))
+  structural_callbacks[4](structural_delta(semantic_implementation, {}, true), {
+    state = "unavailable",
+    message = "ast-grep is unavailable.",
+  })
+  local unavailable_model = rendered[#rendered]
+  assert_equal(unavailable_model.pending_providers, {})
+  assert_equal(
+    unavailable_model.provider_activity,
+    { "ast-grep unavailable" },
+    "exceptional terminal outcomes should remain inspectable after other providers finish"
+  )
+  assert(
+    vim.tbl_contains(
+      require("archlens.render").build(unavailable_model, { width = 62 }).lines,
+      "Analysis [?]: ast-grep unavailable"
+    ),
+    "the default pane width should retain the exceptional provider identity"
+  )
 
   active_session.expanded = { subtypes = true }
   active_session.expanded_groups = { ["test_references:group:test"] = true }

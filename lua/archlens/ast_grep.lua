@@ -148,13 +148,10 @@ function M.relationships(context, options, callback)
 
   local command = options.command or "ast-grep"
   if not executable(command) then
-    callback(
-      empty(
-        "ast-grep is unavailable; structural project matches were skipped.",
-        "structural search unavailable",
-        "warn"
-      )
-    )
+    callback(empty(), {
+      state = "unavailable",
+      message = "ast-grep is unavailable; structural project matches were skipped.",
+    })
     return function() end
   end
   local root = context.root_dir or (context.path and vim.fs.dirname(context.path))
@@ -170,7 +167,7 @@ function M.relationships(context, options, callback)
   local process
   local timer
 
-  local function finish(result)
+  local function finish(result, outcome)
     if completed or cancelled then
       return
     end
@@ -181,7 +178,7 @@ function M.relationships(context, options, callback)
     end
     vim.schedule(function()
       if not cancelled then
-        callback(result)
+        callback(result, outcome)
       end
     end)
   end
@@ -238,13 +235,10 @@ function M.relationships(context, options, callback)
       return
     end
     pcall(process.kill, process, 15)
-    finish(
-      empty(
-        string.format("ast-grep search exceeded %d ms and was stopped.", timeout_ms),
-        "structural search timed out",
-        "warn"
-      )
-    )
+    finish(empty(), {
+      state = "timed_out",
+      message = string.format("ast-grep search exceeded %d ms and was stopped.", timeout_ms),
+    })
   end, timeout_ms)
 
   return function()

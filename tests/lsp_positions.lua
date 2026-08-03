@@ -892,17 +892,31 @@ local function run()
       error("an unsupported reference request must not be sent")
     end,
   }
-  local unavailable_configuration_result = run_relationships(no_reference_client, {
-    language = "rust",
-    kind = vim.lsp.protocol.SymbolKind.Field,
-    configuration = { key = "token", container = "Config", source = "field" },
+  local unavailable_configuration_result, unavailable_configuration_metadata =
+    run_relationships(no_reference_client, {
+      language = "rust",
+      kind = vim.lsp.protocol.SymbolKind.Field,
+      configuration = { key = "token", container = "Config", source = "field" },
+    })
+  assert_equal(unavailable_configuration_result.notes, {})
+  assert_equal(unavailable_configuration_metadata.outcome, {
+    state = "unavailable",
+    message = "symbols-only does not support project references for configuration fields.",
+  }, "configuration focus should classify unsupported references as unavailable")
+
+  local stopped_client = vim.tbl_extend("force", {}, no_reference_client, {
+    id = 113,
+    name = "stopped-lsp",
+    is_stopped = function()
+      return true
+    end,
   })
-  assert(
-    table
-      .concat(unavailable_configuration_result.notes, "\n")
-      :find("symbols-only does not support project references for configuration fields.", 1, true),
-    "configuration focus should explain when references are unsupported"
-  )
+  local stopped_result, stopped_metadata = run_relationships(stopped_client)
+  assert_equal(stopped_result.edges, {})
+  assert_equal(stopped_metadata.outcome, {
+    state = "unavailable",
+    message = "The language server is no longer available for relationship analysis.",
+  }, "a stopped language server should publish an unavailable outcome")
 
   local test_reference_client = {
     id = 111,
@@ -1099,11 +1113,18 @@ local function run()
     root_dir = "/tmp",
   })
   local timeout_result
+  local timeout_metadata
   local timeout_callbacks = 0
-  local cancel_hanging = lsp.relationships(hanging_context, position_buffer, function(value)
-    timeout_callbacks = timeout_callbacks + 1
-    timeout_result = value
-  end, { timeout_ms = 20 })
+  local cancel_hanging = lsp.relationships(
+    hanging_context,
+    position_buffer,
+    function(value, details)
+      timeout_callbacks = timeout_callbacks + 1
+      timeout_result = value
+      timeout_metadata = details
+    end,
+    { timeout_ms = 20 }
+  )
   assert(
     vim.wait(1000, function()
       return timeout_result ~= nil
@@ -1116,10 +1137,11 @@ local function run()
     { 2, 3 },
     "the hierarchy timeout should cancel both outstanding follow-up requests"
   )
-  assert(
-    timeout_result.errors[1]:find("exceeded 20 ms", 1, true),
-    "the hierarchy timeout should explain the bounded request deadline"
-  )
+  assert_equal(timeout_result.errors, {})
+  assert_equal(timeout_metadata.outcome, {
+    state = "timed_out",
+    message = "LSP relationship requests exceeded 20 ms and were stopped.",
+  }, "the hierarchy timeout should publish a typed terminal outcome")
   for _, handler in ipairs(hanging_type_handlers) do
     handler(nil, {})
   end

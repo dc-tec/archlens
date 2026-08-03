@@ -246,25 +246,58 @@ local unavailable_options = vim.tbl_deep_extend("force", {}, options, {
   command = "archlens-command-that-does-not-exist",
 })
 local unavailable
+local unavailable_outcome
 local shared_after_clear
-index.relationships(context, bufnr, unavailable_options, function(value)
+local shared_after_clear_outcome
+index.relationships(context, bufnr, unavailable_options, function(value, outcome)
   unavailable = value
+  unavailable_outcome = outcome
 end)
 index.clear_cache()
-index.relationships(context, bufnr, unavailable_options, function(value)
+index.relationships(context, bufnr, unavailable_options, function(value, outcome)
   shared_after_clear = value
+  shared_after_clear_outcome = outcome
 end)
 assert(vim.wait(500, function()
   return unavailable ~= nil and shared_after_clear ~= nil
 end, 10))
-assert(
-  table.concat(unavailable.notes, "\n"):find("ripgrep", 1, true),
-  "a missing enumerator should be reported explicitly"
-)
-assert(
-  table.concat(shared_after_clear.notes, "\n"):find("ripgrep", 1, true),
+equal(unavailable.notes, {})
+equal(unavailable_outcome, {
+  state = "unavailable",
+  message = "archlens-command-that-does-not-exist is unavailable; install ripgrep or disable reverse module analysis.",
+}, "a missing enumerator should publish an unavailable outcome")
+equal(shared_after_clear.notes, {})
+equal(
+  shared_after_clear_outcome,
+  unavailable_outcome,
   "cache clearing must not strand subscribers sharing an active build"
 )
+
+index.clear_cache()
+local slow_command = vim.fs.joinpath(project, "slow-rg")
+vim.fn.writefile({ "#!/bin/sh", "sleep 1" }, slow_command)
+assert(vim.uv.fs_chmod(slow_command, 493))
+local timed_out
+local timed_out_outcome
+local timed_out_options = vim.tbl_deep_extend("force", {}, options, {
+  command = slow_command,
+  timeout_ms = 10,
+})
+index.relationships(context, bufnr, timed_out_options, function(value, outcome)
+  timed_out = value
+  timed_out_outcome = outcome
+end)
+assert(
+  vim.wait(1000, function()
+    return timed_out ~= nil
+  end, 10),
+  "the project index should enforce its scan deadline"
+)
+equal(timed_out.notes, {})
+equal(timed_out_outcome, {
+  state = "timed_out",
+  message = "Project module scan stopped after 10 ms; module-dependent results may be incomplete.",
+})
 
 index.clear_cache()
 local refreshed

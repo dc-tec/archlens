@@ -230,15 +230,17 @@ sites = {
   },
 }
 local no_lsp_dynamic
-imports.relationships(no_lsp_context, 0, {}, function(value)
+local no_lsp_dynamic_outcome
+imports.relationships(no_lsp_context, 0, {}, function(value, outcome)
   no_lsp_dynamic = value
+  no_lsp_dynamic_outcome = outcome
 end)
 equal(#no_lsp_dynamic.edges, 0)
-assert(
-  table
-    .concat(no_lsp_dynamic.notes, "\n")
-    :find("1 module dependency target requires a definition-capable language server.", 1, true)
-)
+equal(no_lsp_dynamic.notes, {})
+equal(no_lsp_dynamic_outcome, {
+  state = "unavailable",
+  message = "1 module dependency target requires a definition-capable language server.",
+})
 sites = original_sites
 
 imports.clear_cache()
@@ -324,10 +326,12 @@ end
 package.loaded["archlens.imports"] = nil
 imports = require("archlens.imports")
 local timeout_result
+local timeout_outcome
 local timeout_callbacks = 0
-imports.relationships(context, 0, { concurrency = 2, timeout_ms = 10 }, function(value)
+imports.relationships(context, 0, { concurrency = 2, timeout_ms = 10 }, function(value, outcome)
   timeout_callbacks = timeout_callbacks + 1
   timeout_result = value
+  timeout_outcome = outcome
 end)
 assert(
   vim.wait(1000, function()
@@ -336,6 +340,10 @@ assert(
   "hanging import definitions should obey the provider timeout"
 )
 equal(hanging_cancellations, 2, "the timeout should cancel active definition requests")
+equal(timeout_outcome, {
+  state = "timed_out",
+  message = "Module dependency resolution exceeded 10 ms and was stopped.",
+})
 for _, callback in ipairs(hanging_callbacks) do
   callback({}, nil, 0)
 end

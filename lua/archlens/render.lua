@@ -101,6 +101,12 @@ local function analysis_line(model, width, inspectable)
       if #state_runs == 1 and (exceptional_provider_states[state] or #active == 1) then
         compact[#compact + 1] =
           string.format("%s %s", state_runs[1].label, provider_state_labels[state])
+      elseif exceptional_provider_states[state] then
+        local labels = vim.tbl_map(function(run)
+          return run.label
+        end, state_runs)
+        compact[#compact + 1] =
+          string.format("%s %s", table.concat(labels, " + "), provider_state_labels[state])
       else
         compact[#compact + 1] = string.format("%d %s", #state_runs, provider_state_labels[state])
       end

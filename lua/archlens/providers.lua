@@ -24,6 +24,63 @@ local function nonempty_string(value)
   return type(value) == "string" and value:match("%S") ~= nil
 end
 
+local terminal_provider_states = {
+  cancelled = true,
+  completed = true,
+  failed = true,
+  timed_out = true,
+  unavailable = true,
+}
+
+local terminal_state_priority = {
+  completed = 0,
+  cancelled = 1,
+  unavailable = 2,
+  timed_out = 3,
+  failed = 4,
+}
+
+local function normalize_terminal_outcome(outcome)
+  if outcome == nil then
+    return { state = "completed" }
+  end
+  assert(type(outcome) == "table", "provider outcome must be a table")
+  for key in pairs(outcome) do
+    assert(key == "state" or key == "message", "unsupported provider outcome field: " .. key)
+  end
+  assert(
+    terminal_provider_states[outcome.state],
+    "unsupported terminal provider state: " .. tostring(outcome.state)
+  )
+  assert(
+    outcome.message == nil or nonempty_string(outcome.message),
+    "provider outcome message must be a non-empty string"
+  )
+  return vim.deepcopy(outcome)
+end
+
+local function combine_outcomes(left, right)
+  if not right or right.state == "completed" then
+    return left
+  end
+  if not left or left.state == "completed" then
+    return vim.deepcopy(right)
+  end
+  local combined = terminal_state_priority[right.state] > terminal_state_priority[left.state]
+      and vim.deepcopy(right)
+    or vim.deepcopy(left)
+  local messages = {}
+  local seen = {}
+  for _, outcome in ipairs({ left, right }) do
+    if outcome.message and not seen[outcome.message] then
+      messages[#messages + 1] = outcome.message
+      seen[outcome.message] = true
+    end
+  end
+  combined.message = #messages > 0 and table.concat(messages, "; ") or nil
+  return combined
+end
+
 local function normalize_provider(id, spec)
   assert(
     nonempty_string(id) and id:match("^[%l][%l%d_%-]*$"),
@@ -137,9 +194,11 @@ local function start_lsp_context(context, source_buffer, config, done, report)
     if cancelled then
       return
     end
+    local outcome = metadata and metadata.outcome
     local retry = config.lsp.cold_start_retry or {}
     local retryable = not retried
       and retry.enabled ~= false
+      and (not outcome or outcome.state == "completed")
       and empty_semantic_result(result, metadata)
       and type(lsp.recently_attached) == "function"
       and lsp.recently_attached(context.client_id, retry.window_ms or 10000)
@@ -156,8 +215,16 @@ local function start_lsp_context(context, source_buffer, config, done, report)
       return
     end
 
-    explain_empty_semantic_result(result, context, metadata, retried)
-    done(result)
+    if not outcome or outcome.state == "completed" then
+      explain_empty_semantic_result(result, context, metadata, retried)
+    elseif outcome.message then
+      outcome = vim.deepcopy(outcome)
+      local label = context.client_name or "LSP"
+      if not vim.startswith(outcome.message, label) then
+        outcome.message = string.format("%s: %s", label, outcome.message)
+      end
+    end
+    done(result, outcome)
   end
 
   run = function()
@@ -182,24 +249,57 @@ local function start_lsp(context, source_buffer, config, done, report)
   local combined = graph.delta()
   local pending = #contexts
   local cancellations = {}
+  local outcomes = {}
   local grouping_cancel = function() end
   local cancelled = false
 
-  local function finish(result)
+  local function finish(result, outcome)
     if cancelled then
       return
     end
     graph.merge(combined, result)
+    outcomes[#outcomes + 1] = outcome or { state = "completed" }
     pending = pending - 1
     if pending ~= 0 then
       return
     end
+    local terminal_outcome
+    local unavailable = {}
+    for _, current in ipairs(outcomes) do
+      if current.state == "unavailable" then
+        unavailable[#unavailable + 1] = current
+      elseif current.state ~= "completed" then
+        terminal_outcome = combine_outcomes(terminal_outcome, current)
+      end
+    end
+    if terminal_outcome then
+      for _, current in ipairs(unavailable) do
+        terminal_outcome = combine_outcomes(terminal_outcome, current)
+      end
+    elseif #unavailable == #outcomes then
+      for _, current in ipairs(unavailable) do
+        terminal_outcome = combine_outcomes(terminal_outcome, current)
+      end
+    elseif #unavailable > 0 then
+      for _, current in ipairs(unavailable) do
+        graph.add_note(combined, current.message or "Some semantic analysis was unavailable.", {
+          summary = "some semantic analysis unavailable",
+          severity = "warn",
+        })
+      end
+    end
     if not config.grouping.enabled then
-      done(combined)
+      done(combined, terminal_outcome)
       return
     end
-    grouping_cancel =
-      containers.enrich(combined, context, provider_options(config.grouping, config), done)
+    grouping_cancel = containers.enrich(
+      combined,
+      context,
+      provider_options(config.grouping, config),
+      function(result)
+        done(result, terminal_outcome)
+      end
+    )
   end
 
   for _, semantic_context in ipairs(contexts) do
@@ -395,6 +495,21 @@ function M.run(context, source_buffer, config, controls)
   for _, task in ipairs(tasks) do
     local completed = false
     local run = runs[task.id]
+    local function fail(message, graph_message)
+      if completed or not controls.is_current() then
+        return
+      end
+      completed = true
+      run.state = "failed"
+      run.duration_ms = math.max(0, now() - run.started_at_ms)
+      run.retry_delay_ms = nil
+      run.message = tostring(message)
+      graph.add_error(
+        relationships,
+        graph_message or string.format("%s failed: %s", task.label, tostring(message))
+      )
+      update()
+    end
     local function report(state, fields)
       if completed or not controls.is_current() then
         return
@@ -410,32 +525,44 @@ function M.run(context, source_buffer, config, controls)
       update()
     end
 
-    local function done(result)
+    local function done(result, outcome)
       if completed or not controls.is_current() then
         return
       end
+      local outcome_ok, normalized = pcall(normalize_terminal_outcome, outcome)
+      if not outcome_ok then
+        fail(normalized)
+        return
+      end
+      local merged, merge_error = pcall(graph.merge, relationships, result or graph.delta())
+      if not merged then
+        fail("invalid graph delta: " .. tostring(merge_error))
+        return
+      end
       completed = true
-      graph.merge(relationships, result or graph.delta())
-      run.state = "completed"
+      run.state = normalized.state
       run.duration_ms = math.max(0, now() - run.started_at_ms)
       run.retry_delay_ms = nil
-      run.message = nil
+      run.message = normalized.message
       update()
     end
 
     local ok, cancel_or_error = pcall(task.start, done, report)
     if ok then
-      controls.register_cancel(cancel_or_error)
+      if not completed and type(cancel_or_error) == "function" then
+        controls.register_cancel(function()
+          if completed then
+            return
+          end
+          completed = true
+          pcall(cancel_or_error)
+        end)
+      end
     elseif not completed and controls.is_current() then
-      completed = true
-      run.state = "failed"
-      run.duration_ms = math.max(0, now() - run.started_at_ms)
-      run.message = tostring(cancel_or_error)
-      graph.add_error(
-        relationships,
+      fail(
+        tostring(cancel_or_error),
         string.format("%s failed to start: %s", task.label, tostring(cancel_or_error))
       )
-      update()
     end
   end
 

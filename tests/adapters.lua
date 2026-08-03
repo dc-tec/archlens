@@ -312,17 +312,47 @@ local propagated = require("archlens.treesitter").resolve(ast_only_buffer, {
 equal(propagated.language, "lua")
 equal(semantic_context.language, nil)
 local ast_only_result
+local ast_only_outcome
 require("archlens.ast_grep").relationships(propagated, {
   command = "archlens-definitely-missing-ast-grep",
-}, function(result)
+}, function(result, outcome)
   ast_only_result = result
+  ast_only_outcome = outcome
+end)
+equal(ast_only_result.notes, {})
+equal(ast_only_outcome, {
+  state = "unavailable",
+  message = "ast-grep is unavailable; structural project matches were skipped.",
+}, "an ast-grep-only adapter should publish an unavailable outcome")
+
+local timeout_root = vim.fn.tempname()
+vim.fn.mkdir(timeout_root, "p")
+local slow_ast_grep = vim.fs.joinpath(timeout_root, "slow-ast-grep")
+vim.fn.writefile({ "#!/bin/sh", "sleep 1" }, slow_ast_grep)
+assert(vim.uv.fs_chmod(slow_ast_grep, 493))
+local timeout_context = vim.deepcopy(propagated)
+timeout_context.root_dir = timeout_root
+timeout_context.path = vim.fs.joinpath(timeout_root, "focus.lua")
+local ast_timeout_result
+local ast_timeout_outcome
+require("archlens.ast_grep").relationships(timeout_context, {
+  command = slow_ast_grep,
+  timeout_ms = 10,
+}, function(result, outcome)
+  ast_timeout_result = result
+  ast_timeout_outcome = outcome
 end)
 assert(
-  ast_only_result
-    and ast_only_result.notes[1]
-    and ast_only_result.notes[1]:find("unavailable", 1, true),
-  "an ast-grep-only adapter should reach provider readiness checks"
+  vim.wait(1000, function()
+    return ast_timeout_result ~= nil
+  end, 10),
+  "ast-grep should enforce its search deadline"
 )
+equal(ast_timeout_result.notes, {})
+equal(ast_timeout_outcome, {
+  state = "timed_out",
+  message = "ast-grep search exceeded 10 ms and was stopped.",
+})
 vim.api.nvim_buf_delete(ast_only_buffer, { force = true })
 
 local parser_missing_buffer = vim.api.nvim_create_buf(false, true)

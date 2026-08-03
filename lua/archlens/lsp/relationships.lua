@@ -168,14 +168,16 @@ function M.relationships(context, bufnr, callback, options)
   local result = graph.delta()
   local client = vim.lsp.get_client_by_id(context.client_id)
   if not client or client:is_stopped() then
-    if context.configuration then
-      graph.add_note(
-        result,
-        "Configuration uses require an active language server with project reference support.",
-        { summary = "configuration uses unavailable", severity = "warn" }
-      )
-    end
-    callback(result)
+    callback(result, {
+      request_count = 0,
+      request_labels = {},
+      outcome = {
+        state = "unavailable",
+        message = context.configuration
+            and "Configuration uses require an active language server with project reference support."
+          or "The language server is no longer available for relationship analysis.",
+      },
+    })
     return function() end
   end
 
@@ -186,6 +188,8 @@ function M.relationships(context, bufnr, callback, options)
   local request_ids = {}
   local request_count = 0
   local request_labels = {}
+  local configuration_unavailable
+  local terminal_outcome
   local timer
 
   local function complete()
@@ -200,6 +204,7 @@ function M.relationships(context, bufnr, callback, options)
     callback(result, {
       request_count = request_count,
       request_labels = vim.deepcopy(request_labels),
+      outcome = terminal_outcome,
     })
   end
 
@@ -380,13 +385,9 @@ function M.relationships(context, bufnr, callback, options)
     and not context.module_context
     and client:supports_method(methods.references, bufnr)
   if context.configuration and not supports_references then
-    graph.add_note(
-      result,
-      string.format(
-        "%s does not support project references for configuration fields.",
-        context.client_name or client.name
-      ),
-      { summary = "configuration uses unavailable", severity = "warn" }
+    configuration_unavailable = string.format(
+      "%s does not support project references for configuration fields.",
+      context.client_name or client.name
     )
   end
   local supports_type_hierarchy = not context.file_fallback
@@ -446,6 +447,16 @@ function M.relationships(context, bufnr, callback, options)
         "LSP locations were skipped because their source text was unavailable for position conversion."
     end
   end
+  if configuration_unavailable then
+    if #requests == 0 then
+      terminal_outcome = { state = "unavailable", message = configuration_unavailable }
+    else
+      graph.add_note(result, configuration_unavailable, {
+        summary = "configuration uses unavailable",
+        severity = "warn",
+      })
+    end
+  end
   pending = #requests
 
   request = function(spec)
@@ -478,8 +489,13 @@ function M.relationships(context, bufnr, callback, options)
             pcall(client.cancel_request, client, request_id)
           end
         end
-        result.errors[#result.errors + 1] =
-          string.format("LSP relationship requests exceeded %d ms and were stopped.", timeout_ms)
+        terminal_outcome = {
+          state = "timed_out",
+          message = string.format(
+            "LSP relationship requests exceeded %d ms and were stopped.",
+            timeout_ms
+          ),
+        }
         pending = 0
         complete()
       end, timeout_ms)

@@ -362,9 +362,12 @@ function M.resolve(bufnr, position, base_context)
   }
   if not context.configuration and adapter.configuration then
     local container_context = ancestors[#ancestors] or syntax_context
-    local configured, configuration =
-      pcall(adapter.configuration, bufnr, context, container_context)
-    if configured and configuration then
+    local configuration, configuration_error =
+      adapters.configuration(adapter.language, bufnr, context, container_context)
+    if configuration_error then
+      context.adapter_issues = context.adapter_issues or {}
+      context.adapter_issues[#context.adapter_issues + 1] = configuration_error
+    elseif configuration then
       context.configuration = configuration
       context.scope = "configuration"
     end
@@ -440,10 +443,10 @@ local function extract_import_sites(language, spec, parser, source, uri, metadat
       if query.captures[capture_id] == spec.capture then
         local range = node_range(node)
         local text = node_text(node, source)
-        local normalized = { name = text }
-        if spec.normalize then
-          local ok, value = pcall(spec.normalize, node, text, source, metadata)
-          normalized = ok and value or nil
+        local normalized, normalization_error =
+          adapters.normalize_import(language, spec, node, text, source, metadata)
+        if normalization_error then
+          error(normalization_error, 0)
         end
         if normalized and type(normalized.name) == "string" and normalized.name ~= "" then
           local position = vim.deepcopy(range.start)

@@ -217,6 +217,11 @@ presentation key creates an independently collapsible view section while the
 underlying relationship ID, direction, evidence, filtering, and details remain
 canonical. Hooks should treat their inputs as read-only.
 
+If an adapter callback fails or returns an invalid value, ArchLens reports the
+failure in the result details. Presentation falls back to canonical labels and
+rows. Module analysis retains unaffected relationships and omits results that
+depend on the failed callback.
+
 ## Provider extensions
 
 Project-analysis providers use the same registry as the built-in LSP,

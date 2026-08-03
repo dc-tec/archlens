@@ -16,6 +16,29 @@ local function file_key(path)
   return "file:" .. normalized(path)
 end
 
+local function adapter_hook_error(language, hook, err)
+  return string.format("%s adapter %s failed: %s", language, hook, tostring(err))
+end
+
+local function valid_keys(keys)
+  if type(keys) ~= "table" or not vim.islist(keys) then
+    return false
+  end
+  for _, key in ipairs(keys) do
+    if type(key) ~= "string" or key == "" then
+      return false
+    end
+  end
+  return true
+end
+
+local function fallback_target_label(context, path, root)
+  if context.module_context and type(context.name) == "string" and context.name ~= "" then
+    return context.name
+  end
+  return (root and vim.fs.relpath(root, path)) or vim.fs.basename(path)
+end
+
 local function zero_range()
   return {
     start = { line = 0, character = 0 },
@@ -61,34 +84,55 @@ local function key_for(root, specs, filters, options)
   }, "|")
 end
 
-local function target_keys(imports, path, root)
+local function target_keys(language, imports, path, root)
   if imports.target_keys then
     local ok, keys, err = pcall(imports.target_keys, path, root)
     if not ok then
-      return {}, tostring(keys)
+      return {}, adapter_hook_error(language, "module target keys", keys), true
     end
-    return keys or {}, err
+    keys = keys or {}
+    if not valid_keys(keys) then
+      return {},
+        adapter_hook_error(
+          language,
+          "module target keys",
+          "callback must return a list of non-empty strings"
+        ),
+        true
+    end
+    return keys, err, false
   end
   return { file_key(path) }
 end
 
-local function target_label(imports, context, path, root)
+local function target_label(language, imports, context, path, root)
   if imports.target_label then
     local ok, label = pcall(imports.target_label, path, root, context)
     if ok and type(label) == "string" and label ~= "" then
       return label
     end
+    local err = ok and "callback must return a non-empty string" or label
+    return nil, adapter_hook_error(language, "module target label", err)
   end
-  if context.module_context and type(context.name) == "string" and context.name ~= "" then
-    return context.name
-  end
-  return (root and vim.fs.relpath(root, path)) or vim.fs.basename(path)
+  return fallback_target_label(context, path, root)
 end
 
-local function site_keys(imports, site, path, root)
+local function site_keys(language, imports, site, path, root)
   if imports.site_keys then
     local ok, keys = pcall(imports.site_keys, site, path, root)
-    return ok and keys or {}
+    if not ok then
+      return {}, adapter_hook_error(language, "module import keys", keys)
+    end
+    keys = keys or {}
+    if not valid_keys(keys) then
+      return {},
+        adapter_hook_error(
+          language,
+          "module import keys",
+          "callback must return a list of non-empty strings"
+        )
+    end
+    return keys
   end
   local keys = {}
   for _, location in ipairs(site.target_locations or {}) do
@@ -507,6 +551,7 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
 
       local cursor = 1
       local parse_errors = 0
+      local adapter_errors = {}
       local function parse_batch()
         if finished then
           return
@@ -519,7 +564,12 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
             parse_errors = parse_errors + 1
           end
           for _, site in ipairs(sites) do
-            for _, key in ipairs(site_keys(file.spec.imports, site, file.path, root)) do
+            local keys, key_error =
+              site_keys(file.spec.language, file.spec.imports, site, file.path, root)
+            if key_error then
+              adapter_errors[key_error] = true
+            end
+            for _, key in ipairs(keys) do
               add_site(index, key, file.path, site, file.spec.language)
             end
           end
@@ -539,6 +589,11 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
               "module scan incomplete",
               "warn"
             )
+          end
+          local errors = vim.tbl_keys(adapter_errors)
+          table.sort(errors)
+          for _, adapter_error in ipairs(errors) do
+            add_index_note(index, adapter_error, "adapter module analysis failed", "error")
           end
           finish()
         end
@@ -603,8 +658,14 @@ local function importer_edge(context, target_path, importer, anchor_label)
   })
 end
 
-local function materialize(index, context, target_path, keys, anchor_label, options)
+local function materialize(index, context, target_path, keys, anchor_label, options, issues)
   local result = graph.delta()
+  for _, issue in ipairs(issues or {}) do
+    graph.add_note(result, issue, {
+      summary = "adapter module analysis failed",
+      severity = "error",
+    })
+  end
   for index_number, note in ipairs(index.notes) do
     graph.add_note(result, note, index.note_records[index_number])
   end
@@ -660,6 +721,7 @@ function M.relationships(context, bufnr, options, callback)
   end
 
   local filetype = options.filetype or vim.bo[bufnr].filetype
+  local language = adapters.language_for_filetype(filetype, target_path)
   local specs, by_extension = scan_specs(filetype, target_path)
   local target_imports = adapters.imports_for_filetype(filetype, target_path)
   if #specs == 0 or not target_imports then
@@ -687,31 +749,48 @@ function M.relationships(context, bufnr, options, callback)
     options[field] = math.max(1, math.floor(tonumber(options[field]) or 1))
   end
   local filters = options.filters or {}
-  local keys, key_error = target_keys(target_imports, target_path, root)
+  local keys, key_error, key_failure = target_keys(language, target_imports, target_path, root)
   if #keys == 0 then
     local result = graph.delta()
     if key_error then
-      graph.add_note(result, "Reverse module matching unavailable: " .. key_error .. ".", {
-        summary = "module matching unavailable",
-        severity = "warn",
-      })
+      graph.add_note(
+        result,
+        key_failure and key_error or "Reverse module matching unavailable: " .. key_error .. ".",
+        {
+          summary = key_failure and "adapter module analysis failed"
+            or "module matching unavailable",
+          severity = key_failure and "error" or "warn",
+        }
+      )
     end
     callback(result)
     return function() end
   end
-  local anchor_label = target_label(target_imports, context, target_path, root)
+  local anchor_label, label_error =
+    target_label(language, target_imports, context, target_path, root)
+  local issues = {}
+  if label_error then
+    issues[#issues + 1] = label_error
+    anchor_label = fallback_target_label(context, target_path, root)
+  end
 
   local cache_key = key_for(root, specs, filters, options)
   local index = indexes[cache_key]
     or build_index(cache_key, root, specs, by_extension, filters, options)
   if index.ready then
-    callback(materialize(index, context, target_path, keys, anchor_label, options), index.outcome)
+    callback(
+      materialize(index, context, target_path, keys, anchor_label, options, issues),
+      index.outcome
+    )
     return function() end
   end
 
   local subscriber = {
     callback = function(value)
-      callback(materialize(value, context, target_path, keys, anchor_label, options), value.outcome)
+      callback(
+        materialize(value, context, target_path, keys, anchor_label, options, issues),
+        value.outcome
+      )
     end,
     cancelled = false,
   }

@@ -177,7 +177,22 @@ local function source_line(location, cache)
   return text
 end
 
-local function row_from_edge(edge, relation, context, cache)
+local function collect_adapter_issues(context)
+  local issues = {}
+  local seen = {}
+  local function add(message)
+    if type(message) == "string" and message ~= "" and not seen[message] then
+      seen[message] = true
+      issues[#issues + 1] = message
+    end
+  end
+  for _, message in ipairs(context.adapter_issues or {}) do
+    add(message)
+  end
+  return issues, add
+end
+
+local function row_from_edge(edge, relation, context, cache, report_adapter_issue)
   local node = graph.related_node(edge)
   local location = node and node.location
   if not location or not location.uri or not location.range then
@@ -205,7 +220,8 @@ local function row_from_edge(edge, relation, context, cache)
     occurrences = vim.deepcopy(edge.occurrences or {}),
     presentation = vim.deepcopy(edge.presentation),
   }
-  local projected = adapters.row_presentation(context, relation, row)
+  local projected, projection_error = adapters.row_presentation(context, relation, row)
+  report_adapter_issue(projection_error)
   if projected then
     row.name = projected.name or row.name
     row.kind_name = projected.kind_name or row.kind_name
@@ -405,7 +421,7 @@ local function sort_rows(rows, style)
   return rows
 end
 
-local function normalize_edges(snapshot, context, filters)
+local function normalize_edges(snapshot, context, filters, report_adapter_issue)
   local cache = {}
   local scope_cache = {}
   local grouped = {}
@@ -447,7 +463,7 @@ local function normalize_edges(snapshot, context, filters)
           )
         )
       if not suppress_self and not seen[relation.id][dedupe_key] then
-        local row = row_from_edge(edge, relation, context, cache)
+        local row = row_from_edge(edge, relation, context, cache, report_adapter_issue)
         if row then
           local path = vim.uri_to_fname(row.location.uri)
           row.scope = scope.classify(context.root_dir, path, filters, scope_cache)
@@ -465,7 +481,7 @@ local function normalize_edges(snapshot, context, filters)
           end
         end
       elseif type(seen[relation.id][dedupe_key]) == "table" then
-        local row = row_from_edge(edge, relation, context, cache)
+        local row = row_from_edge(edge, relation, context, cache, report_adapter_issue)
         if row then
           merge_row(seen[relation.id][dedupe_key], row)
         end
@@ -525,11 +541,13 @@ local function normalize_edges(snapshot, context, filters)
   return grouped, hidden
 end
 
-local function projected_sections(context, relation, rows)
+local function projected_sections(context, relation, rows, report_adapter_issue)
   local sections = {}
   local by_key = {}
   for index, row in ipairs(rows) do
-    local projection = adapters.section_presentation(context, relation, row) or {}
+    local projection, projection_error = adapters.section_presentation(context, relation, row)
+    report_adapter_issue(projection_error)
+    projection = projection or {}
     local key = projection.key or "default"
     local section = by_key[key]
     if not section then
@@ -653,7 +671,8 @@ function M.build(context, snapshot, opts)
   if filters.include_external == nil then
     filters.include_external = opts.include_external == true
   end
-  local grouped, hidden = normalize_edges(snapshot, context, filters)
+  local adapter_issues, report_adapter_issue = collect_adapter_issues(context)
+  local grouped, hidden = normalize_edges(snapshot, context, filters, report_adapter_issue)
   local has_semantic_usage = #grouped.incoming > 0
     or #grouped.test_references > 0
     or #grouped.references > 0
@@ -768,7 +787,9 @@ function M.build(context, snapshot, opts)
       if hidden_sections[relation.id] then
         section_hidden_count = section_hidden_count + #rows
       else
-        for _, projection in ipairs(projected_sections(context, relation, rows)) do
+        for _, projection in
+          ipairs(projected_sections(context, relation, rows, report_adapter_issue))
+        do
           sections[#sections + 1] = {
             id = relation.id,
             view_id = projection.key == "default" and relation.id
@@ -793,6 +814,15 @@ function M.build(context, snapshot, opts)
       "%d relationship%s hidden by section policy.",
       section_hidden_count,
       section_hidden_count == 1 and "" or "s"
+    )
+  end
+  for _, issue in ipairs(adapter_issues) do
+    notes[#notes + 1] = issue
+  end
+  if #adapter_issues > 0 then
+    add_result_part(
+      string.format("%d adapter issue%s", #adapter_issues, #adapter_issues == 1 and "" or "s"),
+      "error"
     )
   end
   if #sections == 0 and #notes == 0 and #pending_providers == 0 then

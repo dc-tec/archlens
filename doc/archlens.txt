@@ -222,6 +222,11 @@ A presentation key creates an independently collapsible view section while
 the underlying relationship ID, direction, evidence, filtering, and details
 remain canonical. Presentation hooks should treat their inputs as read-only.
 
+If an adapter callback fails or returns an invalid value, ArchLens reports the
+failure in the result details. Presentation falls back to canonical labels and
+rows. Module analysis retains unaffected relationships and omits results that
+depend on the failed callback.
+
 The focused relationship graph is defined in `lua/archlens/graph.lua`.
 Relationship names, directions, and ordering are registered in
 `lua/archlens/relations.lua`.

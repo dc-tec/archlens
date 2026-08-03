@@ -4,6 +4,20 @@ local registry = {}
 local filetypes = {}
 local filename_extensions = {}
 
+local function call_hook(language, hook, callback, ...)
+  local ok, value = pcall(callback, ...)
+  if not ok then
+    return nil,
+      string.format(
+        "%s adapter %s failed: %s",
+        tostring(language or "unknown"),
+        hook,
+        tostring(value)
+      )
+  end
+  return value
+end
+
 local default_root_markers = {
   ".git",
   "flake.nix",
@@ -733,26 +747,55 @@ function M.import_scan_specs(filetype, path)
   return specs
 end
 
+function M.configuration(language, bufnr, context, syntax_context)
+  local adapter = registry[language]
+  local callback = adapter and adapter.configuration
+  if not callback then
+    return nil
+  end
+  return call_hook(language, "configuration", function()
+    local value = callback(bufnr, context, syntax_context)
+    assert(value == nil or type(value) == "table", "configuration must return a table or nil")
+    return value
+  end)
+end
+
+function M.normalize_import(language, spec, node, text, source, metadata)
+  if not spec.normalize then
+    return { name = text }
+  end
+  return call_hook(language, "import normalization", function()
+    local value = spec.normalize(node, text, source, metadata)
+    assert(
+      value == nil or type(value) == "table",
+      "import normalization must return a table or nil"
+    )
+    return value
+  end)
+end
+
 function M.row_presentation(context, relation, row)
   local adapter = registry[context.language]
   local project = adapter and adapter.presentation and adapter.presentation.row
   if not project then
     return nil
   end
-  local presentation = project(context, relation, row)
-  if presentation == nil then
-    return nil
-  end
-  assert(type(presentation) == "table", "adapter row presentation must return a table")
-  for _, field in ipairs({ "kind_name", "name" }) do
-    if presentation[field] ~= nil then
-      assert(
-        type(presentation[field]) == "string" and presentation[field] ~= "",
-        "adapter row presentation " .. field .. " must be a non-empty string"
-      )
+  return call_hook(context.language, "row presentation", function()
+    local presentation = project(context, relation, row)
+    if presentation == nil then
+      return nil
     end
-  end
-  return presentation
+    assert(type(presentation) == "table", "row presentation must return a table")
+    for _, field in ipairs({ "kind_name", "name" }) do
+      if presentation[field] ~= nil then
+        assert(
+          type(presentation[field]) == "string" and presentation[field] ~= "",
+          "row presentation " .. field .. " must be a non-empty string"
+        )
+      end
+    end
+    return presentation
+  end)
 end
 
 function M.section_presentation(context, relation, row)
@@ -761,32 +804,31 @@ function M.section_presentation(context, relation, row)
   if not project then
     return nil
   end
-  local presentation = project(context, relation, row)
-  if presentation == nil then
-    return nil
-  end
-  assert(type(presentation) == "table", "adapter section presentation must return a table")
-  for _, field in ipairs({ "key", "label" }) do
-    if presentation[field] ~= nil then
+  return call_hook(context.language, "section presentation", function()
+    local presentation = project(context, relation, row)
+    if presentation == nil then
+      return nil
+    end
+    assert(type(presentation) == "table", "section presentation must return a table")
+    for _, field in ipairs({ "key", "label" }) do
+      if presentation[field] ~= nil then
+        assert(
+          type(presentation[field]) == "string" and presentation[field] ~= "",
+          "section presentation " .. field .. " must be a non-empty string"
+        )
+      end
+    end
+    if presentation.order ~= nil then
+      assert(type(presentation.order) == "number", "section presentation order must be a number")
+    end
+    if presentation.show_kind ~= nil then
       assert(
-        type(presentation[field]) == "string" and presentation[field] ~= "",
-        "adapter section presentation " .. field .. " must be a non-empty string"
+        type(presentation.show_kind) == "boolean",
+        "section presentation show_kind must be boolean"
       )
     end
-  end
-  if presentation.order ~= nil then
-    assert(
-      type(presentation.order) == "number",
-      "adapter section presentation order must be a number"
-    )
-  end
-  if presentation.show_kind ~= nil then
-    assert(
-      type(presentation.show_kind) == "boolean",
-      "adapter section presentation show_kind must be boolean"
-    )
-  end
-  return presentation
+    return presentation
+  end)
 end
 
 function M.ast_grep_query(context, language)

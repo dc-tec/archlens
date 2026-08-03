@@ -302,6 +302,98 @@ local wrappers_ok = pcall(adapters.register, "invalid_wrappers", {
 })
 equal(wrappers_ok, false, "focus wrappers must be explicit node-type flags")
 
+adapters.register("broken_hooks", {
+  configuration = function()
+    error("configuration exploded")
+  end,
+  presentation = {
+    row = function()
+      error("row presentation exploded")
+    end,
+    section = function()
+      return { label = "" }
+    end,
+  },
+})
+local _, configuration_error = adapters.configuration("broken_hooks", 0, {}, {})
+assert(
+  configuration_error
+    and configuration_error:find("broken_hooks adapter configuration failed", 1, true),
+  "configuration callback failures should identify the adapter and hook"
+)
+local _, normalization_error = adapters.normalize_import("broken_hooks", {
+  normalize = function()
+    error("normalization exploded")
+  end,
+}, nil, '"broken"', 0, {})
+assert(
+  normalization_error
+    and normalization_error:find("broken_hooks adapter import normalization failed", 1, true),
+  "import normalization failures should identify the adapter and hook"
+)
+local _, invalid_normalization_error = adapters.normalize_import("broken_hooks", {
+  normalize = function()
+    return "invalid"
+  end,
+}, nil, '"broken"', 0, {})
+assert(
+  invalid_normalization_error
+    and invalid_normalization_error:find("must return a table or nil", 1, true),
+  "invalid import normalization values should use the same diagnostic path"
+)
+local graph = require("archlens.graph")
+local broken_context = {
+  adapter_issues = { configuration_error, normalization_error },
+  kind = vim.lsp.protocol.SymbolKind.Struct,
+  kind_name = "Struct",
+  language = "broken_hooks",
+  location = {
+    uri = "file:///workspace/focus.lua",
+    range = {
+      start = { line = 0, character = 0 },
+      ["end"] = { line = 0, character = 5 },
+    },
+  },
+  name = "Focus",
+  position_encoding = "utf-8",
+  root_dir = "/workspace",
+  supports_calls = false,
+}
+local broken_snapshot = graph.new(broken_context)
+graph.add_edge(
+  broken_snapshot,
+  graph.edge(
+    "references",
+    graph.node_from_location({
+      uri = "file:///workspace/use.lua",
+      range = {
+        start = { line = 4, character = 0 },
+        ["end"] = { line = 4, character = 5 },
+      },
+    }, { name = "Focus()", kind_name = "Reference" }),
+    broken_snapshot.focus,
+    { provider = "test-lsp", method = "textDocument/references", class = "semantic" }
+  )
+)
+local broken_model = require("archlens.model").build(broken_context, broken_snapshot, {
+  include_external = true,
+})
+equal(
+  broken_model.sections[1].label,
+  "Referenced across project",
+  "failed presentation hooks should retain the canonical section"
+)
+equal(
+  broken_model.sections[1].rows[1].name,
+  "Focus()",
+  "failed presentation hooks should retain the canonical row"
+)
+equal(
+  broken_model.result.parts[1],
+  { label = "4 adapter issues", severity = "error" },
+  "adapter callback failures should remain inspectable without crashing the model"
+)
+
 local ast_only_buffer = vim.api.nvim_create_buf(false, true)
 vim.bo[ast_only_buffer].filetype = "lua"
 local semantic_context = { name = "resolve_me" }

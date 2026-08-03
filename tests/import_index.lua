@@ -319,6 +319,92 @@ assert(
   "refresh should rebuild the project import index"
 )
 
+local hook_mode
+require("archlens.adapters").register("broken_module_hooks", {
+  filetypes = { "brokenmodulehooks" },
+  treesitter = {
+    symbol_types = {},
+    imports = {
+      extensions = { ".go" },
+      query = "(_) @import",
+      target_keys = function()
+        if hook_mode == "target_keys" then
+          error("target keys exploded")
+        end
+        return { "broken:key" }
+      end,
+      target_label = function()
+        if hook_mode == "target_label" then
+          error("target label exploded")
+        end
+        return "broken target"
+      end,
+      site_keys = function()
+        if hook_mode == "site_keys" then
+          error("site keys exploded")
+        end
+        return { "broken:key" }
+      end,
+    },
+  },
+})
+local broken_options = vim.tbl_deep_extend("force", {}, options, {
+  filetype = "brokenmodulehooks",
+})
+local function adapter_issue(result, hook)
+  for record_index, record in ipairs(result.note_records or {}) do
+    if
+      record.summary == "adapter module analysis failed"
+      and record.severity == "error"
+      and result.notes[record_index]:find(hook, 1, true)
+    then
+      return true
+    end
+  end
+  return false
+end
+
+hook_mode = "target_keys"
+index.clear_cache()
+local broken_target_keys
+index.relationships(context, bufnr, broken_options, function(value)
+  broken_target_keys = value
+end)
+assert(
+  broken_target_keys and adapter_issue(broken_target_keys, "module target keys"),
+  "target-key callback failures should be reported without starting a project scan"
+)
+
+hook_mode = "target_label"
+index.clear_cache()
+local broken_target_label
+index.relationships(context, bufnr, broken_options, function(value)
+  broken_target_label = value
+end)
+assert(vim.wait(2500, function()
+  return broken_target_label ~= nil
+end, 10))
+assert(
+  adapter_issue(broken_target_label, "module target label"),
+  "target-label callback failures should retain relationships with a fallback label"
+)
+assert(#broken_target_label.edges > 0, "a failed target label must not discard module dependents")
+
+hook_mode = "site_keys"
+index.clear_cache()
+local broken_site_keys
+index.relationships(context, bufnr, broken_options, function(value)
+  broken_site_keys = value
+end)
+assert(vim.wait(2500, function()
+  return broken_site_keys ~= nil
+end, 10))
+assert(
+  adapter_issue(broken_site_keys, "module import keys"),
+  "site-key callback failures should explain incomplete module-dependent analysis"
+)
+equal(broken_site_keys.edges, {}, "failed site keys must not synthesize module relationships")
+
 vim.api.nvim_buf_delete(bufnr, { force = true })
 vim.fn.delete(project, "rf")
 print("archlens.nvim project import index tests passed")

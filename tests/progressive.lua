@@ -460,6 +460,11 @@ local function run()
     location = location(2),
     resolve_on_focus = true,
   })
+  assert_equal(
+    active_session.source_window,
+    source_window,
+    "focusing a relationship should retain the original source window"
+  )
   assert_equal(active_session.expanded, {}, "focusing a new symbol should reset section expansion")
   assert_equal(
     active_session.collapsed,
@@ -503,6 +508,33 @@ local function run()
       "Analysis [?]: ast-grep unavailable"
     ),
     "the default pane width should retain the exceptional provider identity"
+  )
+
+  local original_show_document = vim.lsp.util.show_document
+  local opened_from_window
+  local opened_with_options
+  local windows_before_open = #vim.api.nvim_tabpage_list_wins(0)
+  vim.lsp.util.show_document = function(_, _, options)
+    opened_from_window = vim.api.nvim_get_current_win()
+    opened_with_options = options
+    return true
+  end
+  archlens.open({ location = location(2), position_encoding = "utf-8" })
+  vim.lsp.util.show_document = original_show_document
+  assert_equal(
+    opened_from_window,
+    source_window,
+    "opening after focus should reuse the original source window"
+  )
+  assert_equal(
+    opened_with_options,
+    { focus = true, reuse_win = true },
+    "relationship navigation should reuse its source window"
+  )
+  assert_equal(
+    #vim.api.nvim_tabpage_list_wins(0),
+    windows_before_open,
+    "opening after focus should not create another window"
   )
 
   active_session.expanded = { subtypes = true }

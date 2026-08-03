@@ -299,12 +299,6 @@ local function repair_source_buffer(session, context)
     return false
   end
   session.source_buffer = buffer
-  if
-    valid_window(session.source_window)
-    and vim.api.nvim_win_get_buf(session.source_window) ~= buffer
-  then
-    session.source_window = nil
-  end
   return true
 end
 
@@ -328,7 +322,6 @@ local function focus_location(session, row)
     return
   end
   session.source_buffer = buffer
-  session.source_window = nil
   local generation = begin_run(session, false)
   local position = row.location.range.start
   local syntax_context = treesitter.resolve(buffer, position, nil)

@@ -1,6 +1,7 @@
 local source = debug.getinfo(1, "S").source:sub(2)
 local root = vim.fn.fnamemodify(source, ":p:h:h")
 vim.opt.runtimepath:prepend(root)
+vim.bo.filetype = "go"
 
 local function equal(actual, expected, message)
   assert(vim.deep_equal(actual, expected), message or vim.inspect({ actual, expected }))
@@ -118,6 +119,7 @@ assert(
 equal(result.edges[1].target.scope, "module")
 equal(result.edges[1].target.resolve_on_focus, nil)
 equal(result.edges[1].target.context.module_context, true)
+equal(result.edges[1].target.context.import_filetype, "go")
 equal(
   result.edges[1].target.location.uri,
   "file:///workspace/internal/storage/store.go",

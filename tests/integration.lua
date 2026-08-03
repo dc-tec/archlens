@@ -310,6 +310,130 @@ for _, case in ipairs({
   end
 end
 
+vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/imports.rs"))
+vim.bo.filetype = "rust"
+local importer_file_context = {
+  name = "imports.rs",
+  kind = vim.lsp.protocol.SymbolKind.File,
+  kind_name = "File",
+  scope = "file",
+  root_dir = fixture_root,
+  supports_calls = false,
+  module_context = true,
+  preserve_file_identity = true,
+  location = {
+    uri = vim.uri_from_bufnr(0),
+    range = {
+      start = { line = 0, character = 4 },
+      ["end"] = { line = 0, character = 10 },
+    },
+  },
+}
+local preserved_file = treesitter.resolve(0, { line = 0, character = 4 }, importer_file_context)
+assert_equal(preserved_file.scope, "file", "importer focus should preserve file identity")
+assert_equal(preserved_file.name, "imports.rs", "importer focus should not become the mod item")
+
+local enclosing, enclosing_error = treesitter.enclosing_containers(
+  fixture_root .. "/inline_tests.rs",
+  { { line = 6, character = 15 } }
+)
+assert(not enclosing_error, "Rust container extraction failed: " .. tostring(enclosing_error))
+assert_equal(
+  enclosing[1].name,
+  "helper_is_available",
+  "the nearest test function should group uses"
+)
+assert(
+  vim.deep_equal(enclosing[1].trail, { "tests" }),
+  "Rust inline test groups should retain their module trail"
+)
+
+for _, case in ipairs({
+  { file = "imports.nix", language = "nix", expected = { "./module.nix", "./module2.nix" } },
+  {
+    file = "nested_imports.rs",
+    language = "rust",
+    expected = { "crate::outer::child", "crate::renamed" },
+  },
+  { file = "imports.ml", language = "ocaml", expected = { "Helper", "Shared" } },
+}) do
+  local path = fixture_root .. "/" .. case.file
+  local loaded = vim.fn.bufnr(path)
+  if loaded ~= -1 then
+    vim.api.nvim_buf_delete(loaded, { force = true })
+  end
+  local sites, err = treesitter.import_sites_from_path(path, case.language)
+  assert(not err, case.file .. " string import extraction failed: " .. tostring(err))
+  assert(
+    vim.deep_equal(names(sites), case.expected),
+    case.file .. " returned unexpected string imports: " .. vim.inspect(names(sites))
+  )
+end
+
+for _, case in ipairs({
+  { file = "module.nix", filetype = "nix", importer = "imports.nix" },
+  { file = "imports/worker.rs", filetype = "rust", importer = "imports.rs" },
+  { file = "helper.ml", filetype = "ocaml", importer = "imports.ml" },
+  {
+    file = "internal/service/service.go",
+    filetype = "go",
+    importer = "imports.go",
+  },
+  {
+    file = "lib/domain/dune",
+    filetype = "dune",
+    scan_filetype = "ocaml",
+    importer = "wrapped_import.ml",
+  },
+}) do
+  local path = fixture_root .. "/" .. case.file
+  vim.cmd.edit(vim.fn.fnameescape(path))
+  vim.bo.filetype = case.filetype
+  local context = {
+    name = vim.fs.basename(path),
+    kind = vim.lsp.protocol.SymbolKind.File,
+    kind_name = "File",
+    scope = "file",
+    root_dir = fixture_root,
+    supports_calls = false,
+    location = {
+      uri = vim.uri_from_fname(path),
+      range = {
+        start = { line = 0, character = 0 },
+        ["end"] = { line = 0, character = 0 },
+      },
+    },
+  }
+  local relationships
+  require("archlens.import_index").relationships(context, 0, {
+    command = "rg",
+    filetype = case.scan_filetype,
+    timeout_ms = 5000,
+    max_index_files = 100,
+    max_file_bytes = 1024 * 1024,
+    batch_size = 4,
+    max_importers = 20,
+    filters = {},
+  }, function(result)
+    relationships = result
+  end)
+  assert(
+    vim.wait(6000, function()
+      return relationships ~= nil
+    end, 20),
+    case.file .. " imported-by indexing timed out"
+  )
+  local importer_found = false
+  for _, edge in ipairs(relationships.edges) do
+    if vim.fs.basename(vim.uri_to_fname(edge.source.location.uri)) == case.importer then
+      importer_found = true
+      assert_equal(edge.kind, "module_importers", case.file .. " returned the wrong relation")
+      break
+    end
+  end
+  assert(importer_found, case.file .. " did not find importer " .. case.importer)
+end
+
 local completed = false
 local structural
 require("archlens.ast_grep").relationships(contexts["flake.nix"], {

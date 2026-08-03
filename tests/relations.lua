@@ -83,6 +83,18 @@ equal(relations.ordered(), {
     suppress_self = true,
   },
   {
+    id = "module_importers",
+    label = "Imported by",
+    marker = "⇠",
+    order = 46,
+    source = "semantic",
+    endpoint = "source",
+    sort = "name",
+    kind_name = "Importer",
+    anchor = "file",
+    suppress_self = true,
+  },
+  {
     id = "configuration_consumers",
     label = "Configuration used at",
     marker = "↤",
@@ -91,6 +103,7 @@ equal(relations.ordered(), {
     endpoint = "source",
     sort = "location",
     kind_name = "Configuration use",
+    group_by = "container",
     suppress_self = true,
   },
   {
@@ -102,6 +115,7 @@ equal(relations.ordered(), {
     endpoint = "source",
     sort = "location",
     kind_name = "Test reference",
+    group_by = "container",
     suppress_self = true,
   },
   {
@@ -161,7 +175,7 @@ local ordered = relations.ordered()
 ordered[1].marker = "mutated"
 table.remove(ordered, 2)
 equal(relations.ordered()[1].marker, "└", "ordered should return deep copies")
-equal(#relations.ordered(), 13, "mutating an ordered result must not mutate the registry")
+equal(#relations.ordered(), 14, "mutating an ordered result must not mutate the registry")
 
 local custom_input = {
   id = "dependencies",
@@ -209,6 +223,7 @@ equal(
     "dependencies",
     "module_imports",
     "owns",
+    "module_importers",
     "configuration_consumers",
     "test_references",
     "references",
@@ -246,6 +261,16 @@ local invalid = {
     order = 80,
     source = "custom",
     sort = "random",
+  },
+  {
+    id = "bad_group",
+    label = "Bad group",
+    marker = "!",
+    order = 80,
+    source = "custom",
+    endpoint = "source",
+    sort = "location",
+    group_by = "directory",
   },
   {
     id = "bad_suppression",

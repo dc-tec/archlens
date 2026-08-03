@@ -77,7 +77,12 @@
           checks = {
             package = archlens;
 
-            unit = pkgs.runCommand "archlens-unit-tests" { nativeBuildInputs = [ pkgs.neovim-unwrapped ]; } ''
+            unit = pkgs.runCommand "archlens-unit-tests" {
+              nativeBuildInputs = [
+                pkgs.neovim-unwrapped
+                pkgs.ripgrep
+              ];
+            } ''
               export HOME="$TMPDIR/home"
               mkdir -p "$HOME"
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
@@ -106,6 +111,12 @@
                 -l ${./tests/imports.lua}
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/import_index.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/containers.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
                 -l ${./tests/test_paths.lua}
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
@@ -118,6 +129,7 @@
                 {
                   nativeBuildInputs = [
                     pkgs.ast-grep
+                    pkgs.ripgrep
                     testNeovim
                   ];
                 }
@@ -154,6 +166,7 @@
               pkgs.ast-grep
               pkgs.lua-language-server
               pkgs.nixfmt-tree
+              pkgs.ripgrep
               pkgs.stylua
               testNeovim
             ];

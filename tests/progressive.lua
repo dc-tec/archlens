@@ -157,6 +157,7 @@ local function run()
   local relationship_callbacks = {}
   local relationship_contexts = {}
   local import_callbacks = {}
+  local importer_callbacks = {}
   local structural_callbacks = {}
   local resolve_callbacks = {}
   local cancellation_count = 0
@@ -192,6 +193,14 @@ local function run()
     clear_cache = function() end,
     relationships = function(_, _, _, callback)
       import_callbacks[#import_callbacks + 1] = callback
+      return function()
+        cancellation_count = cancellation_count + 1
+      end
+    end,
+  }
+  package.loaded["archlens.import_index"] = {
+    relationships = function(_, _, _, callback)
+      importer_callbacks[#importer_callbacks + 1] = callback
       return function()
         cancellation_count = cancellation_count + 1
       end
@@ -250,17 +259,18 @@ local function run()
   resolve_callbacks[1](vim.deepcopy(base_context))
   assert_equal(#relationship_callbacks, 1, "the first LSP provider should start")
   assert_equal(#import_callbacks, 1, "the file import provider should start")
+  assert_equal(#importer_callbacks, 1, "the project import index should start independently")
   assert_equal(#structural_callbacks, 1, "the first ast-grep provider should start")
   local local_model = rendered[#rendered]
   assert(section(local_model, "children"), "Tree-sitter structure should render immediately")
   assert_equal(
     local_model.pending_providers,
-    { "gopls", "Imports", "ast-grep" },
+    { "gopls", "Imports", "Project imports", "ast-grep" },
     "the initial local view should name all pending providers"
   )
   local local_lines = require("archlens.render").build(local_model, { width = 80 }).lines
   assert(
-    vim.tbl_contains(local_lines, "Pending: gopls · Imports · ast-grep"),
+    vim.tbl_contains(local_lines, "Pending: gopls · Imports · Project imports · ast-grep"),
     "the rendered pane should expose pending providers"
   )
 
@@ -271,7 +281,7 @@ local function run()
   assert(section(structural_model, "structural"), "ast-grep results should render on arrival")
   assert_equal(
     structural_model.pending_providers,
-    { "gopls", "Imports" },
+    { "gopls", "Imports", "Project imports" },
     "out-of-order ast-grep completion should leave semantic providers pending"
   )
 
@@ -293,10 +303,16 @@ local function run()
   assert(section(complete_model, "structural"), "earlier ast-grep results should remain merged")
   assert_equal(
     complete_model.pending_providers,
-    { "Imports" },
+    { "Imports", "Project imports" },
     "LSP completion should not hide the pending import provider"
   )
   import_callbacks[1](graph.delta())
+  assert_equal(
+    rendered[#rendered].pending_providers,
+    { "Project imports" },
+    "outbound imports should render without waiting for the cold project index"
+  )
+  importer_callbacks[1](graph.delta())
   complete_model = rendered[#rendered]
   assert_equal(
     complete_model.pending_providers,
@@ -308,13 +324,15 @@ local function run()
   resolve_callbacks[2](vim.deepcopy(base_context))
   local stale_lsp = relationship_callbacks[2]
   local stale_imports = import_callbacks[2]
+  local stale_importers = importer_callbacks[2]
   local stale_structural = structural_callbacks[2]
   archlens.show_here()
-  assert(cancellation_count >= 3, "starting a new generation should cancel previous provider work")
+  assert(cancellation_count >= 4, "starting a new generation should cancel previous provider work")
   local renders_before_stale = #rendered
 
   stale_lsp(semantic_delta(base_context, {}, {}))
   stale_imports(graph.delta())
+  stale_importers(graph.delta())
   stale_structural(structural_delta(base_context, {
     vim.tbl_extend("force", location(2), { provider = "ast-grep", text = "StaleAstGrep()" }),
   }, true))
@@ -327,6 +345,7 @@ local function run()
   resolve_callbacks[3](vim.deepcopy(base_context))
   structural_callbacks[3](structural_delta(base_context, {}, true))
   import_callbacks[3](graph.delta())
+  importer_callbacks[3](graph.delta())
   assert_equal(
     rendered[#rendered].pending_providers,
     { "gopls" },
@@ -376,9 +395,12 @@ local function run()
   )
   relationship_callbacks[4](semantic_delta(semantic_implementation, {}, {}))
   import_callbacks[4](graph.delta())
+  importer_callbacks[4](graph.delta())
   structural_callbacks[4](structural_delta(semantic_implementation, {}, true))
 
   active_session.expanded = { subtypes = true }
+  active_session.expanded_groups = { ["test_references:group:test"] = true }
+  active_session.group_limits = { ["test_references:group:test"] = 16 }
   active_session.collapsed = { references = true }
   selected_row_id = "subtypes:selected"
   local focused_type = vim.deepcopy(base_context)
@@ -398,6 +420,7 @@ local function run()
   )
   relationship_callbacks[5](semantic_delta(focused_type, {}, {}))
   import_callbacks[5](graph.delta())
+  importer_callbacks[5](graph.delta())
   structural_callbacks[5](structural_delta(focused_type, {}, true))
 
   archlens.back()
@@ -412,12 +435,23 @@ local function run()
     "back navigation should restore collapsed sections"
   )
   assert_equal(
+    active_session.expanded_groups,
+    { ["test_references:group:test"] = true },
+    "back navigation should restore expanded context groups"
+  )
+  assert_equal(
+    active_session.group_limits,
+    { ["test_references:group:test"] = 16 },
+    "back navigation should restore progressive group limits"
+  )
+  assert_equal(
     active_session.restore_row_id,
     "subtypes:selected",
     "back navigation should restore a selected row from an expanded section"
   )
   relationship_callbacks[6](semantic_delta(semantic_implementation, {}, {}))
   import_callbacks[6](graph.delta())
+  importer_callbacks[6](graph.delta())
   structural_callbacks[6](structural_delta(semantic_implementation, {}, true))
 
   local module_context = vim.deepcopy(base_context)
@@ -433,7 +467,13 @@ local function run()
   )
   assert_equal(#structural_callbacks, 6, "module focus should skip symbol-name project search")
   assert_equal(#import_callbacks, 7, "module focus should continue file-level dependency analysis")
+  assert_equal(
+    #importer_callbacks,
+    7,
+    "module focus should continue project-level dependency analysis"
+  )
   import_callbacks[7](graph.delta())
+  importer_callbacks[7](graph.delta())
 
   archlens.close()
   assert(vim.api.nvim_win_is_valid(source_window), "the source window should remain valid")

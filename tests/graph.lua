@@ -138,6 +138,40 @@ equal(
   "file-context edges should belong to every symbol focused in the same file"
 )
 
+local importing_file = graph.node({
+  name = "consumer.go",
+  scope = "file",
+  location = {
+    uri = "file:///workspace/consumer.go",
+    range = location(3).range,
+  },
+})
+local focused_file = graph.node({
+  name = "source.go",
+  scope = "file",
+  location = location(0, 0, 0),
+})
+local imported_by = graph.edge("module_importers", importing_file, focused_file, {
+  provider = "Tree-sitter",
+  method = "adapter/moduleTarget",
+  class = "semantic",
+})
+equal(
+  graph.related_node(imported_by),
+  importing_file,
+  "imported-by should navigate to the importer"
+)
+equal(
+  graph.focus_node(imported_by),
+  focused_file,
+  "imported-by should remain anchored to the target"
+)
+equal(
+  pcall(graph.add_edge, snapshot, imported_by),
+  true,
+  "imported-by edges should be accepted for the focused file"
+)
+
 for _, invalid in ipairs({
   function()
     graph.node({ scope = "unknown", id = "invalid" })
@@ -184,6 +218,15 @@ for _, invalid in ipairs({
       method = "test",
       class = "semantic",
     })
+    malformed.presentation = { container = { id = "missing-fields" } }
+    graph.add_edge(graph.delta(), malformed)
+  end,
+  function()
+    local malformed = graph.edge("implementations", snapshot.focus, implementation, {
+      provider = "test",
+      method = "test",
+      class = "semantic",
+    })
     malformed.target.location.targetUri = uri
     graph.add_edge(graph.delta(), malformed)
   end,
@@ -218,6 +261,24 @@ for _, invalid in ipairs({
     graph.add_edge(
       snapshot,
       graph.edge("module_imports", foreign_file, imported_module, {
+        provider = "Tree-sitter",
+        method = "adapter/moduleTarget",
+        class = "semantic",
+      })
+    )
+  end,
+  function()
+    local foreign_target = graph.node({
+      name = "foreign.go",
+      scope = "file",
+      location = {
+        uri = "file:///workspace/foreign.go",
+        range = location(0).range,
+      },
+    })
+    graph.add_edge(
+      snapshot,
+      graph.edge("module_importers", importing_file, foreign_target, {
         provider = "Tree-sitter",
         method = "adapter/moduleTarget",
         class = "semantic",

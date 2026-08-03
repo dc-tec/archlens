@@ -97,7 +97,7 @@ end
 local function excluded(relative_path, prefixes)
   for _, prefix in ipairs(prefixes or {}) do
     if type(prefix) == "string" and prefix ~= "" then
-      prefix = normalized(prefix):gsub("^%./", ""):gsub("/$", "")
+      prefix = vim.fs.normalize(prefix):gsub("^%./", ""):gsub("/$", "")
       if relative_path == prefix or vim.startswith(relative_path, prefix .. "/") then
         return true
       end

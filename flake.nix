@@ -178,6 +178,32 @@
               stylua --check lua plugin tests
               touch "$out"
             '';
+
+            static-analysis =
+              pkgs.runCommand "archlens-lua-static-analysis"
+                {
+                  nativeBuildInputs = [
+                    pkgs.jq
+                    pkgs.lua-language-server
+                  ];
+                }
+                ''
+                  analysis_dir="$TMPDIR/lua-analysis"
+                  mkdir -p "$analysis_dir/log" "$analysis_dir/meta"
+                  lua-language-server \
+                    --check=${./.} \
+                    --checklevel=Warning \
+                    --check_format=json \
+                    --check_out_path="$analysis_dir/diagnostics.json" \
+                    --configpath=${./.}/.luarc.json \
+                    --logpath="$analysis_dir/log" \
+                    --metapath="$analysis_dir/meta"
+                  if ! jq --exit-status 'length == 0' "$analysis_dir/diagnostics.json" >/dev/null; then
+                    jq . "$analysis_dir/diagnostics.json"
+                    exit 1
+                  fi
+                  touch "$out"
+                '';
           };
 
           formatter = pkgs.nixfmt-tree;

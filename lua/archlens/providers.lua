@@ -7,6 +7,36 @@ local lsp = require("archlens.lsp")
 local treesitter = require("archlens.treesitter")
 
 local M = {}
+
+---@alias ArchLensProviderTerminalState "cancelled"|"completed"|"failed"|"timed_out"|"unavailable"
+
+---@class ArchLensProviderOutcome
+---@field state ArchLensProviderTerminalState
+---@field message? string
+
+---@class ArchLensProviderProgress
+---@field retry_delay_ms? number
+---@field message? string
+
+---@class ArchLensProviderSpec
+---@field order integer
+---@field label string|function
+---@field enabled function
+---@field start function
+---@field queued? boolean|function
+---@field queued_label? string
+---@field clear_cache? function
+
+---@class ArchLensProvider: ArchLensProviderSpec
+---@field id string
+
+---@class ArchLensProviderControls
+---@field is_current fun(): boolean
+---@field register_cancel fun(cancel: function)
+---@field on_update fun(snapshot: ArchLensGraphDelta)
+---@field now? fun(): number
+
+---@type table<string, ArchLensProvider>
 local registry = {}
 
 local allowed_provider_fields = {
@@ -40,6 +70,8 @@ local terminal_state_priority = {
   failed = 4,
 }
 
+---@param outcome? ArchLensProviderOutcome
+---@return ArchLensProviderOutcome
 local function normalize_terminal_outcome(outcome)
   if outcome == nil then
     return { state = "completed" }
@@ -59,6 +91,9 @@ local function normalize_terminal_outcome(outcome)
   return vim.deepcopy(outcome)
 end
 
+---@param left? ArchLensProviderOutcome
+---@param right? ArchLensProviderOutcome
+---@return ArchLensProviderOutcome?
 local function combine_outcomes(left, right)
   if not right or right.state == "completed" then
     return left
@@ -81,6 +116,9 @@ local function combine_outcomes(left, right)
   return combined
 end
 
+---@param id string
+---@param spec ArchLensProviderSpec
+---@return ArchLensProvider
 local function normalize_provider(id, spec)
   assert(
     nonempty_string(id) and id:match("^[%l][%l%d_%-]*$"),
@@ -123,6 +161,9 @@ local function normalize_provider(id, spec)
   return normalized
 end
 
+---@param id string
+---@param spec ArchLensProviderSpec
+---@return ArchLensProvider
 function M.register(id, spec)
   assert(registry[id] == nil, string.format("provider already registered: %s", tostring(id)))
   local normalized = normalize_provider(id, spec)
@@ -130,6 +171,7 @@ function M.register(id, spec)
   return vim.deepcopy(normalized)
 end
 
+---@return ArchLensProvider[]
 function M.ordered()
   local providers = {}
   for _, provider in pairs(registry) do
@@ -381,6 +423,8 @@ M.register("ast_grep", {
   end,
 })
 
+---@param config table
+---@return { id: string, label: string }[]
 function M.local_pending(config)
   local pending = {}
   for _, provider in ipairs(M.ordered()) do
@@ -441,6 +485,11 @@ local function tasks_for(context, source_buffer, config)
   return tasks
 end
 
+---@param context table
+---@param source_buffer integer
+---@param config table
+---@param controls ArchLensProviderControls
+---@return ArchLensGraphDelta
 function M.run(context, source_buffer, config, controls)
   local relationships = graph.new(context)
   local tasks = tasks_for(context, source_buffer, config)
@@ -574,6 +623,7 @@ function M.run(context, source_buffer, config, controls)
   return relationships
 end
 
+---@param root? string
 function M.clear_cache(root)
   for _, provider in ipairs(M.ordered()) do
     if provider.clear_cache then

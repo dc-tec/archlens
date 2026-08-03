@@ -195,7 +195,7 @@ end
 local function row_from_edge(edge, relation, context, cache, report_adapter_issue)
   local node = graph.related_node(edge)
   local location = node and node.location
-  if not location or not location.uri or not location.range then
+  if not node or not location or not location.uri or not location.range then
     return nil
   end
   local path = vim.uri_to_fname(location.uri)
@@ -445,7 +445,7 @@ local function normalize_edges(snapshot, context, filters, report_adapter_issue)
     local relation = relations.get(edge.kind)
     local node = relation and graph.related_node(edge)
     local location = node and node.location
-    if relation and location and location.uri and location.range then
+    if relation and node and location and location.uri and location.range then
       local key = graph.location_key(location)
       local dedupe_key = relation.sort == "name" and table.concat({ key, node.name or "" }, ":")
         or key

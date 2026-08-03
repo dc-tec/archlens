@@ -10,6 +10,36 @@ local M = {}
 
 local config = config_module.new()
 
+---@class ArchLensSession
+---@field tabpage integer
+---@field generation integer
+---@field history table[]
+---@field cancellations function[]
+---@field expanded table<string, boolean>
+---@field expanded_groups table<string, boolean>
+---@field group_limits table<string, integer>
+---@field collapsed table<string, boolean>
+---@field active boolean
+---@field window? integer
+---@field buffer? integer
+---@field source_window? integer
+---@field source_buffer? integer
+---@field origin_window? integer
+---@field origin_buffer? integer
+---@field origin_view? table
+---@field run_source_window? integer
+---@field run_source_buffer? integer
+---@field run_changedtick? integer
+---@field require_source_window? boolean
+---@field current? table
+---@field model? table
+---@field rendered? table
+---@field options? table
+---@field detail? table
+---@field did_jump? boolean
+---@field restore_row_id? string
+
+---@type table<integer, ArchLensSession>
 local sessions = {}
 local lifecycle_initialized = false
 
@@ -21,6 +51,8 @@ local function valid_buffer(bufnr)
   return bufnr and vim.api.nvim_buf_is_valid(bufnr)
 end
 
+---@param tabpage? integer
+---@return ArchLensSession
 local function session_for(tabpage)
   tabpage = tabpage or vim.api.nvim_get_current_tabpage()
   local session = sessions[tabpage]

@@ -286,7 +286,8 @@ Relationship providers exchange the focused graph defined in
 direction live in [`lua/archlens/relations.lua`](lua/archlens/relations.lua), so
 new relationship kinds do not require orchestration or renderer branches.
 
-Run the complete package, unit, integration, and formatting checks with:
+Run the package, unit, integration, formatting, and Lua static-analysis checks
+with:
 
 ```sh
 nix flake check

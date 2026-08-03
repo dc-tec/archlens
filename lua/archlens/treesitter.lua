@@ -443,41 +443,43 @@ local function extract_import_sites(language, spec, parser, source, uri, metadat
       if query.captures[capture_id] == spec.capture then
         local range = node_range(node)
         local text = node_text(node, source)
-        local normalized, normalization_error =
-          adapters.normalize_import(language, spec, node, text, source, metadata)
-        if normalization_error then
-          error(normalization_error, 0)
-        end
-        if normalized and type(normalized.name) == "string" and normalized.name ~= "" then
-          local position = vim.deepcopy(range.start)
-          position.character = position.character + (normalized.position_offset or 0)
-          local key = table.concat({
-            normalized.name,
-            range.start.line,
-            range.start.character,
-            range["end"].line,
-            range["end"].character,
-          }, ":")
-          if not seen[key] then
-            seen[key] = true
-            local target_locations = {}
-            for _, path in ipairs(normalized.target_paths or {}) do
-              target_locations[#target_locations + 1] = {
-                uri = vim.uri_from_fname(path),
-                range = {
-                  start = { line = 0, character = 0 },
-                  ["end"] = { line = 0, character = 0 },
-                },
+        if text then
+          local normalized, normalization_error =
+            adapters.normalize_import(language, spec, node, text, source, metadata)
+          if normalization_error then
+            error(normalization_error, 0)
+          end
+          if normalized and type(normalized.name) == "string" and normalized.name ~= "" then
+            local position = vim.deepcopy(range.start)
+            position.character = position.character + (normalized.position_offset or 0)
+            local key = table.concat({
+              normalized.name,
+              range.start.line,
+              range.start.character,
+              range["end"].line,
+              range["end"].character,
+            }, ":")
+            if not seen[key] then
+              seen[key] = true
+              local target_locations = {}
+              for _, path in ipairs(normalized.target_paths or {}) do
+                target_locations[#target_locations + 1] = {
+                  uri = vim.uri_from_fname(path),
+                  range = {
+                    start = { line = 0, character = 0 },
+                    ["end"] = { line = 0, character = 0 },
+                  },
+                }
+              end
+              sites[#sites + 1] = {
+                name = normalized.name,
+                location = { uri = uri, range = range, full_range = range },
+                position = position,
+                target_locations = target_locations,
+                resolution_provider = normalized.resolution_provider,
+                resolution_method = normalized.resolution_method,
               }
             end
-            sites[#sites + 1] = {
-              name = normalized.name,
-              location = { uri = uri, range = range, full_range = range },
-              position = position,
-              target_locations = target_locations,
-              resolution_provider = normalized.resolution_provider,
-              resolution_method = normalized.resolution_method,
-            }
           end
         end
       end

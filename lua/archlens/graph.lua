@@ -2,24 +2,60 @@ local relations = require("archlens.relations")
 
 local M = {}
 
+---@alias ArchLensGraphScope "symbol"|"file"|"module"|"configuration"
+---@alias ArchLensNoteSeverity "info"|"warn"|"error"
+---@alias ArchLensProviderState "cancelled"|"completed"|"failed"|"queued"|"retrying"|"running"|"timed_out"|"unavailable"
+
+---@class ArchLensPosition
+---@field line integer
+---@field character integer
+
+---@class ArchLensRange
+---@field start ArchLensPosition
+---@field end ArchLensPosition
+
+---@class ArchLensLocation
+---@field uri string
+---@field range ArchLensRange
+---@field full_range? ArchLensRange
+
+---@class ArchLensEvidence
+---@field provider string
+---@field method string
+---@field class string
+
+---@class ArchLensProviderRun
+---@field id string
+---@field label string
+---@field state ArchLensProviderState
+---@field elapsed_ms? number
+---@field duration_ms? number
+---@field retry_delay_ms? number
+---@field message? string
+
 ---@class ArchLensGraphNode
 ---@field id string
 ---@field name? string
+---@field detail? string
 ---@field kind? integer
 ---@field kind_name? string
----@field scope "symbol"|"file"|"module"|"configuration"
----@field location? { uri: string, range: table, full_range: table }
+---@field scope ArchLensGraphScope
+---@field location? ArchLensLocation
 ---@field context? table
 ---@field resolve_on_focus? boolean
+---@field path? string
+---@field path_label? string
+---@field line? integer
+---@field position_encoding? string
 
 ---@class ArchLensGraphEdge
 ---@field id string
 ---@field kind string
 ---@field source ArchLensGraphNode
 ---@field target ArchLensGraphNode
----@field evidence_records { provider: string, method: string, class: string }[]
+---@field evidence_records ArchLensEvidence[]
 --- Compatibility summary derived from evidence_records. Mixed methods or classes are reported as "mixed".
----@field evidence { provider: string, method: string, class: string }
+---@field evidence ArchLensEvidence
 ---@field occurrences table[]
 ---@field position_encoding "utf-8"
 ---@field presentation? { container?: { id: string, name: string, kind_name: string, location: table }, section_anchor?: { prefix: string, label: string } }
@@ -29,11 +65,12 @@ local M = {}
 ---@field edges ArchLensGraphEdge[]
 ---@field errors string[]
 ---@field notes string[]
----@field note_records { message: string, summary?: string, severity?: "info"|"warn"|"error" }[]
+---@field note_records { message: string, summary?: string, severity?: ArchLensNoteSeverity }[]
 ---@field omitted table<string, integer>
 ---@field contributors { id: string, label: string }[]
 ---@field pending { id: string, label: string }[]
----@field provider_runs { id: string, label: string, state: string, elapsed_ms?: integer, duration_ms?: integer, retry_delay_ms?: integer, message?: string }[]
+---@field provider_runs ArchLensProviderRun[]
+---@field focus? ArchLensGraphNode
 
 local valid_scopes = {
   configuration = true,
@@ -101,6 +138,8 @@ local function validate_canonical(value, path, seen, allow_wire_items)
   end
 end
 
+---@param location? ArchLensLocation
+---@return ArchLensLocation?
 local function normalized_location(location)
   if not location then
     return nil
@@ -113,6 +152,8 @@ local function normalized_location(location)
   }
 end
 
+---@param location? ArchLensLocation
+---@return string
 function M.location_key(location)
   location = normalized_location(location)
   local range = location and location.range
@@ -124,6 +165,8 @@ function M.location_key(location)
   }, ":")
 end
 
+---@param location? ArchLensLocation
+---@return string
 function M.line_key(location)
   location = normalized_location(location)
   local range = location and location.range
@@ -152,6 +195,8 @@ local function scope_for(fields)
   return "symbol"
 end
 
+---@param fields table
+---@return ArchLensGraphNode
 function M.node(fields)
   assert(type(fields) == "table", "graph nodes require a table")
   local node = vim.tbl_extend("force", {}, fields)
@@ -170,6 +215,9 @@ function M.node(fields)
   return node
 end
 
+---@param context table
+---@param overrides? table
+---@return ArchLensGraphNode
 function M.node_from_context(context, overrides)
   assert(type(context) == "table", "graph context nodes require a context")
   return M.node(vim.tbl_extend("force", {
@@ -187,6 +235,9 @@ function M.node_from_context(context, overrides)
   }, overrides or {}))
 end
 
+---@param location ArchLensLocation
+---@param fields? table
+---@return ArchLensGraphNode
 function M.node_from_location(location, fields)
   fields = vim.tbl_extend("force", {
     location = location,
@@ -218,7 +269,7 @@ end
 
 ---Return independent evidence records, falling back to the compatibility summary for older values.
 ---@param value table
----@return table[]
+---@return ArchLensEvidence[]
 function M.evidence_records(value)
   if type(value) ~= "table" then
     return {}
@@ -233,8 +284,8 @@ function M.evidence_records(value)
 end
 
 ---Build the compact evidence value used by existing row badges and consumers.
----@param records table[]
----@return table
+---@param records ArchLensEvidence[]
+---@return ArchLensEvidence
 function M.evidence_summary(records)
   validate_evidence_records(records)
   local providers = {}
@@ -267,8 +318,9 @@ function M.evidence_summary(records)
 end
 
 ---Merge unique evidence contributions while preserving first-seen provider order for badges.
----@param target table[]
----@param source table[]
+---@param target ArchLensEvidence[]
+---@param source ArchLensEvidence[]
+---@return ArchLensEvidence[]
 function M.merge_evidence(target, source)
   validate_evidence_records(target)
   validate_evidence_records(source)
@@ -317,6 +369,12 @@ local function validate_presentation(presentation)
   end
 end
 
+---@param kind string
+---@param source ArchLensGraphNode|table
+---@param target ArchLensGraphNode|table
+---@param evidence ArchLensEvidence
+---@param fields? table
+---@return ArchLensGraphEdge
 function M.edge(kind, source, target, evidence, fields)
   assert(relations.get(kind), "unknown relationship kind: " .. tostring(kind))
   source = M.node(source)
@@ -336,16 +394,26 @@ function M.edge(kind, source, target, evidence, fields)
   return edge
 end
 
+---@param edge? ArchLensGraphEdge
+---@return ArchLensGraphNode?
 function M.related_node(edge)
-  local relation = edge and relations.get(edge.kind)
+  if not edge then
+    return nil
+  end
+  local relation = relations.get(edge.kind)
   if not relation then
     return nil
   end
   return edge[relation.endpoint]
 end
 
+---@param edge? ArchLensGraphEdge
+---@return ArchLensGraphNode?
 function M.focus_node(edge)
-  local relation = edge and relations.get(edge.kind)
+  if not edge then
+    return nil
+  end
+  local relation = relations.get(edge.kind)
   if not relation then
     return nil
   end
@@ -356,6 +424,7 @@ local function contributor_key(contributor)
   return contributor.id or contributor.label
 end
 
+---@return ArchLensGraphDelta
 function M.delta()
   return {
     version = 1,
@@ -370,6 +439,9 @@ function M.delta()
   }
 end
 
+---@param target ArchLensGraphDelta
+---@param edge ArchLensGraphEdge
+---@return ArchLensGraphEdge
 function M.add_edge(target, edge)
   assert(type(target) == "table" and target.version == 1, "invalid graph delta")
   assert(type(edge) == "table" and relations.get(edge.kind), "invalid graph edge")
@@ -403,12 +475,17 @@ function M.add_edge(target, edge)
   return edge
 end
 
+---@param target ArchLensGraphDelta
+---@param message? string
 function M.add_error(target, message)
   if type(message) == "string" and message ~= "" then
     target.errors[#target.errors + 1] = message
   end
 end
 
+---@param target ArchLensGraphDelta
+---@param message? string
+---@param metadata? { summary?: string, severity?: ArchLensNoteSeverity }
 function M.add_note(target, message, metadata)
   if type(message) == "string" and message ~= "" then
     if metadata then
@@ -437,6 +514,9 @@ function M.add_note(target, message, metadata)
   end
 end
 
+---@param target ArchLensGraphDelta
+---@param kind string
+---@param count? integer
 function M.add_omitted(target, kind, count)
   assert(relations.get(kind), "unknown omitted relationship kind: " .. tostring(kind))
   if count and count > 0 then
@@ -444,6 +524,9 @@ function M.add_omitted(target, kind, count)
   end
 end
 
+---@param target ArchLensGraphDelta
+---@param id string
+---@param label? string
 function M.add_contributor(target, id, label)
   assert(type(id) == "string" and id ~= "", "contributors require an id")
   label = label or id
@@ -455,6 +538,8 @@ function M.add_contributor(target, id, label)
   target.contributors[#target.contributors + 1] = { id = id, label = label }
 end
 
+---@param target ArchLensGraphDelta
+---@param runs? ArchLensProviderRun[]
 function M.set_provider_runs(target, runs)
   assert(type(target) == "table" and target.version == 1, "invalid graph snapshot")
   target.provider_runs = {}
@@ -490,6 +575,8 @@ function M.set_provider_runs(target, runs)
   end
 end
 
+---@param target ArchLensGraphDelta
+---@param providers? { id: string, label?: string }[]
 function M.set_pending(target, providers)
   local runs = {}
   for _, provider in ipairs(providers or {}) do
@@ -502,6 +589,9 @@ function M.set_pending(target, providers)
   M.set_provider_runs(target, runs)
 end
 
+---@param target ArchLensGraphDelta
+---@param delta ArchLensGraphDelta
+---@return ArchLensGraphDelta
 function M.merge(target, delta)
   assert(type(target) == "table" and target.version == 1, "invalid graph snapshot")
   assert(type(delta) == "table" and delta.version == 1, "invalid graph delta")
@@ -538,6 +628,8 @@ local function add_syntax_edges(snapshot, context, kind)
   end
 end
 
+---@param context table
+---@return ArchLensGraphDelta
 function M.new(context)
   local snapshot = M.delta()
   snapshot.focus = M.node_from_context(context)

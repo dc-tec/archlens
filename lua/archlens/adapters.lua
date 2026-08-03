@@ -2,6 +2,48 @@ local common = require("archlens.adapters.common")
 
 local M = {}
 
+---@class ArchLensImportAdapter
+---@field query string
+---@field capture? string
+---@field extensions? string[]
+---@field scan_languages? string[]
+---@field normalize? function
+---@field site_keys? function
+---@field target_keys? function
+---@field target_label? function
+
+---@class ArchLensTreeSitterAdapter
+---@field symbol_types table<string, string>
+---@field root_markers? string[]
+---@field focus_wrappers? table<string, boolean>
+---@field name_fields? string[]
+---@field name_node_types? table<string, boolean>
+---@field synthetic_name? function
+---@field imports? ArchLensImportAdapter
+
+---@class ArchLensAstGrepAdapter
+---@field language? string
+---@field query? function
+---@field unsupported_note? string
+
+---@class ArchLensAdapterSpec
+---@field filetypes? string[]
+---@field filename_extensions? string[]
+---@field treesitter? ArchLensTreeSitterAdapter
+---@field ast_grep? ArchLensAstGrepAdapter
+---@field configuration? function
+---@field presentation? { row?: function, section?: function }
+
+---@class ArchLensAdapter: ArchLensAdapterSpec
+---@field language string
+---@field filetypes string[]
+---@field filename_extensions string[]
+
+---@class ArchLensBuiltinAdapter
+---@field spec ArchLensAdapterSpec
+---@field clear_cache? function
+
+---@type table<string, ArchLensAdapter>
 local registry = {}
 local filetypes = {}
 local filename_extensions = {}
@@ -48,6 +90,9 @@ local function declaration_name(node_type, text)
     or text:match("^%s*type%s+([%w_']+)")
 end
 
+---@param language string
+---@param adapter ArchLensAdapterSpec
+---@return ArchLensAdapter
 local function normalize(language, adapter)
   assert(type(language) == "string" and language ~= "", "adapter language must be a string")
   assert(type(adapter) == "table", "adapter must be a table")
@@ -148,6 +193,9 @@ local function normalize(language, adapter)
   return normalized
 end
 
+---@param language string
+---@param adapter ArchLensAdapterSpec
+---@return ArchLensAdapter
 function M.register(language, adapter)
   assert(registry[language] == nil, string.format("adapter already registered: %s", language))
   local normalized = normalize(language, adapter)
@@ -172,6 +220,8 @@ function M.register(language, adapter)
   return vim.deepcopy(normalized)
 end
 
+---@param language string
+---@return ArchLensAdapter?
 function M.get(language)
   return vim.deepcopy(registry[language])
 end
@@ -183,25 +233,40 @@ local function path_extension(path)
   return vim.fs.basename(path):match("(%.[^%.]+)$")
 end
 
+---@param filetype string
+---@param path? string
+---@return string
 function M.language_for_filetype(filetype, path)
   return filename_extensions[path_extension(path)] or filetypes[filetype] or filetype
 end
 
+---@param filetype string
+---@param path? string
+---@return ArchLensAdapter?
 function M.for_filetype(filetype, path)
   return M.get(M.language_for_filetype(filetype, path))
 end
 
+---@param filetype string
+---@param path? string
+---@return string[]
 function M.root_markers(filetype, path)
   local adapter = M.for_filetype(filetype, path)
   local treesitter = adapter and adapter.treesitter
   return vim.deepcopy(treesitter and treesitter.root_markers or default_root_markers)
 end
 
+---@param filetype string
+---@param path? string
+---@return ArchLensImportAdapter?
 function M.imports_for_filetype(filetype, path)
   local adapter = M.for_filetype(filetype, path)
   return vim.deepcopy(adapter and adapter.treesitter and adapter.treesitter.imports or nil)
 end
 
+---@param filetype string
+---@param path? string
+---@return { language: string, extensions: string[], imports: ArchLensImportAdapter }[]
 function M.import_scan_specs(filetype, path)
   local language = M.language_for_filetype(filetype, path)
   local adapter = registry[language]
@@ -236,6 +301,14 @@ function M.configuration(language, bufnr, context, syntax_context)
   end)
 end
 
+---@param language string
+---@param spec ArchLensImportAdapter
+---@param node any
+---@param text string
+---@param source any
+---@param metadata? table
+---@return table?
+---@return string? error
 function M.normalize_import(language, spec, node, text, source, metadata)
   if not spec.normalize then
     return { name = text }
@@ -326,6 +399,7 @@ function M.ast_grep_query(context, language)
     if query_error then
       return nil, nil, query_error
     end
+    assert(query, "validated ast-grep query must return a result")
     return query.pattern, query.selector
   end
   return context.name, nil
@@ -351,6 +425,7 @@ local builtin_languages = {
 }
 
 for _, language in ipairs(builtin_languages) do
+  ---@type ArchLensBuiltinAdapter
   local builtin = require("archlens.adapters." .. language)
   assert(
     type(builtin) == "table" and type(builtin.spec) == "table",

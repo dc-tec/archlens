@@ -124,7 +124,7 @@ function M.enrich(delta, context, options, callback)
         scope.visible(scope.classify(context.root_dir, path, filters, scope_cache), filters)
       then
         local stat = vim.uv.fs_stat(path)
-        if not stat or (stat.size or 0) <= (options.max_file_bytes or 1024 * 1024) then
+        if not stat or (stat.size or 0) <= (options.max_file_bytes or (1024 * 1024)) then
           if not by_path[path] then
             by_path[path] = {}
             paths[#paths + 1] = path

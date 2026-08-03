@@ -256,6 +256,10 @@ local function configure_window(session)
   vim.wo[window].winfixwidth = true
 end
 
+---@param session ArchLensSession
+---@param options table
+---@param actions table
+---@return integer
 function M.ensure(session, options, actions)
   session.options = options
   session.expanded = session.expanded or {}
@@ -315,6 +319,9 @@ function M.ensure(session, options, actions)
   return session.window
 end
 
+---@param session ArchLensSession
+---@param model table
+---@param options table
 function M.render(session, model, options)
   if not valid_buffer(session.buffer) or not valid_window(session.window) then
     return
@@ -365,6 +372,7 @@ function M.render(session, model, options)
   end
 end
 
+---@param session ArchLensSession
 function M.close(session)
   close_detail(session, false)
   if valid_window(session.window) then
@@ -376,10 +384,15 @@ function M.close(session)
   session.model = nil
 end
 
+---@param session ArchLensSession
+---@param winid integer
+---@return boolean
 function M.is_map_window(session, winid)
   return valid_window(session.window) and session.window == winid
 end
 
+---@param session ArchLensSession
+---@return string?
 function M.selected_row_id(session)
   return selected_row_id(session)
 end

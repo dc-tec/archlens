@@ -209,6 +209,7 @@ local function row_from_edge(edge, relation, context, cache)
     resolve_on_focus = node.resolve_on_focus == true,
     evidence = vim.deepcopy(edge.evidence),
     occurrences = vim.deepcopy(edge.occurrences or {}),
+    presentation = vim.deepcopy(edge.presentation),
   }
 end
 
@@ -251,6 +252,41 @@ local function merge_row(target, source)
       target.occurrences[#target.occurrences + 1] = occurrence
     end
   end
+  if not target.presentation and source.presentation then
+    target.presentation = vim.deepcopy(source.presentation)
+  end
+end
+
+local function container_groups(relation, rows)
+  if relation.group_by ~= "container" then
+    return nil
+  end
+  local groups = {}
+  local by_id = {}
+  for _, row in ipairs(rows) do
+    local container = row.presentation and row.presentation.container
+    if not container or not container.id then
+      return nil
+    end
+    local group = by_id[container.id]
+    if not group then
+      local labels = vim.deepcopy(container.trail or {})
+      labels[#labels + 1] = container.name
+      group = {
+        id = relation.id .. ":group:" .. container.id,
+        name = table.concat(labels, " › "),
+        kind_name = container.kind_name,
+        location = vim.deepcopy(container.location),
+        context = vim.deepcopy(container.context),
+        rows = {},
+        resolve_on_focus = container.kind_name ~= "File",
+      }
+      groups[#groups + 1] = group
+      by_id[container.id] = group
+    end
+    group.rows[#group.rows + 1] = row
+  end
+  return groups
 end
 
 local function sort_rows(rows, style)
@@ -463,6 +499,7 @@ function M.build(context, snapshot, opts)
         label = relation.label,
         marker = relation.marker,
         rows = rows,
+        groups = container_groups(relation, rows),
       }
     end
   end

@@ -6,6 +6,7 @@ local allowed_fields = {
   corroborates = true,
   corroborates_by = true,
   endpoint = true,
+  group_by = true,
   id = true,
   kind_name = true,
   label = true,
@@ -49,6 +50,9 @@ local function validate(spec)
   )
   if spec.kind_name ~= nil then
     assert(nonempty_string(spec.kind_name), "relation kind kind_name must be a non-empty string")
+  end
+  if spec.group_by ~= nil then
+    assert(spec.group_by == "container", "relation kind group_by must be container")
   end
   if spec.corroborates ~= nil then
     assert(nonempty_string(spec.corroborates), "relation kind corroborates must be an identifier")
@@ -195,6 +199,18 @@ for _, kind in ipairs({
     suppress_self = true,
   },
   {
+    id = "module_importers",
+    label = "Imported by",
+    marker = "⇠",
+    order = 46,
+    source = "semantic",
+    endpoint = "source",
+    sort = "name",
+    kind_name = "Importer",
+    anchor = "file",
+    suppress_self = true,
+  },
+  {
     id = "configuration_consumers",
     label = "Configuration used at",
     marker = "↤",
@@ -203,6 +219,7 @@ for _, kind in ipairs({
     endpoint = "source",
     sort = "location",
     kind_name = "Configuration use",
+    group_by = "container",
     suppress_self = true,
   },
   {
@@ -214,6 +231,7 @@ for _, kind in ipairs({
     endpoint = "source",
     sort = "location",
     kind_name = "Test reference",
+    group_by = "container",
     suppress_self = true,
   },
   {

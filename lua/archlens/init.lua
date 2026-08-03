@@ -1,4 +1,5 @@
 local ast_grep = require("archlens.ast_grep")
+local containers = require("archlens.containers")
 local graph = require("archlens.graph")
 local imports = require("archlens.imports")
 local lsp = require("archlens.lsp")
@@ -23,10 +24,27 @@ local config = {
     max_imports = 24,
     max_sites = 96,
     concurrency = 4,
+    inbound = {
+      enabled = true,
+      command = "rg",
+      timeout_ms = 8000,
+      max_index_files = 1000,
+      max_candidate_files = 2000,
+      max_file_bytes = 1024 * 1024,
+      batch_size = 16,
+      max_importers = 24,
+    },
   },
   lsp = {
     resolve_timeout_ms = 5000,
     relationship_timeout_ms = 8000,
+  },
+  grouping = {
+    enabled = true,
+    timeout_ms = 1500,
+    batch_size = 4,
+    max_file_bytes = 1024 * 1024,
+    max_edges = 500,
   },
   ast_grep = {
     enabled = true,
@@ -63,6 +81,8 @@ local function session_for(tabpage)
     history = {},
     cancellations = {},
     expanded = {},
+    expanded_groups = {},
+    group_limits = {},
     collapsed = {},
     active = false,
   }
@@ -81,6 +101,8 @@ local function begin_run(session, require_source_window)
   cancel_requests(session)
   session.generation = session.generation + 1
   session.expanded = {}
+  session.expanded_groups = {}
+  session.group_limits = {}
   session.collapsed = {}
   session.run_source_buffer = session.source_buffer
   session.run_source_window = require_source_window and session.source_window or nil
@@ -184,13 +206,28 @@ local function load_context(session, context, generation)
       id = "lsp",
       label = context.client_name or "LSP",
       start = function(done)
-        return lsp.relationships(context, session.source_buffer, done, {
+        local grouping_cancel = function() end
+        local lsp_cancel = lsp.relationships(context, session.source_buffer, function(result)
+          if not config.grouping.enabled then
+            done(result)
+            return
+          end
+          local options = vim.deepcopy(config.grouping)
+          options.filters = vim.deepcopy(config.filters)
+          options.filters.include_external = config.include_external
+          grouping_cancel = containers.enrich(result, context, options, done)
+        end, {
           timeout_ms = config.lsp.relationship_timeout_ms,
         })
+        return function()
+          pcall(lsp_cancel)
+          pcall(grouping_cancel)
+        end
       end,
     }
   end
-  if config.imports.enabled and treesitter.supports_imports(session.source_buffer) then
+  local local_imports = treesitter.supports_imports(session.source_buffer)
+  if config.imports.enabled and local_imports then
     tasks[#tasks + 1] = {
       id = "imports",
       label = "Imports",
@@ -199,6 +236,28 @@ local function load_context(session, context, generation)
         options.filters = vim.deepcopy(config.filters)
         options.filters.include_external = config.include_external
         return imports.relationships(context, session.source_buffer, options, done)
+      end,
+    }
+  end
+  if
+    config.imports.enabled
+    and config.imports.inbound.enabled
+    and (local_imports or context.import_filetype)
+  then
+    tasks[#tasks + 1] = {
+      id = "importers",
+      label = "Project imports",
+      start = function(done)
+        local options = vim.deepcopy(config.imports.inbound)
+        options.filetype = context.import_filetype
+        options.filters = vim.deepcopy(config.filters)
+        options.filters.include_external = config.include_external
+        return require("archlens.import_index").relationships(
+          context,
+          session.source_buffer,
+          options,
+          done
+        )
       end,
     }
   end
@@ -384,6 +443,8 @@ local function focus_location(session, row)
     context = session.current,
     selected_row_id = view.selected_row_id(session),
     expanded = vim.deepcopy(session.expanded),
+    expanded_groups = vim.deepcopy(session.expanded_groups),
+    group_limits = vim.deepcopy(session.group_limits),
     collapsed = vim.deepcopy(session.collapsed),
   }
   session.restore_row_id = nil
@@ -457,6 +518,8 @@ function M.focus(target, tabpage)
     context = session.current,
     selected_row_id = view.selected_row_id(session),
     expanded = vim.deepcopy(session.expanded),
+    expanded_groups = vim.deepcopy(session.expanded_groups),
+    group_limits = vim.deepcopy(session.group_limits),
     collapsed = vim.deepcopy(session.collapsed),
   }
   session.restore_row_id = nil
@@ -473,6 +536,8 @@ function M.back(tabpage)
   session.restore_row_id = entry.selected_row_id
   local generation = begin_run(session, false)
   session.expanded = entry.expanded or {}
+  session.expanded_groups = entry.expanded_groups or {}
+  session.group_limits = entry.group_limits or {}
   session.collapsed = entry.collapsed or {}
   load_context(session, entry.context, generation)
 end
@@ -487,7 +552,8 @@ function M.refresh(tabpage)
     render(session, model.error("ArchLens could not recover its source buffer."))
     return
   end
-  imports.clear_cache()
+  imports.clear_cache(session.current.root_dir)
+  containers.clear_cache()
   session.restore_row_id = view.selected_row_id(session)
   local generation = begin_run(session, false)
   load_context(session, session.current, generation)

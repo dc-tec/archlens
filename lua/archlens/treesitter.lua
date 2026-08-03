@@ -174,11 +174,14 @@ local function merge_base(syntax_context, base_context)
     return syntax_context
   end
 
-  local use_syntax_identity = base_context.file_fallback == true
-    or (
-      not base_context.supports_calls
-      and range_span(syntax_context.location and syntax_context.location.full_range)
-        <= range_span(base_context.location and base_context.location.full_range)
+  local use_syntax_identity = base_context.preserve_file_identity ~= true
+    and (
+      base_context.file_fallback == true
+      or (
+        not base_context.supports_calls
+        and range_span(syntax_context.location and syntax_context.location.full_range)
+          <= range_span(base_context.location and base_context.location.full_range)
+      )
     )
   local merged = use_syntax_identity and syntax_context or vim.deepcopy(base_context)
   merged.client_id = base_context.client_id
@@ -190,6 +193,7 @@ local function merge_base(syntax_context, base_context)
   merged.wire_call_item = base_context.wire_call_item
   merged.wire_type_item = base_context.wire_type_item
   merged.module_context = base_context.module_context
+  merged.preserve_file_identity = base_context.preserve_file_identity
   merged.configuration = base_context.configuration
   merged.language = syntax_context.language
   merged.syntax_node_type = syntax_context.syntax_node_type
@@ -294,18 +298,36 @@ function M.supports_imports(bufnr)
   return adapter ~= nil and adapter.treesitter ~= nil and adapter.treesitter.imports ~= nil
 end
 
-function M.import_sites(bufnr)
-  local language = language_for(bufnr)
-  local adapter = adapters.get(language)
-  local spec = adapter and adapter.treesitter and adapter.treesitter.imports
-  if not spec then
-    return {}
+local function parser_for_path(path, language)
+  path = vim.fs.normalize(path)
+  local bufnr = vim.fn.bufnr(path)
+  if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
+    local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, language, { error = false })
+    if not parser_ok or not parser then
+      return nil, nil, parser_ok and "Tree-sitter parser unavailable" or tostring(parser)
+    end
+    return parser, bufnr
   end
 
-  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, language, { error = false })
-  if not parser_ok or not parser then
-    return {}, parser_ok and "Tree-sitter parser unavailable" or tostring(parser)
+  local read_ok, lines = pcall(vim.fn.readfile, path, "b")
+  if not read_ok then
+    return nil, nil, tostring(lines)
   end
+  local contents = table.concat(lines, "\n")
+  local parser_ok, parser =
+    pcall(vim.treesitter.get_string_parser, contents, language, { error = false })
+  if not parser_ok or not parser then
+    return nil, nil, parser_ok and "Tree-sitter parser unavailable" or tostring(parser)
+  end
+  return parser, contents
+end
+
+local function source_root(parser)
+  local trees = parser:parse()
+  return trees and trees[1] and trees[1]:root() or nil
+end
+
+local function extract_import_sites(language, spec, parser, source, uri, metadata)
   local query_ok, query = pcall(vim.treesitter.query.parse, language, spec.query)
   if not query_ok then
     return {}, tostring(query)
@@ -318,15 +340,14 @@ function M.import_sites(bufnr)
 
   local sites = {}
   local seen = {}
-  local uri = vim.uri_from_bufnr(bufnr)
   local iter_ok, iter_error = pcall(function()
-    for capture_id, node in query:iter_captures(root, bufnr, 0, -1) do
+    for capture_id, node in query:iter_captures(root, source, 0, -1) do
       if query.captures[capture_id] == spec.capture then
         local range = node_range(node)
-        local text = node_text(node, bufnr)
+        local text = node_text(node, source)
         local normalized = { name = text }
         if spec.normalize then
-          local ok, value = pcall(spec.normalize, node, text, bufnr)
+          local ok, value = pcall(spec.normalize, node, text, source, metadata)
           normalized = ok and value or nil
         end
         if normalized and type(normalized.name) == "string" and normalized.name ~= "" then
@@ -368,6 +389,111 @@ function M.import_sites(bufnr)
     return {}, tostring(iter_error)
   end
   return sites
+end
+
+function M.import_sites(bufnr)
+  local language = language_for(bufnr)
+  local adapter = adapters.get(language)
+  local spec = adapter and adapter.treesitter and adapter.treesitter.imports
+  if not spec then
+    return {}
+  end
+
+  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, language, { error = false })
+  if not parser_ok or not parser then
+    return {}, parser_ok and "Tree-sitter parser unavailable" or tostring(parser)
+  end
+  local path = vim.api.nvim_buf_get_name(bufnr)
+  return extract_import_sites(language, spec, parser, bufnr, vim.uri_from_bufnr(bufnr), {
+    path = path,
+  })
+end
+
+function M.import_sites_from_path(path, language)
+  path = vim.fs.normalize(path)
+  local adapter = adapters.get(language)
+  local spec = adapter and adapter.treesitter and adapter.treesitter.imports
+  if not spec then
+    return {}
+  end
+
+  local parser, parser_source, parser_error = parser_for_path(path, language)
+  if not parser then
+    return {}, parser_error
+  end
+  return extract_import_sites(language, spec, parser, parser_source, vim.uri_from_fname(path), {
+    path = path,
+  })
+end
+
+function M.enclosing_containers(path, positions)
+  path = vim.fs.normalize(path)
+  local bufnr = vim.fn.bufnr(path)
+  local filetype = bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) and vim.bo[bufnr].filetype
+    or vim.filetype.match({ filename = path })
+  local language = adapters.language_for_filetype(filetype or "")
+  local adapter = adapters.get(language)
+  if not adapter or not adapter.treesitter then
+    return {}, "Tree-sitter adapter unavailable"
+  end
+  local parser, parser_source, parser_error = parser_for_path(path, language)
+  if not parser then
+    return {}, parser_error
+  end
+  local root = source_root(parser)
+  if not root then
+    return {}, "Tree-sitter returned no syntax tree"
+  end
+
+  local containers = {}
+  for index, position in ipairs(positions or {}) do
+    local node = root:named_descendant_for_range(
+      position.line,
+      position.character,
+      position.line,
+      position.character
+    )
+    local function_node
+    local module_node
+    local current = node
+    while current do
+      local label = label_for(adapter, current)
+      if not function_node and (label == "Function" or label == "Method") then
+        function_node = current
+      elseif not module_node and label == "Module" then
+        module_node = current
+      end
+      current = current:parent()
+    end
+    local container = function_node or module_node
+    if container then
+      local name_target, name = name_node(container, parser_source, adapter)
+      if name and name ~= "" then
+        local trail = {}
+        current = container:parent()
+        while current do
+          if label_for(adapter, current) == "Module" then
+            local _, module_name = name_node(current, parser_source, adapter)
+            if module_name and module_name ~= "" then
+              table.insert(trail, 1, module_name)
+            end
+          end
+          current = current:parent()
+        end
+        containers[index] = {
+          name = name,
+          kind_name = label_for(adapter, container),
+          location = {
+            uri = vim.uri_from_fname(path),
+            range = name_target and node_range(name_target) or node_range(container),
+            full_range = node_range(container),
+          },
+          trail = trail,
+        }
+      end
+    end
+  end
+  return containers
 end
 
 return M

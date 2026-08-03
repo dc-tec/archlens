@@ -83,6 +83,18 @@ local function configure_buffer(session, actions)
     M.render(session, session.model, session.options)
   end
 
+  local function toggle_group(group_id)
+    session.expanded_groups[group_id] = not session.expanded_groups[group_id]
+    M.render(session, session.model, session.options)
+  end
+
+  local function expand_group(group_id)
+    local step = math.max(1, session.options.max_items or 8)
+    session.expanded_groups[group_id] = true
+    session.group_limits[group_id] = (session.group_limits[group_id] or step) + step
+    M.render(session, session.model, session.options)
+  end
+
   map(buffer, "<CR>", function()
     local target = target_at_cursor(session)
     if not target then
@@ -90,6 +102,10 @@ local function configure_buffer(session, actions)
     end
     if target.action == "expand" then
       expand_section(target.section_id)
+    elseif target.action == "toggle_group" then
+      toggle_group(target.group_id)
+    elseif target.action == "expand_group" then
+      expand_group(target.group_id)
     elseif target.action == "toggle" then
       session.collapsed[target.section_id] = not session.collapsed[target.section_id]
       M.render(session, session.model, session.options)
@@ -112,6 +128,10 @@ local function configure_buffer(session, actions)
     local target = target_at_cursor(session)
     if target and target.action == "expand" then
       expand_section(target.section_id)
+    elseif target and target.action == "toggle_group" then
+      toggle_group(target.group_id)
+    elseif target and target.action == "expand_group" then
+      expand_group(target.group_id)
     elseif target and target.action == "toggle" then
       session.collapsed[target.section_id] = not session.collapsed[target.section_id]
       M.render(session, session.model, session.options)
@@ -151,6 +171,8 @@ end
 function M.ensure(session, options, actions)
   session.options = options
   session.expanded = session.expanded or {}
+  session.expanded_groups = session.expanded_groups or {}
+  session.group_limits = session.group_limits or {}
   session.collapsed = session.collapsed or {}
 
   if valid_window(session.window) and valid_buffer(session.buffer) then
@@ -216,6 +238,8 @@ function M.render(session, model, options)
     width = width,
     max_items = options.max_items,
     expanded = session.expanded,
+    expanded_groups = session.expanded_groups,
+    group_limits = session.group_limits,
     collapsed = session.collapsed,
   })
   session.rendered = rendered

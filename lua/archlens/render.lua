@@ -38,6 +38,8 @@ function M.build(model, opts)
   local width = math.max(opts.width or 56, 30)
   local max_items = opts.max_items or 8
   local expanded = opts.expanded or {}
+  local expanded_groups = opts.expanded_groups or {}
+  local group_limits = opts.group_limits or {}
   local collapsed = opts.collapsed or {}
   local lines = {}
   local targets = {}
@@ -117,29 +119,73 @@ function M.build(model, opts)
       { action = "toggle", section_id = section.id },
       "Special"
     )
-    local limit = is_collapsed and 0
-      or (expanded[section.id] and #section.rows or math.min(#section.rows, max_items))
-    for index = 1, limit do
-      local row = section.rows[index]
+    local function add_row(row, indent)
       add(
-        string.format("  %s %s", section.marker, row.name),
+        string.format("%s%s %s", indent, section.marker, row.name),
         { action = "open", row = row },
         "Normal"
       )
       local badge = row.evidence and row.evidence.provider or "lsp"
       local detail = location_label(row)
       if detail ~= "" then
-        add(string.format("    %s · %s", detail, badge), nil, "Comment")
+        add(string.format("%s  %s · %s", indent, detail, badge), nil, "Comment")
       else
-        add(string.format("    %s", badge), nil, "Comment")
+        add(string.format("%s  %s", indent, badge), nil, "Comment")
       end
     end
-    if not is_collapsed and limit < #section.rows then
-      add(
-        string.format("  … %d more", #section.rows - limit),
-        { action = "expand", section_id = section.id },
-        "MoreMsg"
-      )
+
+    local items = section.groups or section.rows
+    local limit = is_collapsed and 0
+      or (expanded[section.id] and #items or math.min(#items, max_items))
+    if section.groups then
+      for index = 1, limit do
+        local group = section.groups[index]
+        local is_group_expanded = expanded_groups[group.id] == true
+        add(
+          string.format(
+            "  %s %s  %d",
+            is_group_expanded and "▾" or "▸",
+            group.name,
+            #group.rows
+          ),
+          {
+            action = "toggle_group",
+            group_id = group.id,
+            row = {
+              id = group.id,
+              name = group.name,
+              kind_name = group.kind_name,
+              location = group.location,
+              context = group.context,
+              resolve_on_focus = group.resolve_on_focus,
+            },
+          },
+          "Identifier"
+        )
+        if is_group_expanded then
+          local group_limit = math.min(#group.rows, group_limits[group.id] or max_items)
+          for row_index = 1, group_limit do
+            add_row(group.rows[row_index], "    ")
+          end
+          if group_limit < #group.rows then
+            add(string.format("    … %d more uses", #group.rows - group_limit), {
+              action = "expand_group",
+              group_id = group.id,
+            }, "MoreMsg")
+          end
+        end
+      end
+    else
+      for index = 1, limit do
+        add_row(section.rows[index], "  ")
+      end
+    end
+    if not is_collapsed and limit < #items then
+      local suffix = section.groups and " contexts" or ""
+      add(string.format("  … %d more%s", #items - limit, suffix), {
+        action = "expand",
+        section_id = section.id,
+      }, "MoreMsg")
     end
   end
 
@@ -150,7 +196,7 @@ function M.build(model, opts)
 
   add("")
   add("<CR> open  f focus  <BS> back  <Tab> next", nil, "Comment")
-  add("<Space> section  [s/]s sections  r refresh  q close", nil, "Comment")
+  add("<Space> toggle  [s/]s sections  r refresh  q close", nil, "Comment")
 
   return {
     lines = lines,

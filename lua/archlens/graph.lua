@@ -20,6 +20,7 @@ local M = {}
 ---@field evidence { provider: string, method: string, class: string }
 ---@field occurrences table[]
 ---@field position_encoding "utf-8"
+---@field presentation? { container?: { id: string, name: string, kind_name: string, location: table } }
 
 ---@class ArchLensGraphDelta
 ---@field version 1
@@ -177,6 +178,28 @@ local function validate_evidence(evidence)
   end
 end
 
+local function validate_presentation(presentation)
+  if presentation == nil then
+    return
+  end
+  assert(type(presentation) == "table", "graph edge presentation must be a table")
+  local container = presentation.container
+  if container == nil then
+    return
+  end
+  assert(type(container) == "table", "graph edge container presentation must be a table")
+  for _, field in ipairs({ "id", "name", "kind_name" }) do
+    assert(
+      type(container[field]) == "string" and container[field] ~= "",
+      "graph edge container presentation requires " .. field
+    )
+  end
+  assert(
+    container.location and container.location.uri and container.location.range,
+    "graph edge container presentation requires a location"
+  )
+end
+
 function M.edge(kind, source, target, evidence, fields)
   assert(relations.get(kind), "unknown relationship kind: " .. tostring(kind))
   source = M.node(source)
@@ -233,6 +256,7 @@ function M.add_edge(target, edge)
   assert(type(edge.source) == "table" and type(edge.target) == "table", "graph edges require nodes")
   assert(edge.position_encoding == "utf-8", "graph edges must use UTF-8 byte columns")
   validate_evidence(edge.evidence)
+  validate_presentation(edge.presentation)
   validate_canonical(edge, "edge")
   if target.focus then
     local focus = M.focus_node(edge)

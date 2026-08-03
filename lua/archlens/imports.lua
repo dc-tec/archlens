@@ -38,10 +38,11 @@ local function remember_targets(key, locations)
   end
 end
 
-function M.clear_cache()
+function M.clear_cache(root)
   target_cache = {}
   target_cache_order = {}
   require("archlens.adapters").clear_cache()
+  require("archlens.import_index").clear_cache(root)
 end
 
 local function location_kind(context, location, filters)
@@ -77,7 +78,7 @@ local function target_location(context, locations, filters)
   return candidates[1]
 end
 
-local function import_edge(context, site, location)
+local function import_edge(context, site, location, import_filetype)
   local target_context = model.context_from_item({
     name = site.name,
     kind = vim.lsp.protocol.SymbolKind.Module,
@@ -92,6 +93,7 @@ local function import_edge(context, site, location)
     supports_calls = false,
   })
   target_context.module_context = true
+  target_context.import_filetype = import_filetype
   local source_path = vim.uri_to_fname(site.location.uri)
   local source = graph.node({
     name = vim.fs.basename(source_path),
@@ -195,7 +197,7 @@ function M.relationships(context, bufnr, options, callback)
     for index = 1, #sites do
       local outcome = outcomes[index]
       if outcome and outcome.location then
-        local edge = import_edge(context, outcome.site, outcome.location)
+        local edge = import_edge(context, outcome.site, outcome.location, vim.bo[bufnr].filetype)
         local kind = location_kind(context, outcome.location, filters)
         local visible = scope.visible(kind, filters)
         local target_key = edge.target.id

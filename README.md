@@ -190,10 +190,12 @@ configured cold-start window and can be disabled through
 
 ## Language adapters
 
-[`lua/archlens/adapters.lua`](lua/archlens/adapters.lua) defines the built-in
-language behavior. Each adapter maps Neovim filetypes to a canonical language.
-It can define Tree-sitter symbols and project markers, module analysis, an
-ast-grep parser and query, and relationship presentation.
+[`lua/archlens/adapters.lua`](lua/archlens/adapters.lua) manages the adapter
+registry. Built-in language behavior lives under
+[`lua/archlens/adapters/`](lua/archlens/adapters/). Each adapter maps Neovim
+filetypes to a canonical language. It can define Tree-sitter symbols and project
+markers, module analysis, an ast-grep parser and query, and relationship
+presentation.
 
 Additional adapters can be registered before ArchLens is used:
 

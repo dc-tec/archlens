@@ -316,9 +316,14 @@ local function run()
   assert(
     vim.tbl_contains(
       local_lines,
-      "Analysis: gopls running · Module dependencies running · Module dependents running · ast-grep running"
+      "Analysis [?]: gopls running · Module dependencies running · Module dependents running · ast-grep running"
     ),
     "the rendered pane should expose active provider states"
+  )
+  local compact_lines = require("archlens.render").build(local_model, { width = 62 }).lines
+  assert(
+    vim.tbl_contains(compact_lines, "Analysis [?]: 4 running"),
+    "the default-width pane should summarize long ordinary provider activity"
   )
 
   structural_callbacks[1](structural_delta(base_context, {

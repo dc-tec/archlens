@@ -1,5 +1,33 @@
 local M = {}
 
+local provider_state_labels = {
+  cancelled = "cancelled",
+  failed = "failed",
+  queued = "queued",
+  retrying = "retrying",
+  running = "running",
+  timed_out = "timed out",
+  unavailable = "unavailable",
+}
+
+local provider_state_order = {
+  "failed",
+  "timed_out",
+  "unavailable",
+  "cancelled",
+  "retrying",
+  "running",
+  "queued",
+}
+
+local exceptional_provider_states = {
+  cancelled = true,
+  failed = true,
+  retrying = true,
+  timed_out = true,
+  unavailable = true,
+}
+
 local function truncate(text, width)
   text = text or ""
   if width <= 0 then
@@ -31,6 +59,54 @@ local function location_label(row)
     return string.format("%s:%d", row.path_label, row.line)
   end
   return row.path_label
+end
+
+local function active_provider_runs(runs)
+  local grouped = {}
+  for _, state in ipairs(provider_state_order) do
+    grouped[state] = {}
+  end
+  for _, run in ipairs(runs or {}) do
+    if grouped[run.state] then
+      grouped[run.state][#grouped[run.state] + 1] = run
+    end
+  end
+
+  local active = {}
+  for _, state in ipairs(provider_state_order) do
+    vim.list_extend(active, grouped[state])
+  end
+  return active, grouped
+end
+
+local function analysis_line(model, width, inspectable)
+  local prefix = inspectable and "Analysis [?]: " or "Analysis: "
+  local active, grouped = active_provider_runs(model.provider_runs)
+  if #active == 0 then
+    return prefix .. table.concat(model.provider_activity or {}, " · ")
+  end
+
+  local full = vim.tbl_map(function(run)
+    return string.format("%s %s", run.label, provider_state_labels[run.state])
+  end, active)
+  local full_line = prefix .. table.concat(full, " · ")
+  if vim.fn.strdisplaywidth(full_line) <= width then
+    return full_line
+  end
+
+  local compact = {}
+  for _, state in ipairs(provider_state_order) do
+    local state_runs = grouped[state]
+    if #state_runs > 0 then
+      if #state_runs == 1 and (exceptional_provider_states[state] or #active == 1) then
+        compact[#compact + 1] =
+          string.format("%s %s", state_runs[1].label, provider_state_labels[state])
+      else
+        compact[#compact + 1] = string.format("%d %s", #state_runs, provider_state_labels[state])
+      end
+    end
+  end
+  return prefix .. table.concat(compact, " · ")
 end
 
 function M.build(model, opts)
@@ -69,16 +145,16 @@ function M.build(model, opts)
     or nil
 
   if model.providers and #model.providers > 0 then
-    add(table.concat(model.providers, " · "), nil, "DiagnosticHint", analysis_detail)
+    add(
+      (analysis_detail and "Sources [?]: " or "Sources: ") .. table.concat(model.providers, " · "),
+      nil,
+      "DiagnosticHint",
+      analysis_detail
+    )
   end
 
   if model.provider_activity and #model.provider_activity > 0 then
-    add(
-      "Analysis: " .. table.concat(model.provider_activity, " · "),
-      nil,
-      "DiagnosticInfo",
-      analysis_detail
-    )
+    add(analysis_line(model, width, analysis_detail ~= nil), nil, "DiagnosticInfo", analysis_detail)
   elseif model.pending_providers and #model.pending_providers > 0 then
     add("Pending: " .. table.concat(model.pending_providers, " · "), nil, "DiagnosticInfo")
   end

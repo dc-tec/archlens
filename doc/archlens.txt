@@ -61,6 +61,11 @@ q               Close ArchLens.
 
 The details window opened by `?` closes with `q`, `<Esc>`, or `?`.
 
+`Sources [?]` and `Analysis [?]` mark provider lifecycle details that can be
+opened with `?`. Active provider names remain visible when they fit. At
+narrower widths ordinary running and queued work is summarized by count;
+failures, timeouts, unavailability, cancellation, and retries take priority.
+
 ==============================================================================
 CONFIGURATION                                         *archlens-configuration*
 

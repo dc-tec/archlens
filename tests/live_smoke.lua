@@ -27,6 +27,12 @@ local function run()
   end, 50)
   assert(attached, "no language server attached before the timeout")
 
+  local function analysis_finished(text)
+    return not text:find("Analysis [?]:", 1, true)
+      and not text:find("Analysis:", 1, true)
+      and not text:find("Pending:", 1, true)
+  end
+
   vim.cmd.ArchLensHere()
 
   local map_buffer
@@ -39,7 +45,7 @@ local function run()
         return not text:find("Resolving the symbol", 1, true)
           and not text:find("Loading relationships", 1, true)
           and not text:find("Loading local and project relationships", 1, true)
-          and not text:find("Pending:", 1, true)
+          and analysis_finished(text)
       end
     end
     return false
@@ -96,7 +102,7 @@ local function run()
       return focused_text:find(focus_expected, 1, true)
         and not focused_text:find("Loading relationships", 1, true)
         and not focused_text:find("Loading local and project relationships", 1, true)
-        and not focused_text:find("Pending:", 1, true)
+        and analysis_finished(focused_text)
     end, 50)
     assert(
       focused,
@@ -111,7 +117,7 @@ local function run()
       return restored_text:find(back_expected, 1, true)
         and not restored_text:find("Loading relationships", 1, true)
         and not restored_text:find("Loading local and project relationships", 1, true)
-        and not restored_text:find("Pending:", 1, true)
+        and analysis_finished(restored_text)
     end, 50)
     assert(restored, "returning to the previous focus timed out")
   end

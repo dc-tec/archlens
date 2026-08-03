@@ -167,6 +167,8 @@ assert(contains(semantic_lines, "Confidence  Exact semantic relationship"))
 
 local render = require("archlens.render")
 local rendered = render.build(model, { width = 80 })
+assert(contains(rendered.lines, "Sources [?]: gopls · Tree-sitter · ast-grep"))
+assert(contains(rendered.lines, "Analysis [?]: ast-grep retrying"))
 local section_line
 local analysis_line
 local row_line
@@ -189,6 +191,54 @@ assert(section_line, "section headings should be inspectable")
 assert(row_line, "relationship rows should be inspectable")
 assert(row_location_line, "row location lines should inspect the same relationship")
 equal(rendered.details[row_location_line].row, section.rows[1])
+
+local source_line = vim.fn.index(rendered.lines, "Sources [?]: gopls · Tree-sitter · ast-grep")
+  + 1
+equal(
+  rendered.details[source_line].provider_runs,
+  model.provider_runs,
+  "the source affordance should expose provider lifecycle details"
+)
+
+local queued_model = vim.deepcopy(model)
+queued_model.providers = { "Tree-sitter" }
+queued_model.provider_activity = { "LSP queued", "ast-grep queued" }
+queued_model.provider_runs = {
+  { id = "lsp", label = "LSP", state = "queued" },
+  { id = "ast_grep", label = "ast-grep", state = "queued" },
+}
+local queued_rendered = render.build(queued_model, { width = 62 })
+assert(
+  contains(queued_rendered.lines, "Analysis [?]: LSP queued · ast-grep queued"),
+  "provider identities should remain visible when the full activity fits"
+)
+
+local busy_model = vim.deepcopy(model)
+busy_model.provider_activity = {
+  "gopls running",
+  "Module dependencies running",
+  "Module dependents running",
+  "ast-grep running",
+}
+busy_model.provider_runs = {
+  { id = "lsp", label = "gopls", state = "running" },
+  { id = "imports", label = "Module dependencies", state = "running" },
+  { id = "importers", label = "Module dependents", state = "running" },
+  { id = "ast_grep", label = "ast-grep", state = "running" },
+}
+local busy_rendered = render.build(busy_model, { width = 62 })
+assert(
+  contains(busy_rendered.lines, "Analysis [?]: 4 running"),
+  "long ordinary activity should collapse to a compact state count"
+)
+
+busy_model.provider_activity[4] = "ast-grep retrying"
+busy_model.provider_runs[4].state = "retrying"
+local retry_rendered = render.build(busy_model, { width = 54 })
+assert(
+  contains(retry_rendered.lines, "Analysis [?]: ast-grep retrying · 3 running"),
+  "exceptional provider states should remain named ahead of ordinary activity"
+)
 
 local view = require("archlens.view")
 local source_window = vim.api.nvim_get_current_win()

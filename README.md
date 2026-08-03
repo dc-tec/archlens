@@ -29,9 +29,11 @@ truncated relationships are reported instead of silently disappearing.
 
 Press `?` on a relationship to inspect its direction, anchor, provider methods,
 evidence classes, and retained occurrence sites without changing navigation
-state. The provider summary and active-analysis line expose lifecycle state,
-duration, and retry details. Contributions from multiple providers remain
-independently visible.
+state. The `Sources [?]` and `Analysis [?]` lines expose lifecycle state,
+duration, and retry details. Active provider names remain visible when they
+fit; at narrower widths ordinary states are summarized by count while
+failures, timeouts, unavailability, cancellation, and retries take priority.
+Contributions from multiple providers remain independently visible.
 
 ![ArchLens relationship evidence for a Rust reference](docs/assets/relationship-details.png)
 

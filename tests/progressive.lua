@@ -268,6 +268,11 @@ local function run()
     { "LSP", "ast-grep" },
     "the immediate local view should expose queued providers"
   )
+  assert_equal(
+    immediate_model.provider_activity,
+    { "LSP queued", "ast-grep queued" },
+    "the immediate local view should distinguish queued analysis"
+  )
 
   resolve_callbacks[1](vim.deepcopy(base_context))
   assert_equal(#relationship_callbacks, 1, "the first LSP provider should start")
@@ -301,13 +306,19 @@ local function run()
     { "gopls", "Module dependencies", "Module dependents", "ast-grep" },
     "the initial local view should name all pending providers"
   )
-  local local_lines = require("archlens.render").build(local_model, { width = 80 }).lines
+  assert_equal(local_model.provider_activity, {
+    "gopls running",
+    "Module dependencies running",
+    "Module dependents running",
+    "ast-grep running",
+  }, "started providers should expose their lifecycle state")
+  local local_lines = require("archlens.render").build(local_model, { width = 160 }).lines
   assert(
     vim.tbl_contains(
       local_lines,
-      "Pending: gopls · Module dependencies · Module dependents · ast-grep"
+      "Analysis: gopls running · Module dependencies running · Module dependents running · ast-grep running"
     ),
-    "the rendered pane should expose pending providers"
+    "the rendered pane should expose active provider states"
   )
 
   structural_callbacks[1](structural_delta(base_context, {
@@ -354,6 +365,11 @@ local function run()
     complete_model.pending_providers,
     {},
     "the completed view should have no pending providers"
+  )
+  assert_equal(
+    complete_model.provider_activity,
+    {},
+    "completed providers should not leave persistent status noise"
   )
 
   active_session.expanded = { outgoing = true }

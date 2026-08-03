@@ -465,6 +465,40 @@ local function section_relations(policy)
   return result
 end
 
+local provider_state_labels = {
+  cancelled = "cancelled",
+  failed = "failed",
+  queued = "queued",
+  retrying = "retrying",
+  running = "running",
+  timed_out = "timed out",
+  unavailable = "unavailable",
+}
+
+local function provider_runs(snapshot)
+  if snapshot.provider_runs and #snapshot.provider_runs > 0 then
+    return vim.deepcopy(snapshot.provider_runs)
+  end
+  return vim.tbl_map(function(provider)
+    return {
+      id = provider.id,
+      label = provider.label,
+      state = "queued",
+    }
+  end, snapshot.pending or {})
+end
+
+local function provider_activity(runs)
+  local activity = {}
+  for _, run in ipairs(runs) do
+    local state = provider_state_labels[run.state]
+    if state then
+      activity[#activity + 1] = string.format("%s %s", run.label, state)
+    end
+  end
+  return activity
+end
+
 function M.build(context, snapshot, opts)
   opts = opts or {}
   snapshot = snapshot or graph.new(context)
@@ -563,6 +597,7 @@ function M.build(context, snapshot, opts)
   local providers = vim.tbl_map(function(contributor)
     return contributor.label
   end, snapshot.contributors or {})
+  local runs = provider_runs(snapshot)
 
   return {
     title = "ArchLens",
@@ -570,6 +605,8 @@ function M.build(context, snapshot, opts)
     sections = sections,
     notes = notes,
     providers = providers,
+    provider_activity = provider_activity(runs),
+    provider_runs = runs,
     pending_providers = pending_providers,
   }
 end

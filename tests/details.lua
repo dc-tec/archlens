@@ -53,6 +53,18 @@ local section = {
 }
 local model = {
   title = "ArchLens",
+  providers = { "gopls", "Tree-sitter", "ast-grep" },
+  provider_activity = { "ast-grep retrying" },
+  provider_runs = {
+    { id = "lsp", label = "gopls", state = "completed", duration_ms = 42 },
+    {
+      id = "ast_grep",
+      label = "ast-grep",
+      state = "retrying",
+      elapsed_ms = 1250,
+      retry_delay_ms = 3000,
+    },
+  },
   focus = {
     name = "IsBlueGreenStrategy",
     kind_name = "Function",
@@ -67,6 +79,13 @@ local model = {
 }
 
 local details = require("archlens.details")
+local analysis_lines = details.lines({ provider_runs = model.provider_runs }, model)
+assert(contains(analysis_lines, "State       Completed"))
+assert(contains(analysis_lines, "Duration    42 ms"))
+assert(contains(analysis_lines, "State       Retrying"))
+assert(contains(analysis_lines, "Elapsed     1.2 s"))
+assert(contains(analysis_lines, "Retry       in 3.0 s"))
+
 local section_lines = details.lines({ section = section }, model)
 assert(contains(section_lines, "Direction   Incoming — related item → focus"))
 assert(contains(section_lines, "Anchor      File — for internal/service/workload"))
@@ -149,10 +168,13 @@ assert(contains(semantic_lines, "Confidence  Exact semantic relationship"))
 local render = require("archlens.render")
 local rendered = render.build(model, { width = 80 })
 local section_line
+local analysis_line
 local row_line
 local row_location_line
 for line, selection in pairs(rendered.details) do
-  if selection.row == section.rows[1] then
+  if selection.provider_runs then
+    analysis_line = analysis_line or line
+  elseif selection.row == section.rows[1] then
     if rendered.targets[line] then
       row_line = line
     else
@@ -162,6 +184,7 @@ for line, selection in pairs(rendered.details) do
     section_line = section_line or line
   end
 end
+assert(analysis_line, "provider lifecycle and timing should be inspectable")
 assert(section_line, "section headings should be inspectable")
 assert(row_line, "relationship rows should be inspectable")
 assert(row_location_line, "row location lines should inspect the same relationship")

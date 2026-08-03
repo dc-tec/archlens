@@ -32,12 +32,30 @@ local M = {}
 ---@field omitted table<string, integer>
 ---@field contributors { id: string, label: string }[]
 ---@field pending { id: string, label: string }[]
+---@field provider_runs { id: string, label: string, state: string, elapsed_ms?: integer, duration_ms?: integer, retry_delay_ms?: integer, message?: string }[]
 
 local valid_scopes = {
   configuration = true,
   file = true,
   module = true,
   symbol = true,
+}
+
+local valid_provider_states = {
+  cancelled = true,
+  completed = true,
+  failed = true,
+  queued = true,
+  retrying = true,
+  running = true,
+  timed_out = true,
+  unavailable = true,
+}
+
+local pending_provider_states = {
+  queued = true,
+  retrying = true,
+  running = true,
 }
 
 local raw_provider_fields = {
@@ -340,6 +358,7 @@ function M.delta()
     omitted = {},
     contributors = {},
     pending = {},
+    provider_runs = {},
   }
 end
 
@@ -406,14 +425,51 @@ function M.add_contributor(target, id, label)
   target.contributors[#target.contributors + 1] = { id = id, label = label }
 end
 
-function M.set_pending(target, providers)
+function M.set_provider_runs(target, runs)
+  assert(type(target) == "table" and target.version == 1, "invalid graph snapshot")
+  target.provider_runs = {}
   target.pending = {}
+  for _, run in ipairs(runs or {}) do
+    assert(type(run.id) == "string" and run.id ~= "", "provider runs require an id")
+    assert(type(run.label) == "string" and run.label ~= "", "provider runs require a label")
+    assert(valid_provider_states[run.state], "unsupported provider state: " .. tostring(run.state))
+    for _, field in ipairs({ "elapsed_ms", "duration_ms", "retry_delay_ms" }) do
+      local value = run[field]
+      assert(
+        value == nil or (type(value) == "number" and value >= 0),
+        "provider run " .. field .. " must be a non-negative number"
+      )
+    end
+    assert(
+      run.message == nil or type(run.message) == "string",
+      "provider run message must be a string"
+    )
+    local normalized = {
+      id = run.id,
+      label = run.label,
+      state = run.state,
+      elapsed_ms = run.elapsed_ms,
+      duration_ms = run.duration_ms,
+      retry_delay_ms = run.retry_delay_ms,
+      message = run.message,
+    }
+    target.provider_runs[#target.provider_runs + 1] = normalized
+    if pending_provider_states[normalized.state] then
+      target.pending[#target.pending + 1] = { id = normalized.id, label = normalized.label }
+    end
+  end
+end
+
+function M.set_pending(target, providers)
+  local runs = {}
   for _, provider in ipairs(providers or {}) do
-    target.pending[#target.pending + 1] = {
+    runs[#runs + 1] = {
       id = assert(provider.id, "pending providers require an id"),
       label = provider.label or provider.id,
+      state = "queued",
     }
   end
+  M.set_provider_runs(target, runs)
 end
 
 function M.merge(target, delta)

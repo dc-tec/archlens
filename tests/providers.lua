@@ -21,6 +21,7 @@ local request_contexts = {}
 local recently_attached = true
 local retry_window
 local multi_client = false
+local clock = 0
 
 package.loaded["archlens.lsp"] = {
   relationship_contexts = function(primary)
@@ -125,6 +126,9 @@ local function run_provider(target_context)
     register_cancel = function(cancel)
       cancels[#cancels + 1] = cancel
     end,
+    now = function()
+      return clock
+    end,
   })
   return updates, cancels
 end
@@ -142,6 +146,19 @@ assert(
   end, 10),
   "a recently attached client should receive one delayed retry"
 )
+local retry_update
+for _, update in ipairs(updates) do
+  if update.provider_runs[1] and update.provider_runs[1].state == "retrying" then
+    retry_update = update
+    break
+  end
+end
+assert(retry_update, "a cold-start retry should publish its lifecycle state")
+equal(
+  retry_update.provider_runs[1].retry_delay_ms,
+  1,
+  "retry lifecycle state should expose the configured delay"
+)
 equal(retry_window, 9000, "the configured cold-client window should reach readiness detection")
 equal(
   updates[#updates].pending,
@@ -149,8 +166,15 @@ equal(
   "the provider should remain pending during the retry"
 )
 
+clock = 42
 relationship_callbacks[2](graph.delta(), metadata)
 equal(updates[#updates].pending, {}, "the provider should complete after its one retry")
+equal(updates[#updates].provider_runs[1], {
+  id = "lsp",
+  label = "cold-lsp",
+  state = "completed",
+  duration_ms = 42,
+}, "completed providers should expose their total duration")
 assert(
   table.concat(updates[#updates].notes, "\n"):find(
     "cold-lsp returned no semantic relationships after one cold-start retry (Project references).",
@@ -162,6 +186,7 @@ assert(
 
 recently_attached = false
 local warm_updates = run_provider()
+clock = 50
 relationship_callbacks[3](graph.delta(), metadata)
 equal(warm_updates[#warm_updates].pending, {}, "warm empty results should complete immediately")
 assert(
@@ -183,8 +208,9 @@ providers.register("custom", {
   enabled = function(_, _, current_config)
     return current_config.providers.custom.enabled
   end,
-  start = function(_, _, _, done)
+  start = function(_, _, _, done, report)
     custom_started = custom_started + 1
+    report("retrying", { retry_delay_ms = 25, message = "Waiting for the project tool." })
     local result = graph.delta()
     graph.add_contributor(result, "custom", "Custom relationships")
     graph.add_note(result, "Custom provider completed.")
@@ -192,12 +218,23 @@ providers.register("custom", {
     return function() end
   end,
 })
+providers.register("broken", {
+  order = 26,
+  label = "Broken provider",
+  enabled = function(_, _, current_config)
+    local options = current_config.providers.broken or {}
+    return options.enabled == true
+  end,
+  start = function()
+    error("provider unavailable")
+  end,
+})
 local provider_ids = vim.tbl_map(function(provider)
   return provider.id
 end, providers.ordered())
 equal(
   provider_ids,
-  { "lsp", "imports", "custom", "importers", "ast_grep" },
+  { "lsp", "imports", "custom", "broken", "importers", "ast_grep" },
   "custom providers should participate in stable orchestration order"
 )
 equal(providers.local_pending(config), {
@@ -214,6 +251,22 @@ syntax_context.client_name = nil
 local custom_updates = run_provider(syntax_context)
 equal(custom_started, 1, "eligible custom providers should start through the shared runner")
 equal(custom_updates[#custom_updates].pending, {}, "synchronous custom providers should complete")
+local custom_retry
+for _, update in ipairs(custom_updates) do
+  for _, run in ipairs(update.provider_runs or {}) do
+    if run.id == "custom" and run.state == "retrying" then
+      custom_retry = run
+    end
+  end
+end
+equal(custom_retry, {
+  id = "custom",
+  label = "Custom relationships",
+  state = "retrying",
+  elapsed_ms = 0,
+  retry_delay_ms = 25,
+  message = "Waiting for the project tool.",
+}, "custom providers should publish retry metadata through the shared lifecycle")
 assert(
   table
     .concat(custom_updates[#custom_updates].notes, "\n")
@@ -222,6 +275,25 @@ assert(
 )
 
 config.providers.custom.enabled = false
+config.providers.broken = { enabled = true }
+local broken_updates = run_provider(syntax_context)
+local broken_run = broken_updates[#broken_updates].provider_runs[1]
+equal(broken_run.id, "broken", "the failed provider should retain its identity")
+equal(broken_run.label, "Broken provider", "the failed provider should retain its label")
+equal(broken_run.state, "failed", "start failures should publish a terminal state")
+equal(broken_run.duration_ms, 0, "start failures should retain their elapsed duration")
+assert(
+  broken_run.message:find("provider unavailable", 1, true),
+  "failed provider lifecycle state should retain the cause"
+)
+assert(
+  table
+    .concat(broken_updates[#broken_updates].errors, "\n")
+    :find("Broken provider failed to start", 1, true),
+  "provider start failures should remain visible as graph errors"
+)
+
+config.providers.broken.enabled = false
 multi_client = true
 local multi_updates = run_provider()
 equal(

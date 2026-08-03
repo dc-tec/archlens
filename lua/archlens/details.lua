@@ -121,7 +121,52 @@ local function occurrence_locations(rows, root)
   return locations
 end
 
+local provider_state_labels = {
+  cancelled = "Cancelled",
+  completed = "Completed",
+  failed = "Failed",
+  queued = "Queued",
+  retrying = "Retrying",
+  running = "Running",
+  timed_out = "Timed out",
+  unavailable = "Unavailable",
+}
+
+local function duration_label(milliseconds)
+  if milliseconds == nil then
+    return nil
+  end
+  if milliseconds < 1000 then
+    return string.format("%d ms", math.floor(milliseconds + 0.5))
+  end
+  return string.format("%.1f s", milliseconds / 1000)
+end
+
+local function provider_lines(runs)
+  local lines = { "Analysis", "────────" }
+  for index, run in ipairs(runs) do
+    if index > 1 then
+      lines[#lines + 1] = ""
+    end
+    lines[#lines + 1] = run.label
+    append(lines, "State", provider_state_labels[run.state] or run.state)
+    if run.duration_ms ~= nil then
+      append(lines, "Duration", duration_label(run.duration_ms))
+    elseif run.elapsed_ms ~= nil and run.state ~= "queued" then
+      append(lines, "Elapsed", duration_label(run.elapsed_ms))
+    end
+    if run.retry_delay_ms ~= nil then
+      append(lines, "Retry", "in " .. duration_label(run.retry_delay_ms))
+    end
+    append(lines, "Message", run.message)
+  end
+  return lines
+end
+
 function M.lines(selection, model)
+  if selection and selection.provider_runs then
+    return provider_lines(selection.provider_runs)
+  end
   local section = selection and selection.section
   if not section then
     return nil

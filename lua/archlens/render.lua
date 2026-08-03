@@ -63,11 +63,23 @@ function M.build(model, opts)
   add(model.title or "ArchLens", nil, "Title")
   add(string.rep("─", math.min(width, 24)), nil, "Comment")
 
+  local analysis_detail = model.provider_runs
+      and #model.provider_runs > 0
+      and { provider_runs = model.provider_runs }
+    or nil
+
   if model.providers and #model.providers > 0 then
-    add(table.concat(model.providers, " · "), nil, "DiagnosticHint")
+    add(table.concat(model.providers, " · "), nil, "DiagnosticHint", analysis_detail)
   end
 
-  if model.pending_providers and #model.pending_providers > 0 then
+  if model.provider_activity and #model.provider_activity > 0 then
+    add(
+      "Analysis: " .. table.concat(model.provider_activity, " · "),
+      nil,
+      "DiagnosticInfo",
+      analysis_detail
+    )
+  elseif model.pending_providers and #model.pending_providers > 0 then
     add("Pending: " .. table.concat(model.pending_providers, " · "), nil, "DiagnosticInfo")
   end
 

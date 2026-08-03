@@ -125,7 +125,7 @@ local function lsp_contexts(context, source_buffer)
   return { context }
 end
 
-local function start_lsp_context(context, source_buffer, config, done)
+local function start_lsp_context(context, source_buffer, config, done, report)
   local lsp_cancel = function() end
   local retry_timer
   local retried = false
@@ -144,9 +144,11 @@ local function start_lsp_context(context, source_buffer, config, done)
       and lsp.recently_attached(context.client_id, retry.window_ms or 10000)
     if retryable then
       retried = true
+      report("retrying", { retry_delay_ms = math.max(0, retry.delay_ms or 3000) })
       retry_timer = vim.defer_fn(function()
         retry_timer = nil
         if not cancelled then
+          report("running")
           run()
         end
       end, math.max(0, retry.delay_ms or 3000))
@@ -174,7 +176,7 @@ local function start_lsp_context(context, source_buffer, config, done)
   end
 end
 
-local function start_lsp(context, source_buffer, config, done)
+local function start_lsp(context, source_buffer, config, done, report)
   local contexts = lsp_contexts(context, source_buffer)
   local combined = graph.delta()
   local pending = #contexts
@@ -201,7 +203,7 @@ local function start_lsp(context, source_buffer, config, done)
 
   for _, semantic_context in ipairs(contexts) do
     cancellations[#cancellations + 1] =
-      start_lsp_context(semantic_context, source_buffer, config, finish)
+      start_lsp_context(semantic_context, source_buffer, config, finish, report)
   end
 
   return function()
@@ -316,11 +318,11 @@ local function tasks_for(context, source_buffer, config)
       tasks[#tasks + 1] = {
         id = current_provider.id,
         label = label_ok and label or current_provider.id,
-        start = function(done)
+        start = function(done, report)
           if not label_ok then
             error(label)
           end
-          return current_provider.start(context, source_buffer, config, done)
+          return current_provider.start(context, source_buffer, config, done, report)
         end,
       }
     elseif not enabled_ok then
@@ -341,22 +343,40 @@ end
 function M.run(context, source_buffer, config, controls)
   local relationships = graph.new(context)
   local tasks = tasks_for(context, source_buffer, config)
-  local pending = {}
+  local now = controls.now or function()
+    return math.floor(vim.uv.hrtime() / 1000000)
+  end
+  local runs = {}
   for _, task in ipairs(tasks) do
-    pending[task.id] = true
+    runs[task.id] = {
+      id = task.id,
+      label = task.label,
+      state = "queued",
+    }
   end
 
   local function update()
     if not controls.is_current() then
       return
     end
-    local pending_providers = {}
+    local provider_runs = {}
+    local current_time = now()
     for _, task in ipairs(tasks) do
-      if pending[task.id] then
-        pending_providers[#pending_providers + 1] = { id = task.id, label = task.label }
+      local run = runs[task.id]
+      local published = {
+        id = run.id,
+        label = run.label,
+        state = run.state,
+        duration_ms = run.duration_ms,
+        retry_delay_ms = run.retry_delay_ms,
+        message = run.message,
+      }
+      if run.started_at_ms and not run.duration_ms then
+        published.elapsed_ms = math.max(0, current_time - run.started_at_ms)
       end
+      provider_runs[#provider_runs + 1] = published
     end
-    graph.set_pending(relationships, pending_providers)
+    graph.set_provider_runs(relationships, provider_runs)
     controls.on_update(relationships)
   end
 
@@ -365,23 +385,51 @@ function M.run(context, source_buffer, config, controls)
   update()
 
   for _, task in ipairs(tasks) do
+    local run = runs[task.id]
+    run.state = "running"
+    run.started_at_ms = now()
+  end
+  update()
+
+  for _, task in ipairs(tasks) do
     local completed = false
+    local run = runs[task.id]
+    local function report(state, fields)
+      if completed or not controls.is_current() then
+        return
+      end
+      assert(
+        state == "running" or state == "retrying",
+        "provider progress state must be running or retrying"
+      )
+      fields = fields or {}
+      run.state = state
+      run.retry_delay_ms = fields.retry_delay_ms
+      run.message = fields.message
+      update()
+    end
+
     local function done(result)
       if completed or not controls.is_current() then
         return
       end
       completed = true
       graph.merge(relationships, result or graph.delta())
-      pending[task.id] = nil
+      run.state = "completed"
+      run.duration_ms = math.max(0, now() - run.started_at_ms)
+      run.retry_delay_ms = nil
+      run.message = nil
       update()
     end
 
-    local ok, cancel_or_error = pcall(task.start, done)
+    local ok, cancel_or_error = pcall(task.start, done, report)
     if ok then
       controls.register_cancel(cancel_or_error)
     elseif not completed and controls.is_current() then
       completed = true
-      pending[task.id] = nil
+      run.state = "failed"
+      run.duration_ms = math.max(0, now() - run.started_at_ms)
+      run.message = tostring(cancel_or_error)
       graph.add_error(
         relationships,
         string.format("%s failed to start: %s", task.label, tostring(cancel_or_error))

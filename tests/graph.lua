@@ -118,6 +118,40 @@ equal(snapshot.pending, {
   { id = "lsp", label = "gopls" },
   { id = "ast_grep", label = "ast-grep" },
 })
+equal(snapshot.provider_runs, {
+  { id = "lsp", label = "gopls", state = "queued" },
+  { id = "ast_grep", label = "ast-grep", state = "queued" },
+}, "legacy pending providers should publish queued lifecycle states")
+
+graph.set_provider_runs(snapshot, {
+  { id = "lsp", label = "gopls", state = "completed", duration_ms = 42 },
+  {
+    id = "ast_grep",
+    label = "ast-grep",
+    state = "retrying",
+    elapsed_ms = 100,
+    retry_delay_ms = 3000,
+  },
+})
+equal(snapshot.pending, {
+  { id = "ast_grep", label = "ast-grep" },
+}, "only active lifecycle states should remain pending")
+equal(snapshot.provider_runs[1], {
+  id = "lsp",
+  label = "gopls",
+  state = "completed",
+  duration_ms = 42,
+}, "completed providers should retain their duration")
+equal(snapshot.provider_runs[2], {
+  id = "ast_grep",
+  label = "ast-grep",
+  state = "retrying",
+  elapsed_ms = 100,
+  retry_delay_ms = 3000,
+}, "active providers should retain progress metadata")
+assert(not pcall(graph.set_provider_runs, snapshot, {
+  { id = "invalid", label = "Invalid", state = "unknown" },
+}), "unknown provider lifecycle states should be rejected")
 
 local returned = graph.related_node(snapshot.edges[2])
 returned.kind_name = "mutated"

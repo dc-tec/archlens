@@ -38,11 +38,13 @@ focusing that row reveals its module and replaces symbol relationships with
 package dependencies and dependents. Go package focus now uses bounded
 `go list` output as the authority for active production edges and enriches
 those edges with exact Tree-sitter import sites. When build analysis is
-unavailable, the source-derived package view remains available.
+unavailable, the source-derived package view remains available. Module focus
+aggregates actual production package imports between active Go workspace
+modules, retaining one relationship per real module boundary rather than
+listing every external manifest requirement.
 
 Next steps may include:
 
-- Go module dependency aggregation
 - A `go.work` workspace boundary above module focus
 - Package or module identities for other ecosystems with authoritative metadata
 - Test and configuration relationships at boundary level

@@ -3,6 +3,7 @@ local relations = require("archlens.relations")
 local M = {}
 
 ---@alias ArchLensGraphScope "symbol"|"file"|"module"|"boundary"|"configuration"
+---@alias ArchLensVisibilityScope "project"|"external"|"vendored"|"generated"|"excluded"
 ---@alias ArchLensNoteSeverity "info"|"warn"|"error"
 ---@alias ArchLensProviderState "cancelled"|"completed"|"failed"|"queued"|"retrying"|"running"|"timed_out"|"unavailable"
 
@@ -47,6 +48,7 @@ local M = {}
 ---@field path_label? string
 ---@field line? integer
 ---@field position_encoding? string
+---@field visibility_scope? ArchLensVisibilityScope
 
 ---@class ArchLensGraphEdge
 ---@field id string
@@ -78,6 +80,14 @@ local valid_scopes = {
   file = true,
   module = true,
   symbol = true,
+}
+
+local valid_visibility_scopes = {
+  excluded = true,
+  external = true,
+  generated = true,
+  project = true,
+  vendored = true,
 }
 
 local valid_provider_states = {
@@ -204,6 +214,10 @@ function M.node(fields)
   node.location = normalized_location(node.location)
   node.scope = scope_for(node)
   assert(valid_scopes[node.scope], "unsupported graph node scope: " .. tostring(node.scope))
+  assert(
+    node.visibility_scope == nil or valid_visibility_scopes[node.visibility_scope],
+    "unsupported graph node visibility scope: " .. tostring(node.visibility_scope)
+  )
   assert(
     node.location or (type(node.id) == "string" and node.id ~= ""),
     "graph nodes require a location or id"

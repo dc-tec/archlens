@@ -87,6 +87,17 @@ package.loaded["archlens.go_packages"] = {
   end,
   clear_cache = function() end,
 }
+package.loaded["archlens.go_modules"] = {
+  supports = function(current)
+    return current.is_boundary == true
+      and current.boundary_level == "module"
+      and current.language == "go"
+  end,
+  relationships = function()
+    error("Go module analysis should be disabled")
+  end,
+  clear_cache = function() end,
+}
 package.loaded["archlens.treesitter"] = {
   supports_imports = function()
     return supports_imports
@@ -312,6 +323,7 @@ config.providers.go = nil
 local module_boundary = vim.deepcopy(boundary_context)
 module_boundary.boundary_level = "module"
 module_boundary.boundary_keys = {}
+equal(registered.go.enabled(module_boundary, bufnr, config), true)
 equal(registered.imports.enabled(module_boundary, bufnr, config), false)
 equal(registered.importers.enabled(module_boundary, bufnr, config), false)
 supports_imports = false

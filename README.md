@@ -282,6 +282,12 @@ The Go scan currently covers the focused module. A `go.work` file is supported
 as build context, but other workspace modules are not yet aggregated into the
 package graph.
 
+At module focus, ArchLens aggregates production package imports that cross
+between active Go workspace modules. This keeps one module row per real build
+boundary and records how many package edges support it. It does not turn every
+external `go.mod` requirement into an architectural row. A single-module
+project therefore has no peer module relationships to invent.
+
 The package scan is cached while you navigate and rebuilt when you refresh the
 pane. It does not write an index to disk or start language servers for scanned
 files. Vendored, generated, and explicitly excluded paths are removed during

@@ -548,7 +548,8 @@ local function normalize_edges(snapshot, context, filters, report_adapter_issue)
         local row = row_from_edge(edge, relation, context, cache, report_adapter_issue)
         if row then
           local path = vim.uri_to_fname(row.location.uri)
-          row.scope = scope.classify(context.root_dir, path, filters, scope_cache)
+          row.scope = node.visibility_scope
+            or scope.classify(context.root_dir, path, filters, scope_cache)
           row.internal = row.scope ~= "external"
           if scope.visible(row.scope, filters) then
             grouped[relation.id][#grouped[relation.id] + 1] = row

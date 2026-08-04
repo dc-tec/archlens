@@ -1,6 +1,7 @@
 local ast_grep = require("archlens.ast_grep")
 local containers = require("archlens.containers")
 local graph = require("archlens.graph")
+local go_modules = require("archlens.go_modules")
 local go_packages = require("archlens.go_packages")
 local import_index = require("archlens.import_index")
 local imports = require("archlens.imports")
@@ -385,30 +386,39 @@ M.register("lsp", {
   start = start_lsp,
 })
 
-local function go_package_provider_enabled(context, config)
+local function go_provider_enabled(context, config)
   local options = config.providers.go or {}
-  return go_packages.supports(context) and options.enabled ~= false and config.imports.enabled
+  return (go_packages.supports(context) or go_modules.supports(context))
+    and options.enabled ~= false
+    and config.imports.enabled
 end
 
 M.register("go", {
   order = 19,
   label = "Go build",
   enabled = function(context, _, config)
-    return go_package_provider_enabled(context, config)
+    return go_provider_enabled(context, config)
   end,
   start = function(context, source_buffer, config, done)
-    local import_options = provider_options(config.imports.inbound, config)
-    import_options.filetype = context.import_filetype
-    import_options.max_imports = config.imports.max_imports
-    return go_packages.relationships(context, source_buffer, {
+    local options = {
       build = config.providers.go or {},
-      imports = import_options,
       include_dependents = config.imports.inbound.enabled,
       max_imports = config.imports.max_imports,
       max_importers = config.imports.inbound.max_importers,
-    }, done)
+    }
+    if go_modules.supports(context) then
+      return go_modules.relationships(context, source_buffer, options, done)
+    end
+    local import_options = provider_options(config.imports.inbound, config)
+    import_options.filetype = context.import_filetype
+    import_options.max_imports = config.imports.max_imports
+    options.imports = import_options
+    return go_packages.relationships(context, source_buffer, options, done)
   end,
-  clear_cache = go_packages.clear_cache,
+  clear_cache = function(root)
+    go_packages.clear_cache(root)
+    go_modules.clear_cache(root)
+  end,
 })
 
 M.register("imports", {
@@ -419,7 +429,7 @@ M.register("imports", {
   enabled = function(context, source_buffer, config)
     if context.is_boundary then
       return context.boundary_level == "package"
-        and not go_package_provider_enabled(context, config)
+        and not go_provider_enabled(context, config)
         and config.imports.enabled
         and treesitter.supports_imports(source_buffer)
     end
@@ -456,7 +466,7 @@ M.register("importers", {
   enabled = function(context, source_buffer, config)
     if context.is_boundary then
       return context.boundary_level == "package"
-        and not go_package_provider_enabled(context, config)
+        and not go_provider_enabled(context, config)
         and config.imports.enabled
         and config.imports.inbound.enabled
         and (treesitter.supports_imports(source_buffer) or context.import_filetype)

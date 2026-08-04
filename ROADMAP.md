@@ -22,22 +22,32 @@ languages.
 - Let providers extend the model without turning the pane into an unstructured
   result list.
 
-## Longer-term direction
+## Current direction
 
-### Module and package context
+### Language and build boundaries
 
-ArchLens currently begins with local code. A natural extension is to move
-between symbols, files, modules, and packages while preserving the same bounded
-and explainable model.
+ArchLens should move between local code and larger contexts only when a
+language or build system provides a real identity. Directories are not treated
+as packages by default.
 
-This may include:
+The first vertical slice is Go package context. The Go adapter derives package
+identity from the nearest `go.mod` module path and the source directory. A
+symbol view shows only its immediate package in the existing focus hierarchy;
+focusing that row replaces symbol relationships with package dependencies and
+dependents aggregated across visible package files.
 
-- Module or package focus where the language provides a useful boundary
-- Aggregated dependency and dependent views
-- Test and configuration relationships at module level
-- Navigation between a symbol, its containing module, and neighboring modules
+Next steps may include:
+
+- A build-level Go module boundary above package focus
+- Package or module identities for other ecosystems with authoritative metadata
+- Test and configuration relationships at boundary level
 - Optional project-specific boundary annotations without assuming one
   architectural style
+
+Each step should keep boundary resolution in language adapters, retain evidence
+for the identity, and preserve bounded on-demand analysis.
+
+## Longer-term direction
 
 ### Guided exploration
 

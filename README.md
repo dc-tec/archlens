@@ -64,7 +64,7 @@ Built-in adapters provide the following additional analysis:
 
 | Language                 | Built-in analysis                                                                                             |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| Go                       | Tree-sitter symbols and modules, ast-grep matches, and Go interface presentation                              |
+| Go                       | Tree-sitter symbols and imports, Go package boundaries, ast-grep matches, and Go interface presentation        |
 | Rust                     | Tree-sitter symbols and modules, ast-grep matches, and Rust implementation presentation                       |
 | Nix                      | Tree-sitter bindings and module imports, plus ast-grep matches                                                |
 | OCaml (`.ml` and `.mli`) | Tree-sitter symbols, module relationships, and member presentation; ast-grep does not provide an OCaml parser |
@@ -230,6 +230,18 @@ ArchLens debounces cursor movement, ignores repeated positions within the same
 symbol, and does not add automatic changes to navigation history. Press `f`,
 `<BS>`, or `h` to return to pinned exploration.
 
+### Move between symbol and package context
+
+When a language adapter resolves a real language or build boundary, the focus
+hierarchy shows that boundary instead of repeating the source path. Press `f`
+on it to analyze the boundary, `<CR>` to open its representative source file,
+or `?` to inspect its identity and evidence.
+
+Go package context is the first supported boundary. Its stable identity is the
+import path derived from the nearest `go.mod` module path and the source
+directory. ArchLens does not infer packages from directories for languages
+without an adapter-provided boundary.
+
 ### Evaluate relationship evidence
 
 Language-server calls, references, implementations, and type hierarchies are
@@ -252,10 +264,18 @@ interfaces, and concrete implementations.
 
 ![ArchLens exploring Go type relationships and following the source cursor](docs/assets/archlens-demo.gif)
 
-Module dependencies come from bounded import sites in the focused file. Module
-dependents come from a bounded in-memory project scan. ArchLens caches the scan
-while you navigate and rebuilds it when you refresh the pane. The scan does not
-write an index to disk or start language servers for scanned files.
+For an ordinary symbol without a supported boundary, module dependencies come
+from bounded import sites in the focused file and module dependents come from a
+bounded in-memory project scan. A Go package focus instead aggregates
+project-local dependencies and dependents across visible files assigned to
+that package. External dependency targets remain summarized rather than being
+turned into synthetic package rows.
+
+The package scan is cached while you navigate and rebuilt when you refresh the
+pane. It does not write an index to disk or start language servers for scanned
+files. To keep symbol views compact, their file-level module sections are
+hidden when a real enclosing boundary is available. Set
+`imports.show_on_symbols = true` to retain those sections.
 
 ![ArchLens relationship evidence for a Rust reference](docs/assets/relationship-details.png)
 
@@ -319,8 +339,8 @@ adapter registry. Built-in adapters are in
 [`lua/archlens/adapters/`](lua/archlens/adapters/).
 
 An adapter maps Neovim filetypes to a canonical language. It can define
-Tree-sitter symbols, project root markers, module analysis, an ast-grep
-language and query, and relationship presentation.
+Tree-sitter symbols, project root markers, module analysis, a language or build
+boundary, an ast-grep language and query, and relationship presentation.
 
 Register an adapter before you open ArchLens:
 
@@ -335,6 +355,13 @@ require("archlens.adapters").register("zig", {
   ast_grep = { language = "zig" },
 })
 ```
+
+The optional `boundary.resolve(path, root, context)` hook returns `nil` when no
+authoritative boundary exists. Otherwise it returns a stable `id`, concise
+`name`, `kind_name`, `path`, and `class` (`"language"` or `"build"`). It can
+also provide `representative_path`, import-matching `import_keys`, and an
+evidence record. ArchLens uses this contract for focus, navigation, and
+boundary-level aggregation; it does not substitute a directory heuristic.
 
 The optional `presentation.section(context, relation, row)` and
 `presentation.row(context, relation, row)` hooks can adapt labels and concise

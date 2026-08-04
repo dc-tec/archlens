@@ -233,6 +233,33 @@ local function navigation_lines(navigation, model)
   return lines
 end
 
+local function boundary_lines(boundary, model)
+  local title = boundary.kind_name or "Boundary"
+  local lines = { title, string.rep("─", math.min(vim.fn.strchars(title), 24)) }
+  append(lines, "Name", boundary.name)
+  append(lines, "Class", boundary.boundary_class == "build" and "Build" or "Language")
+  append(lines, "Identity", boundary.boundary_id)
+  local root = model and model.focus and model.focus.root_dir
+  local boundary_path = boundary.boundary_path
+  if boundary_path and root then
+    boundary_path = vim.fs.relpath(vim.fs.normalize(root), vim.fs.normalize(boundary_path))
+      or boundary_path
+  end
+  append(lines, "Path", boundary_path)
+  if boundary.path and boundary.path ~= boundary.boundary_path then
+    local representative = root and vim.fs.relpath(root, boundary.path) or boundary.path
+    append(lines, "Opens", representative)
+  end
+  if boundary.boundary_evidence then
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "Evidence"
+    append(lines, "Provider", boundary.boundary_evidence.provider)
+    append(lines, "Method", boundary.boundary_evidence.method)
+    append(lines, "Class", boundary.boundary_evidence.class)
+  end
+  return lines
+end
+
 local function help_lines()
   return {
     "ArchLens keys",
@@ -263,6 +290,9 @@ function M.lines(selection, model)
   end
   if selection and selection.navigation then
     return navigation_lines(selection.navigation, model)
+  end
+  if selection and selection.boundary then
+    return boundary_lines(selection.boundary, model)
   end
   local section = selection and selection.section
   if not section then

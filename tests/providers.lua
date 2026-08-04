@@ -22,6 +22,7 @@ local recently_attached = true
 local retry_window
 local multi_client = false
 local clock = 0
+local supports_imports = false
 
 package.loaded["archlens.lsp"] = {
   relationship_contexts = function(primary)
@@ -65,13 +66,19 @@ package.loaded["archlens.imports"] = {
   end,
 }
 package.loaded["archlens.import_index"] = {
+  dependencies = function()
+    error("package dependencies should be disabled")
+  end,
+  dependents = function()
+    error("package dependents should be disabled")
+  end,
   relationships = function()
     error("module dependents should be disabled")
   end,
 }
 package.loaded["archlens.treesitter"] = {
   supports_imports = function()
-    return false
+    return supports_imports
   end,
 }
 package.loaded["archlens.providers"] = nil
@@ -251,6 +258,40 @@ equal(providers.local_pending(config), {
   { id = "lsp", label = "LSP" },
   { id = "custom", label = "Custom relationships" },
 }, "queued custom providers should be visible before semantic focus resolves")
+local registered = {}
+for _, provider in ipairs(providers.ordered()) do
+  registered[provider.id] = provider
+end
+supports_imports = true
+config.imports = {
+  enabled = true,
+  show_on_symbols = false,
+  inbound = { enabled = true },
+}
+local boundary_symbol = vim.deepcopy(context)
+boundary_symbol.enclosing_boundary = { boundary_id = "go-package:example.test/project" }
+equal(
+  registered.imports.enabled(boundary_symbol, bufnr, config),
+  false,
+  "symbols with a real boundary should omit repeated package dependencies by default"
+)
+equal(
+  registered.importers.enabled(boundary_symbol, bufnr, config),
+  false,
+  "symbols with a real boundary should omit repeated package dependents by default"
+)
+config.imports.show_on_symbols = true
+equal(registered.imports.enabled(boundary_symbol, bufnr, config), true)
+equal(registered.importers.enabled(boundary_symbol, bufnr, config), true)
+config.imports.show_on_symbols = false
+local boundary_context = vim.deepcopy(context)
+boundary_context.is_boundary = true
+boundary_context.module_context = true
+boundary_context.boundary_keys = { "go-package:example.test/project" }
+equal(registered.imports.enabled(boundary_context, bufnr, config), true)
+equal(registered.importers.enabled(boundary_context, bufnr, config), true)
+supports_imports = false
+config.imports = { enabled = false, inbound = { enabled = false } }
 local duplicate_ok = pcall(providers.register, "custom", {})
 assert(not duplicate_ok, "provider IDs should be unique")
 

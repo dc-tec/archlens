@@ -2,7 +2,7 @@ local relations = require("archlens.relations")
 
 local M = {}
 
----@alias ArchLensGraphScope "symbol"|"file"|"module"|"configuration"
+---@alias ArchLensGraphScope "symbol"|"file"|"module"|"boundary"|"configuration"
 ---@alias ArchLensNoteSeverity "info"|"warn"|"error"
 ---@alias ArchLensProviderState "cancelled"|"completed"|"failed"|"queued"|"retrying"|"running"|"timed_out"|"unavailable"
 
@@ -73,6 +73,7 @@ local M = {}
 ---@field focus? ArchLensGraphNode
 
 local valid_scopes = {
+  boundary = true,
   configuration = true,
   file = true,
   module = true,
@@ -221,6 +222,7 @@ end
 function M.node_from_context(context, overrides)
   assert(type(context) == "table", "graph context nodes require a context")
   return M.node(vim.tbl_extend("force", {
+    id = context.boundary_id,
     name = context.name,
     detail = context.detail,
     kind = context.kind,
@@ -455,7 +457,7 @@ function M.add_edge(target, edge)
   if target.focus then
     local focus = M.focus_node(edge)
     local relation = relations.get(edge.kind)
-    if relation.anchor == "file" then
+    if relation.anchor == "file" and target.focus.scope ~= "boundary" then
       assert(
         focus
           and focus.scope == "file"

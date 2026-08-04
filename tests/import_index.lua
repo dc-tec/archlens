@@ -42,9 +42,9 @@ for _, path in ipairs({ target, consumer, other, vendored, generated, ignored })
 end
 
 local parsed = {}
-local function site(path, line)
+local function site(path, line, name)
   return {
-    name = "example.test/project/pkg",
+    name = name or "example.test/project/pkg",
     location = {
       uri = vim.uri_from_fname(path),
       range = range(line, 8),
@@ -58,7 +58,11 @@ package.loaded["archlens.treesitter"] = {
   import_sites_from_path = function(path)
     parsed[path] = (parsed[path] or 0) + 1
     if path == consumer then
-      return { site(path, 1), site(path, 4) }
+      return {
+        site(path, 1),
+        site(path, 4),
+        site(path, 6, "example.test/external"),
+      }
     elseif path == other or path == vendored or path == generated or path == ignored then
       return { site(path, 2) }
     elseif path == target then
@@ -162,6 +166,70 @@ equal(
 )
 local rendered = require("archlens.render").build(mapped, { width = 80 })
 assert(vim.tbl_contains(rendered.lines, "  for pkg"), "the module anchor should render")
+
+local adapters = require("archlens.adapters")
+local boundaries = require("archlens.boundaries")
+local root_boundary = assert(adapters.resolve_boundary("go", consumer, project, context))
+local root_context = boundaries.context({
+  root_dir = project,
+  path = consumer,
+  language = "go",
+}, root_boundary)
+local package_dependencies
+index.dependencies(root_context, bufnr, options, function(value)
+  package_dependencies = value
+end)
+assert(
+  package_dependencies,
+  "the completed index should provide package dependencies synchronously"
+)
+equal(#package_dependencies.edges, 1, "package dependencies should aggregate member files")
+equal(package_dependencies.edges[1].source.id, root_context.boundary_id)
+equal(package_dependencies.edges[1].source.scope, "boundary")
+equal(package_dependencies.edges[1].target.id, "go-package:example.test/project/pkg")
+equal(package_dependencies.edges[1].target.scope, "boundary")
+equal(package_dependencies.edges[1].target.context.kind_name, "Go package")
+equal(
+  #package_dependencies.edges[1].occurrences[1].ranges,
+  2,
+  "package dependencies should retain every exact import site"
+)
+assert(
+  table
+    .concat(package_dependencies.notes, "\n")
+    :find("1 dependency target outside the visible project boundary index was hidden", 1, true),
+  "external package targets should be summarized instead of becoming synthetic rows"
+)
+
+local target_boundary = assert(adapters.resolve_boundary("go", target, project, context))
+local target_context = boundaries.context({
+  root_dir = project,
+  path = target,
+  language = "go",
+}, target_boundary)
+local package_dependents
+index.dependents(target_context, bufnr, options, function(value)
+  package_dependents = value
+end)
+assert(package_dependents, "the completed index should provide package dependents synchronously")
+equal(#package_dependents.edges, 2, "importer files should aggregate into source packages")
+equal(package_dependents.edges[1].target.id, target_context.boundary_id)
+equal(package_dependents.edges[1].source.scope, "boundary")
+equal(package_dependents.edges[2].source.scope, "boundary")
+local dependent_occurrences = 0
+for _, edge in ipairs(package_dependents.edges) do
+  for _, occurrence in ipairs(edge.occurrences) do
+    dependent_occurrences = dependent_occurrences + #occurrence.ranges
+  end
+end
+equal(dependent_occurrences, 3, "package dependents should retain sites across source packages")
+
+local package_snapshot = graph.new(target_context)
+graph.merge(package_snapshot, package_dependents)
+local package_model = require("archlens.model").build(target_context, package_snapshot, {})
+equal(package_model.sections[1].id, "module_importers")
+equal(package_model.sections[1].anchor, nil, "boundary relationships should not repeat the focus")
+equal(#package_model.sections[1].rows, 2)
 
 local first_parse_count = 0
 for _, count in pairs(parsed) do

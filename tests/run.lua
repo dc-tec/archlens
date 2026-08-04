@@ -1054,12 +1054,46 @@ local function run()
     children = {},
     siblings = {},
   }
+  context.enclosing_boundary = {
+    name = "internal/controller",
+    kind = vim.lsp.protocol.SymbolKind.Package,
+    kind_name = "Go package",
+    scope = "boundary",
+    root_dir = context.root_dir,
+    location = {
+      uri = context.location.uri,
+      range = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 0 } },
+    },
+    path = context.path,
+    path_label = context.path_label,
+    language = "go",
+    is_boundary = true,
+    module_context = true,
+    preserve_file_identity = true,
+    boundary_id = "go-package:example.com/workspace/internal/controller",
+    boundary_class = "language",
+    boundary_path = "/workspace/internal/controller",
+    boundary_keys = { "go-package:example.com/workspace/internal/controller" },
+    boundary_evidence = {
+      provider = "Go adapter",
+      method = "go.mod/package",
+      class = "semantic",
+    },
+  }
 
   mapped.sections[1].rows[2] = vim.deepcopy(mapped.sections[1].rows[1])
   mapped.sections[1].rows[2].id = "second"
   mapped.sections[1].rows[2].name = "Write"
   local rendered = render.build(mapped, { width = 56, max_items = 1 })
+  assert(
+    contains(rendered.lines, "└─ internal/controller  Go package"),
+    "the immediate language boundary should replace the raw source path"
+  )
   assert(contains(rendered.lines, "└─ Reconcile  Method"), "focus hierarchy should render")
+  assert(
+    contains(rendered.lines, "reconcile.go:11"),
+    "boundary context should shorten the file label"
+  )
   assert(contains(rendered.lines, "… 1 more"), "bounded sections should expose omitted rows")
   local collapsed = render.build(mapped, {
     width = 56,

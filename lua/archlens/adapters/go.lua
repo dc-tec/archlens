@@ -1,5 +1,9 @@
 local common = require("archlens.adapters.common")
 
+local M = {}
+---@type table<string, { name?: string, root?: string }>
+local module_cache = {}
+
 local function section_presentation(context, relation, row)
   local member = common.member_section(context, relation)
   if member then
@@ -77,26 +81,35 @@ local function normalize_import(_, text)
 end
 
 local function module(path, root)
-  local module_root = vim.fs.root(path, "go.mod")
-  if not module_root then
-    return nil
-  end
-  module_root = vim.fs.normalize(module_root)
-  root = root and vim.fs.normalize(root) or nil
-  if root and module_root ~= root and not vim.startswith(module_root, root .. "/") then
-    return nil
-  end
-  local module_file = vim.fs.joinpath(module_root, "go.mod")
-  local ok, lines = pcall(vim.fn.readfile, module_file, "", 32)
-  if not ok then
-    return nil
-  end
-  for _, line in ipairs(lines) do
-    local name = line:match("^%s*module%s+([^%s]+)")
-    if name then
-      return name, module_root
+  local directory = vim.fs.normalize(vim.fs.dirname(path))
+  local cached = module_cache[directory]
+  if cached == nil then
+    local module_root = vim.fs.root(path, "go.mod")
+    if module_root then
+      module_root = vim.fs.normalize(module_root)
+      local module_file = vim.fs.joinpath(module_root, "go.mod")
+      local ok, lines = pcall(vim.fn.readfile, module_file, "", 32)
+      if ok then
+        for _, line in ipairs(lines) do
+          local name = line:match("^%s*module%s+([^%s]+)")
+          if name then
+            cached = { name = name, root = module_root }
+            break
+          end
+        end
+      end
     end
+    cached = cached or {}
+    module_cache[directory] = cached
   end
+  if not cached.name or not cached.root then
+    return nil
+  end
+  root = root and vim.fs.normalize(root) or nil
+  if root and cached.root ~= root and not vim.startswith(cached.root, root .. "/") then
+    return nil
+  end
+  return cached.name, cached.root
 end
 
 local function target_keys(path, root)
@@ -123,6 +136,35 @@ end
 
 local function site_keys(site)
   return { "go-package:" .. site.name }
+end
+
+local function resolve_boundary(path, root)
+  local module_name, module_root = module(path, root)
+  if not module_name then
+    return nil
+  end
+  local directory = vim.fs.normalize(vim.fs.dirname(path))
+  local relative = vim.fs.relpath(module_root, directory)
+  local import_path = module_name
+  if relative and relative ~= "." then
+    import_path = import_path .. "/" .. relative:gsub("\\", "/")
+  end
+  local name = relative and relative ~= "." and relative:gsub("\\", "/")
+    or vim.fs.basename(module_name)
+  return {
+    id = "go-package:" .. import_path,
+    class = "language",
+    kind_name = "Go package",
+    name = name,
+    path = directory,
+    representative_path = path,
+    import_keys = { "go-package:" .. import_path },
+    evidence = {
+      provider = "Go adapter",
+      method = "go.mod/package",
+      class = "semantic",
+    },
+  }
 end
 
 local configuration_tags = {
@@ -168,41 +210,46 @@ local function configuration(bufnr, context, syntax_context)
   return { key = context.name, container = container, source = "field" }
 end
 
-return {
-  spec = {
-    configuration = configuration,
-    presentation = {
-      row = row_presentation,
-      section = section_presentation,
+function M.clear_cache()
+  module_cache = {}
+end
+
+M.spec = {
+  boundary = { resolve = resolve_boundary },
+  configuration = configuration,
+  presentation = {
+    row = row_presentation,
+    section = section_presentation,
+  },
+  treesitter = {
+    focus_wrappers = { type_declaration = true },
+    name_fields = { "name", "pattern", "attrpath", "type" },
+    symbol_types = {
+      field_declaration = "Field",
+      function_declaration = "Function",
+      method_elem = "Method",
+      method_declaration = "Method",
+      type_spec = "Type",
     },
-    treesitter = {
-      focus_wrappers = { type_declaration = true },
-      name_fields = { "name", "pattern", "attrpath", "type" },
-      symbol_types = {
-        field_declaration = "Field",
-        function_declaration = "Function",
-        method_elem = "Method",
-        method_declaration = "Method",
-        type_spec = "Type",
-      },
-      imports = {
-        extensions = { ".go" },
-        query = [[
+    imports = {
+      extensions = { ".go" },
+      query = [[
           (import_spec
             path: [
               (interpreted_string_literal)
               (raw_string_literal)
             ] @import)
         ]],
-        normalize = normalize_import,
-        site_keys = site_keys,
-        target_keys = target_keys,
-        target_label = target_label,
-      },
-    },
-    ast_grep = {
-      language = "go",
-      query = query,
+      normalize = normalize_import,
+      site_keys = site_keys,
+      target_keys = target_keys,
+      target_label = target_label,
     },
   },
+  ast_grep = {
+    language = "go",
+    query = query,
+  },
 }
+
+return M

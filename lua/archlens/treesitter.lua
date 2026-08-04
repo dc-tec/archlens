@@ -1,4 +1,5 @@
 local adapters = require("archlens.adapters")
+local boundaries = require("archlens.boundaries")
 local model = require("archlens.model")
 
 local M = {}
@@ -285,20 +286,23 @@ function M.resolve(bufnr, position, base_context)
   if base_context then
     fallback_context = vim.deepcopy(base_context)
     fallback_context.language = language
+    if fallback_context.is_boundary then
+      return fallback_context
+    end
   end
   local adapter = adapters.get(language)
   if not adapter or not adapter.treesitter then
-    return fallback_context
+    return fallback_context and boundaries.attach(fallback_context) or nil
   end
 
   local ok, parser = pcall(vim.treesitter.get_parser, bufnr, language, { error = false })
   if not ok or not parser then
-    return fallback_context
+    return fallback_context and boundaries.attach(fallback_context) or nil
   end
   local trees = parser:parse()
   local root = trees and trees[1] and trees[1]:root()
   if not root then
-    return fallback_context
+    return fallback_context and boundaries.attach(fallback_context) or nil
   end
 
   local node = root:named_descendant_for_range(
@@ -315,7 +319,7 @@ function M.resolve(bufnr, position, base_context)
     node = node:parent()
   end
   if not node then
-    return fallback_context
+    return fallback_context and boundaries.attach(fallback_context) or nil
   end
 
   local provider = {
@@ -372,7 +376,7 @@ function M.resolve(bufnr, position, base_context)
       context.scope = "configuration"
     end
   end
-  return context
+  return boundaries.attach(context)
 end
 
 function M.supports(bufnr)

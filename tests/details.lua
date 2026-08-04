@@ -194,6 +194,30 @@ assert(contains(navigation_lines, "   Touches → Store"))
 assert(contains(navigation_lines, "Back        2 previous focuses"))
 assert(contains(navigation_lines, "Earlier     3 focuses omitted"))
 
+local boundary_lines = details.lines({
+  boundary = {
+    name = "internal/service",
+    kind_name = "Go package",
+    boundary_class = "language",
+    boundary_id = "go-package:example.com/project/internal/service",
+    boundary_path = "/workspace/internal/service",
+    path = "/workspace/internal/service/service.go",
+    boundary_evidence = {
+      provider = "Go adapter",
+      method = "go.mod/package",
+      class = "semantic",
+    },
+  },
+}, model)
+assert(contains(boundary_lines, "Go package"))
+assert(contains(boundary_lines, "Name        internal/service"))
+assert(contains(boundary_lines, "Class       Language"))
+assert(contains(boundary_lines, "Identity    go-package:example.com/project/internal/service"))
+assert(contains(boundary_lines, "Path        internal/service"))
+assert(contains(boundary_lines, "Opens       internal/service/service.go"))
+assert(contains(boundary_lines, "Provider    Go adapter"))
+assert(contains(boundary_lines, "Method      go.mod/package"))
+
 local help_lines = details.lines({ help = true }, model)
 assert(contains(help_lines, "ArchLens keys"))
 assert(contains(help_lines, "zM, zR          Collapse or expand the complete view"))

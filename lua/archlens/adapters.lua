@@ -26,11 +26,15 @@ local M = {}
 ---@field query? function
 ---@field unsupported_note? string
 
+---@class ArchLensBoundaryAdapter
+---@field resolve function
+
 ---@class ArchLensAdapterSpec
 ---@field filetypes? string[]
 ---@field filename_extensions? string[]
 ---@field treesitter? ArchLensTreeSitterAdapter
 ---@field ast_grep? ArchLensAstGrepAdapter
+---@field boundary? ArchLensBoundaryAdapter
 ---@field configuration? function
 ---@field presentation? { row?: function, section?: function }
 
@@ -83,6 +87,7 @@ local default_name_node_types = common.name_node_types()
 
 local adapter_fields = {
   ast_grep = true,
+  boundary = true,
   configuration = true,
   filename_extensions = true,
   filetypes = true,
@@ -115,6 +120,21 @@ local ast_grep_fields = {
   language = true,
   query = true,
   unsupported_note = true,
+}
+
+local boundary_fields = {
+  resolve = true,
+}
+
+local boundary_value_fields = {
+  class = true,
+  evidence = true,
+  id = true,
+  import_keys = true,
+  kind_name = true,
+  name = true,
+  path = true,
+  representative_path = true,
 }
 
 local presentation_fields = {
@@ -300,6 +320,14 @@ local function normalize(language, adapter)
       )
     end
   end
+  if normalized.boundary ~= nil then
+    assert(type(normalized.boundary) == "table", "adapter boundary must be a table")
+    validate_fields(normalized.boundary, boundary_fields, "boundary adapter")
+    assert(
+      type(normalized.boundary.resolve) == "function",
+      "boundary adapters require a resolve function"
+    )
+  end
   if normalized.configuration ~= nil then
     assert(type(normalized.configuration) == "function", "adapter configuration must be a function")
   end
@@ -412,6 +440,62 @@ function M.import_scan_specs(filetype, path)
     end
   end
   return specs
+end
+
+---@param language string
+---@return boolean
+function M.supports_boundary(language)
+  local adapter = registry[language]
+  return adapter ~= nil and adapter.boundary ~= nil
+end
+
+local function valid_evidence(value)
+  return type(value) == "table"
+    and nonempty_string(value.provider)
+    and nonempty_string(value.method)
+    and nonempty_string(value.class)
+end
+
+local function validate_boundary(value)
+  assert(type(value) == "table", "boundary resolver must return a table or nil")
+  validate_fields(value, boundary_value_fields, "boundary descriptor")
+  for _, field in ipairs({ "id", "name", "kind_name", "path" }) do
+    assert(nonempty_string(value[field]), "boundary " .. field .. " must be a non-empty string")
+  end
+  assert(
+    value.class == "language" or value.class == "build",
+    "boundary class must be language or build"
+  )
+  if value.import_keys ~= nil then
+    validate_string_list(value.import_keys, "boundary import_keys")
+  end
+  assert(
+    value.representative_path == nil or nonempty_string(value.representative_path),
+    "boundary representative_path must be a non-empty string"
+  )
+  assert(value.evidence == nil or valid_evidence(value.evidence), "boundary evidence is invalid")
+  return vim.deepcopy(value)
+end
+
+---@param language string
+---@param path string
+---@param root? string
+---@param context table
+---@return table?
+---@return string? error
+function M.resolve_boundary(language, path, root, context)
+  local adapter = registry[language]
+  local resolver = adapter and adapter.boundary and adapter.boundary.resolve
+  if not resolver then
+    return nil
+  end
+  return call_hook(language, "boundary resolution", function()
+    local value = resolver(path, root, vim.deepcopy(context))
+    if value == nil then
+      return nil
+    end
+    return validate_boundary(value)
+  end)
 end
 
 function M.configuration(language, bufnr, context, syntax_context)

@@ -25,6 +25,7 @@ local defaults = {
   },
   imports = {
     enabled = true,
+    show_on_symbols = false,
     timeout_ms = 5000,
     max_imports = 24,
     max_sites = 96,
@@ -268,6 +269,7 @@ local function validate(options)
   if type(options.imports) == "table" then
     validate_known_keys(options.imports, "imports", {
       enabled = true,
+      show_on_symbols = true,
       timeout_ms = true,
       max_imports = true,
       max_sites = true,
@@ -275,6 +277,7 @@ local function validate(options)
       inbound = true,
     })
     validate_boolean(options.imports.enabled, "imports.enabled")
+    validate_boolean(options.imports.show_on_symbols, "imports.show_on_symbols")
     validate_integer(options.imports.timeout_ms, "imports.timeout_ms", 0, "non-negative")
     for _, field in ipairs({ "max_imports", "max_sites", "concurrency" }) do
       validate_integer(options.imports[field], "imports." .. field, 1, "positive")

@@ -61,6 +61,17 @@ local function location_label(row)
   return row.path_label
 end
 
+local function focus_location_label(focus)
+  local boundary = focus.enclosing_boundary
+  if boundary and boundary.boundary_path and focus.path then
+    local relative = vim.fs.relpath(boundary.boundary_path, focus.path)
+    if relative and relative ~= "." then
+      return focus.line and string.format("%s:%d", relative, focus.line) or relative
+    end
+  end
+  return location_label(focus)
+end
+
 local function active_provider_runs(runs)
   local grouped = {}
   for _, state in ipairs(provider_state_order) do
@@ -213,7 +224,20 @@ function M.build(model, opts)
     local root_label = focus.root_dir and vim.fs.basename(focus.root_dir) or "workspace"
     add(root_label, nil, "Directory")
     local depth = 0
-    if focus.path_label and focus.path_label ~= "" then
+    local boundary = focus.is_boundary and focus or focus.enclosing_boundary
+    if boundary then
+      local boundary_label =
+        string.format("%s  %s", boundary.name, boundary.kind_name or "Boundary")
+      add("└─ " .. boundary_label, {
+        action = "open",
+        row = {
+          id = boundary.boundary_id,
+          location = boundary.location,
+          context = boundary,
+        },
+      }, "Identifier", { boundary = boundary })
+      depth = 1
+    elseif focus.path_label and focus.path_label ~= "" then
       add("└─ " .. focus.path_label, nil, "Directory")
       depth = 1
     end
@@ -232,18 +256,20 @@ function M.build(model, opts)
       depth = depth + 1
     end
 
-    local focus_label = string.format("%s  %s", focus.name, focus.kind_name or "Symbol")
-    add(string.rep("   ", depth) .. "└─ " .. focus_label, {
-      action = "open",
-      row = {
-        id = "focus:" .. (focus.location.uri or "") .. ":" .. focus.name,
-        location = focus.location,
-        context = focus,
-      },
-    }, "Identifier")
-    local detail = location_label(focus)
-    if detail ~= "" then
-      add(string.rep("   ", depth + 1) .. detail, nil, "Comment")
+    if not focus.is_boundary then
+      local focus_label = string.format("%s  %s", focus.name, focus.kind_name or "Symbol")
+      add(string.rep("   ", depth) .. "└─ " .. focus_label, {
+        action = "open",
+        row = {
+          id = "focus:" .. (focus.location.uri or "") .. ":" .. focus.name,
+          location = focus.location,
+          context = focus,
+        },
+      }, "Identifier")
+      local detail = focus_location_label(focus)
+      if detail ~= "" then
+        add(string.rep("   ", depth + 1) .. detail, nil, "Comment")
+      end
     end
   end
 

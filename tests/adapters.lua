@@ -1,5 +1,10 @@
 local adapters = require("archlens.adapters")
 local ast_grep = require("archlens.ast_grep")
+local fixture_module = assert(
+  vim.api.nvim_get_runtime_file("tests/fixtures/project/go.mod", false)[1],
+  "Go fixture module is unavailable"
+)
+local fixture_root = vim.fs.dirname(fixture_module)
 
 local function equal(actual, expected, message)
   assert(vim.deep_equal(actual, expected), message or vim.inspect({ actual, expected }))
@@ -119,6 +124,18 @@ equal(
   "import adapter reads should be defensive copies"
 )
 equal(adapters.imports_for_filetype("unknown"), nil)
+equal(adapters.supports_boundary("go"), true)
+equal(adapters.supports_boundary("rust"), false)
+local go_fixture = vim.fs.joinpath(fixture_root, "main.go")
+local go_boundary, go_boundary_error =
+  adapters.resolve_boundary("go", go_fixture, vim.fs.dirname(go_fixture), {})
+assert(go_boundary, "Go package boundary resolution failed: " .. tostring(go_boundary_error))
+equal(go_boundary.id, "go-package:example.com/project")
+equal(go_boundary.class, "language")
+equal(go_boundary.kind_name, "Go package")
+equal(go_boundary.name, "project")
+equal(go_boundary.import_keys, { "go-package:example.com/project" })
+equal(adapters.resolve_boundary("rust", go_fixture, fixture_root, {}), nil)
 equal(adapters.get("rust").treesitter.symbol_types.impl_item, "Implementation")
 equal(adapters.get("rust").treesitter.symbol_types.field_declaration, "Field")
 equal(adapters.get("rust").treesitter.symbol_types.function_signature_item, "Method")
@@ -413,6 +430,16 @@ local invalid_static_specs = {
     error = "ast-grep adapter unsupported_note must be a non-empty string",
   },
   {
+    id = "invalid_boundary_field",
+    spec = { boundary = { resolve = function() end, fallback = "directory" } },
+    error = "unsupported boundary adapter field: fallback",
+  },
+  {
+    id = "invalid_boundary_resolver",
+    spec = { boundary = { resolve = true } },
+    error = "boundary adapters require a resolve function",
+  },
+  {
     id = "invalid_presentation_field",
     spec = { presentation = { group = function() end } },
     error = "unsupported adapter presentation field: group",
@@ -432,6 +459,28 @@ for _, invalid in ipairs(invalid_static_specs) do
     string.format("%s should report %q, got %s", invalid.id, invalid.error, tostring(err))
   )
 end
+
+adapters.register("broken_boundary", {
+  boundary = {
+    resolve = function()
+      return {
+        id = "broken:value",
+        name = "broken",
+        kind_name = "Broken package",
+        path = "/workspace/broken",
+        class = "language",
+        representative_path = 42,
+      }
+    end,
+  },
+})
+local _, boundary_error =
+  adapters.resolve_boundary("broken_boundary", "/workspace/broken/source", "/workspace", {})
+assert(
+  boundary_error
+    and boundary_error:find("boundary representative_path must be a non-empty string", 1, true),
+  "invalid boundary descriptors should use the adapter diagnostic path"
+)
 
 adapters.register("broken_hooks", {
   configuration = function()

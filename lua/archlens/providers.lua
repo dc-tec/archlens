@@ -386,11 +386,25 @@ M.register("lsp", {
 
 M.register("imports", {
   order = 20,
-  label = "Module dependencies",
-  enabled = function(_, source_buffer, config)
-    return config.imports.enabled and treesitter.supports_imports(source_buffer)
+  label = function(context)
+    return context.is_boundary and "Package dependencies" or "Module dependencies"
+  end,
+  enabled = function(context, source_buffer, config)
+    return config.imports.enabled
+      and treesitter.supports_imports(source_buffer)
+      and (
+        context.is_boundary
+        or not context.enclosing_boundary
+        or config.imports.show_on_symbols == true
+      )
   end,
   start = function(context, source_buffer, config, done)
+    if context.is_boundary then
+      local options = provider_options(config.imports.inbound, config)
+      options.filetype = context.import_filetype
+      options.max_imports = config.imports.max_imports
+      return import_index.dependencies(context, source_buffer, options, done)
+    end
     return imports.relationships(
       context,
       source_buffer,
@@ -403,15 +417,25 @@ M.register("imports", {
 
 M.register("importers", {
   order = 30,
-  label = "Module dependents",
+  label = function(context)
+    return context.is_boundary and "Package dependents" or "Module dependents"
+  end,
   enabled = function(context, source_buffer, config)
     return config.imports.enabled
       and config.imports.inbound.enabled
       and (treesitter.supports_imports(source_buffer) or context.import_filetype)
+      and (
+        context.is_boundary
+        or not context.enclosing_boundary
+        or config.imports.show_on_symbols == true
+      )
   end,
   start = function(context, source_buffer, config, done)
     local options = provider_options(config.imports.inbound, config)
     options.filetype = context.import_filetype
+    if context.is_boundary then
+      return import_index.dependents(context, source_buffer, options, done)
+    end
     return import_index.relationships(context, source_buffer, options, done)
   end,
 })

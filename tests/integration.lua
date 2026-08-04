@@ -134,11 +134,31 @@ for _, case in ipairs(cases) do
   contexts[case.file] = context
 end
 
+local go_boundary = contexts["main.go"].enclosing_boundary
+assert(go_boundary, "Go symbols should resolve their containing package boundary")
+assert_equal(
+  go_boundary.boundary_id,
+  "go-package:example.com/project",
+  "Go package boundaries should use the import path as stable identity"
+)
+assert_equal(go_boundary.kind_name, "Go package", "Go boundaries should retain language terms")
+assert_equal(go_boundary.name, "project", "root Go packages should use a compact label")
+
 local function resolve_fixture(file, filetype, position)
   vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/" .. file))
   vim.bo.filetype = filetype
   return assert(treesitter.resolve(0, position), file .. " did not resolve through Tree-sitter")
 end
+
+vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/main.go"))
+vim.bo.filetype = "go"
+local refocused_go_boundary = treesitter.resolve(0, { line = 2, character = 5 }, go_boundary)
+assert_equal(
+  refocused_go_boundary.boundary_id,
+  go_boundary.boundary_id,
+  "boundary focus should not collapse back into its representative symbol"
+)
+assert_equal(refocused_go_boundary.is_boundary, true, "boundary focus should retain its scope")
 
 local go_interface = resolve_fixture("types.go", "go", { line = 2, character = 0 })
 assert_equal(go_interface.name, "Contract", "Go type-keyword focus should select the type spec")

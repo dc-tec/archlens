@@ -380,6 +380,13 @@ function M.show_here(tabpage)
 end
 
 local function same_context(left, right)
+  if (left and left.is_boundary) or (right and right.is_boundary) then
+    return left
+      and right
+      and left.is_boundary == true
+      and right.is_boundary == true
+      and left.boundary_id == right.boundary_id
+  end
   if not left or not right or left.client_id ~= right.client_id then
     return false
   end

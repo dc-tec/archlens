@@ -1,6 +1,8 @@
 local fixture_root = assert(vim.env.ARCHLENS_FIXTURE_ROOT, "ARCHLENS_FIXTURE_ROOT is required")
 local ast_grep_command = assert(vim.env.ARCHLENS_AST_GREP, "ARCHLENS_AST_GREP is required")
 
+local graph = require("archlens.graph")
+local model = require("archlens.model")
 local test_paths = require("archlens.test_paths")
 local treesitter = require("archlens.treesitter")
 
@@ -422,6 +424,104 @@ assert(
 assert(
   not test_paths.is_test("rust", inline_tests_path, fixture_root, 0),
   "production lines in a file containing inline tests must remain production relationships"
+)
+
+local inline_tests_uri = vim.uri_from_fname(inline_tests_path)
+local rust_focus_context = model.context_from_item({
+  name = "helper",
+  kind = vim.lsp.protocol.SymbolKind.Function,
+  uri = inline_tests_uri,
+  range = {
+    start = { line = 0, character = 0 },
+    ["end"] = { line = 0, character = 14 },
+  },
+  selectionRange = {
+    start = { line = 0, character = 3 },
+    ["end"] = { line = 0, character = 9 },
+  },
+}, {
+  id = 1,
+  name = "rust-analyzer",
+  offset_encoding = "utf-8",
+  root_dir = fixture_root,
+  supports_calls = true,
+})
+rust_focus_context.language = "rust"
+local rust_test_caller = model.context_from_item({
+  name = "helper_is_available",
+  kind = vim.lsp.protocol.SymbolKind.Function,
+  uri = inline_tests_uri,
+  range = {
+    start = { line = 5, character = 4 },
+    ["end"] = { line = 7, character = 5 },
+  },
+  selectionRange = {
+    start = { line = 5, character = 7 },
+    ["end"] = { line = 5, character = 26 },
+  },
+}, {
+  id = 1,
+  name = "rust-analyzer",
+  offset_encoding = "utf-8",
+  root_dir = fixture_root,
+  supports_calls = true,
+})
+local rust_call_range = {
+  start = { line = 6, character = 8 },
+  ["end"] = { line = 6, character = 23 },
+}
+local rust_usage_graph = graph.new(rust_focus_context)
+graph.add_edge(
+  rust_usage_graph,
+  graph.edge("incoming", graph.node_from_context(rust_test_caller), rust_usage_graph.focus, {
+    provider = "rust-analyzer",
+    method = "callHierarchy/incomingCalls",
+    class = "semantic",
+  }, { occurrences = { { uri = inline_tests_uri, ranges = { rust_call_range } } } })
+)
+local rust_reference = graph.node_from_location({
+  uri = inline_tests_uri,
+  range = rust_call_range,
+})
+graph.add_edge(
+  rust_usage_graph,
+  graph.edge("test_references", rust_reference, rust_usage_graph.focus, {
+    provider = "rust-analyzer",
+    method = "textDocument/references",
+    class = "semantic",
+  })
+)
+local rust_usage_map = model.build(rust_focus_context, rust_usage_graph, {})
+assert(not vim.iter(rust_usage_map.sections):find(function(section)
+  return section.id == "incoming"
+end), "callers inside Rust #[cfg(test)] modules must not remain under Entered through")
+local rust_test_references = vim.iter(rust_usage_map.sections):find(function(section)
+  return section.id == "test_references"
+end)
+assert_equal(
+  #rust_test_references.rows,
+  1,
+  "Rust inline-test callers and references should coalesce without duplicate rows"
+)
+assert_equal(
+  rust_test_references.rows[1].name,
+  "helper_is_available",
+  "Rust inline-test callers should appear under Referenced from tests"
+)
+assert(
+  vim.deep_equal(rust_test_references.rows[1].evidence_records, {
+    {
+      provider = "rust-analyzer",
+      method = "callHierarchy/incomingCalls",
+      class = "semantic",
+    },
+    {
+      provider = "rust-analyzer",
+      method = "textDocument/references",
+      class = "semantic",
+    },
+  }),
+  "Rust inline-test callers should retain call hierarchy and reference evidence"
 )
 
 for _, case in ipairs({

@@ -27,6 +27,7 @@ local M = {}
 ---@field start function
 ---@field queued? boolean|function
 ---@field queued_label? string
+---@field replaces? string[]|function
 ---@field clear_cache? function
 
 ---@class ArchLensProvider: ArchLensProviderSpec
@@ -49,11 +50,25 @@ local allowed_provider_fields = {
   order = true,
   queued = true,
   queued_label = true,
+  replaces = true,
   start = true,
 }
 
 local function nonempty_string(value)
   return type(value) == "string" and value:match("%S") ~= nil
+end
+
+local function validate_provider_ids(value, label)
+  assert(type(value) == "table" and vim.islist(value), label .. " must be a list")
+  local seen = {}
+  for index, id in ipairs(value) do
+    assert(
+      nonempty_string(id) and id:match("^[%l][%l%d_%-]*$"),
+      string.format("%s[%d] must be a lowercase provider id", label, index)
+    )
+    assert(not seen[id], string.format("%s contains duplicate provider id: %s", label, id))
+    seen[id] = true
+  end
 end
 
 local terminal_provider_states = {
@@ -156,6 +171,16 @@ local function normalize_provider(id, spec)
       nonempty_string(normalized.queued_label),
       "provider queued_label must be a non-empty string"
     )
+  end
+  if normalized.replaces ~= nil then
+    assert(
+      type(normalized.replaces) == "table" or type(normalized.replaces) == "function",
+      "provider replaces must be a list or function"
+    )
+    if type(normalized.replaces) == "table" then
+      validate_provider_ids(normalized.replaces, "provider replaces")
+      assert(not vim.list_contains(normalized.replaces, id), "providers cannot replace themselves")
+    end
   end
   if normalized.clear_cache ~= nil then
     assert(type(normalized.clear_cache) == "function", "provider clear_cache must be a function")
@@ -396,6 +421,9 @@ end
 M.register("go", {
   order = 19,
   label = "Go build",
+  replaces = function(context)
+    return go_packages.supports(context) and { "imports", "importers" } or {}
+  end,
   enabled = function(context, _, config)
     return go_provider_enabled(context, config)
   end,
@@ -429,7 +457,6 @@ M.register("imports", {
   enabled = function(context, source_buffer, config)
     if context.is_boundary then
       return context.boundary_level == "package"
-        and not go_provider_enabled(context, config)
         and config.imports.enabled
         and treesitter.supports_imports(source_buffer)
     end
@@ -466,7 +493,6 @@ M.register("importers", {
   enabled = function(context, source_buffer, config)
     if context.is_boundary then
       return context.boundary_level == "package"
-        and not go_provider_enabled(context, config)
         and config.imports.enabled
         and config.imports.inbound.enabled
         and (treesitter.supports_imports(source_buffer) or context.import_filetype)
@@ -526,8 +552,37 @@ function M.local_pending(config)
   return pending
 end
 
+local function provider_replacements(provider, context, source_buffer, config)
+  local replacements = provider.replaces
+  if type(replacements) == "function" then
+    replacements = replacements(context, source_buffer, config)
+  end
+  if replacements == nil then
+    return {}
+  end
+  validate_provider_ids(replacements, string.format("provider %s replaces", provider.id))
+  for _, id in ipairs(replacements) do
+    assert(id ~= provider.id, string.format("provider %s cannot replace itself", provider.id))
+    local replaced = registry[id]
+    assert(
+      replaced ~= nil,
+      string.format("provider %s replaces unknown provider: %s", provider.id, id)
+    )
+    assert(
+      replaced.order > provider.order,
+      string.format(
+        "provider %s can only replace later providers, but %s has order %d",
+        provider.id,
+        id,
+        replaced.order
+      )
+    )
+  end
+  return replacements
+end
+
 local function tasks_for(context, source_buffer, config)
-  local tasks = {}
+  local candidates = {}
   for _, provider in ipairs(M.ordered()) do
     local current_provider = provider
     local enabled_ok, enabled = pcall(provider.enabled, context, source_buffer, config)
@@ -541,26 +596,48 @@ local function tasks_for(context, source_buffer, config)
         label_ok = false
         label = "provider label function must return a non-empty string"
       end
-      tasks[#tasks + 1] = {
+      local replacements_ok, replacements =
+        pcall(provider_replacements, current_provider, context, source_buffer, config)
+      candidates[#candidates + 1] = {
         id = current_provider.id,
         label = label_ok and label or current_provider.id,
+        replacements = replacements_ok and replacements or {},
+        can_replace = label_ok and replacements_ok,
         start = function(done, report)
           if not label_ok then
             error(label)
+          end
+          if not replacements_ok then
+            error(replacements)
           end
           return current_provider.start(context, source_buffer, config, done, report)
         end,
       }
     elseif not enabled_ok then
       local enabled_error = enabled
-      tasks[#tasks + 1] = {
+      candidates[#candidates + 1] = {
         id = current_provider.id,
         label = type(current_provider.label) == "string" and current_provider.label
           or current_provider.id,
+        replacements = {},
+        can_replace = false,
         start = function()
           error(enabled_error)
         end,
       }
+    end
+  end
+
+  local tasks = {}
+  local replaced = {}
+  for _, candidate in ipairs(candidates) do
+    if not replaced[candidate.id] then
+      tasks[#tasks + 1] = candidate
+      if candidate.can_replace then
+        for _, id in ipairs(candidate.replacements) do
+          replaced[id] = true
+        end
+      end
     end
   end
   return tasks

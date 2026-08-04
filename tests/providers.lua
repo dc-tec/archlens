@@ -23,6 +23,8 @@ local retry_window
 local multi_client = false
 local clock = 0
 local supports_imports = false
+local go_relationship_calls = 0
+local import_index_calls = { dependencies = 0, dependents = 0 }
 
 package.loaded["archlens.lsp"] = {
   relationship_contexts = function(primary)
@@ -66,11 +68,15 @@ package.loaded["archlens.imports"] = {
   end,
 }
 package.loaded["archlens.import_index"] = {
-  dependencies = function()
-    error("package dependencies should be disabled")
+  dependencies = function(_, _, _, callback)
+    import_index_calls.dependencies = import_index_calls.dependencies + 1
+    callback(graph.delta())
+    return function() end
   end,
-  dependents = function()
-    error("package dependents should be disabled")
+  dependents = function(_, _, _, callback)
+    import_index_calls.dependents = import_index_calls.dependents + 1
+    callback(graph.delta())
+    return function() end
   end,
   relationships = function()
     error("module dependents should be disabled")
@@ -82,8 +88,10 @@ package.loaded["archlens.go_packages"] = {
       and current.boundary_level == "package"
       and current.language == "go"
   end,
-  relationships = function()
-    error("Go package analysis should be disabled")
+  relationships = function(_, _, _, callback)
+    go_relationship_calls = go_relationship_calls + 1
+    callback(graph.delta())
+    return function() end
   end,
   clear_cache = function() end,
 }
@@ -312,13 +320,49 @@ boundary_context.module_context = true
 boundary_context.boundary_level = "package"
 boundary_context.boundary_keys = { "go-package:example.test/project" }
 boundary_context.language = "go"
+config.providers.custom = { enabled = false }
 equal(registered.go.enabled(boundary_context, bufnr, config), true)
-equal(registered.imports.enabled(boundary_context, bufnr, config), false)
-equal(registered.importers.enabled(boundary_context, bufnr, config), false)
+equal(
+  registered.imports.enabled(boundary_context, bufnr, config),
+  true,
+  "generic package dependencies should remain independently applicable"
+)
+equal(
+  registered.importers.enabled(boundary_context, bufnr, config),
+  true,
+  "generic package dependents should remain independently applicable"
+)
+local go_boundary_updates = run_provider(boundary_context)
+equal(
+  vim.tbl_map(function(run)
+    return run.id
+  end, go_boundary_updates[#go_boundary_updates].provider_runs),
+  { "go" },
+  "an active build provider should replace the generic package fallbacks"
+)
+equal(go_relationship_calls, 1, "the replacing Go provider should run once")
+equal(
+  import_index_calls,
+  { dependencies = 0, dependents = 0 },
+  "replaced generic package providers must not run independently"
+)
 config.providers.go = { enabled = false }
 equal(registered.go.enabled(boundary_context, bufnr, config), false)
 equal(registered.imports.enabled(boundary_context, bufnr, config), true)
 equal(registered.importers.enabled(boundary_context, bufnr, config), true)
+local fallback_updates = run_provider(boundary_context)
+equal(
+  vim.tbl_map(function(run)
+    return run.id
+  end, fallback_updates[#fallback_updates].provider_runs),
+  { "imports", "importers" },
+  "generic package providers should run when the build provider is disabled"
+)
+equal(
+  import_index_calls,
+  { dependencies = 1, dependents = 1 },
+  "each generic package fallback should run once"
+)
 config.providers.go = nil
 local module_boundary = vim.deepcopy(boundary_context)
 module_boundary.boundary_level = "module"
@@ -330,6 +374,16 @@ supports_imports = false
 config.imports = { enabled = false, inbound = { enabled = false } }
 local duplicate_ok = pcall(providers.register, "custom", {})
 assert(not duplicate_ok, "provider IDs should be unique")
+local invalid_replacements_ok = pcall(providers.register, "invalid_replacements", {
+  order = 18,
+  label = "Invalid replacements",
+  enabled = function()
+    return false
+  end,
+  replaces = { "imports", "imports" },
+  start = function() end,
+})
+assert(not invalid_replacements_ok, "provider replacement IDs should be unique")
 
 config.providers.custom = { enabled = true }
 local syntax_context = vim.deepcopy(context)

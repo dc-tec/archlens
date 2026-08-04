@@ -448,6 +448,14 @@ Register relationship types through
 [`lua/archlens/relations.lua`](lua/archlens/relations.lua). Store
 provider-specific options under `providers.<id>`.
 
+A build-aware provider can conditionally replace later fallback providers for
+a focus by returning their IDs from `replaces(context, bufnr, config)`. For
+example, a package provider that is authoritative for active dependencies can
+replace `{ "imports", "importers" }`. Replacement is applied only while the
+provider is enabled, and the replacing provider must have a lower `order` than
+each fallback. It then owns the complete behavior, including retaining useful
+source-derived results when its build tool is unavailable.
+
 The optional `report` callback accepts `"running"` or `"retrying"`. A retry
 can include `retry_delay_ms` and a short `message`. ArchLens records queued,
 completed, and start-failure states around the provider call.

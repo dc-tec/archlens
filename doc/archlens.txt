@@ -476,6 +476,14 @@ or retrying state: >lua
 Store provider-specific settings under `providers.<id>`. Register relationship
 types with `require("archlens.relations").register()` before returning edges.
 
+A build-aware provider can conditionally replace later fallback providers by
+returning their IDs from `replaces(context, bufnr, config)`. For example, a
+package provider that is authoritative for active dependencies can replace
+`{ "imports", "importers" }`. Replacement applies only while the provider is
+enabled, and its `order` must be lower than every replaced provider. The
+replacing provider then owns the complete behavior, including useful
+source-derived results when its build tool is unavailable.
+
 The built-in Go package provider accepts these settings under `providers.go`: >lua
 
     providers = {

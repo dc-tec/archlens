@@ -264,20 +264,23 @@ MODULE ANALYSIS ~
     Maximum number of concurrent definition requests for import sites.
 
 `imports.inbound.enabled` (boolean, default `true`)
-    Whether to analyze reverse module relationships.
+    Whether to build the project import index used for reverse module and
+    package relationships.
 
 `imports.inbound.command` (string, default `"rg"`)
     ripgrep executable used to enumerate candidate files.
 
 `imports.inbound.timeout_ms` (integer, default `8000`)
-    Time limit for the reverse module scan, in milliseconds.
+    Time limit for the project relationship scan, in milliseconds.
 
 `imports.inbound.max_index_files` (integer, default `1000`)
-    Maximum number of visible candidate files to parse into the in-memory
+    Maximum number of visible project source files to parse into the in-memory
     index.
 
 `imports.inbound.max_candidate_files` (integer, default `2000`)
-    Maximum number of paths to accept from ripgrep before filtering.
+    Maximum number of source paths to accept after cheap path exclusions such
+    as vendor, generated, and configured prefixes. Header-based generated-file
+    checks still happen before parsing.
 
 `imports.inbound.max_file_bytes` (integer, default `1048576`)
     Maximum size of a candidate file to parse for imports, in bytes.
@@ -286,7 +289,7 @@ MODULE ANALYSIS ~
     Number of candidate files to parse in each scheduled batch.
 
 `imports.inbound.max_importers` (integer, default `24`)
-    Maximum number of module dependents to return for the focused file.
+    Maximum number of dependents to return for the focused file or package.
 
                                                          *archlens-config-lsp*
 LSP ANALYSIS ~

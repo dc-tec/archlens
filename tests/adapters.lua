@@ -211,6 +211,17 @@ equal(
 equal(adapters.section_presentation(go_interface, { id = "children" }, {}), {
   label = "Members",
 })
+local go_package = {
+  is_boundary = true,
+  boundary_level = "package",
+  language = "go",
+}
+equal(adapters.section_presentation(go_package, { id = "module_imports" }, {}), {
+  label = "Package dependencies",
+})
+equal(adapters.section_presentation(go_package, { id = "module_importers" }, {}), {
+  label = "Package dependents",
+})
 equal(
   adapters.row_presentation(go_interface, { id = "implementations" }, {
     name = "type Client struct {",

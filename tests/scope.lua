@@ -103,5 +103,16 @@ equal(scope.visible("vendored", { include_vendored = true }), true)
 equal(scope.visible("generated", { include_generated = true }), true)
 equal(scope.visible("excluded", { include_generated = true }), false)
 
+local default_globs = scope.exclusion_globs({ exclude = { "custom/cache" } })
+assert(vim.tbl_contains(default_globs, "!**/vendor/**"))
+assert(vim.tbl_contains(default_globs, "!**/generated/**"))
+assert(vim.tbl_contains(default_globs, "!custom/cache"))
+assert(vim.tbl_contains(default_globs, "!custom/cache/**"))
+local included_globs = scope.exclusion_globs({
+  include_generated = true,
+  include_vendored = true,
+})
+equal(included_globs, {}, "explicitly included source categories should not be prefiltered")
+
 print("archlens project scope tests passed")
 vim.cmd("quitall")

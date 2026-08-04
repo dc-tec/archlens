@@ -9,6 +9,13 @@ local function section_presentation(context, relation, row)
   if member then
     return member
   end
+  if context.is_boundary and context.boundary_level == "package" then
+    if relation.id == "module_imports" then
+      return { label = "Package dependencies" }
+    elseif relation.id == "module_importers" then
+      return { label = "Package dependents" }
+    end
+  end
   if context.kind ~= vim.lsp.protocol.SymbolKind.Interface then
     return nil
   end

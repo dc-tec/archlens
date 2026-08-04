@@ -275,8 +275,10 @@ turned into synthetic package rows.
 
 The package scan is cached while you navigate and rebuilt when you refresh the
 pane. It does not write an index to disk or start language servers for scanned
-files. To keep symbol views compact, their file-level module sections are
-hidden when a real enclosing boundary is available. Set
+files. Vendored, generated, and explicitly excluded paths are removed during
+discovery so they do not consume the project source budget. To keep symbol
+views compact, their file-level module sections are hidden when a real
+enclosing boundary is available. Set
 `imports.show_on_symbols = true` to retain those sections.
 
 ![ArchLens relationship evidence for a Rust reference](docs/assets/relationship-details.png)

@@ -24,12 +24,13 @@ end
 local project = vim.fn.tempname()
 vim.fn.mkdir(vim.fs.joinpath(project, "pkg"), "p")
 vim.fn.mkdir(vim.fs.joinpath(project, "other"), "p")
+vim.fn.mkdir(vim.fs.joinpath(project, "a", "vendor", "ignored"), "p")
 vim.fn.mkdir(vim.fs.joinpath(project, "vendor", "ignored"), "p")
 vim.fn.mkdir(vim.fs.joinpath(project, "generated"), "p")
 vim.fn.mkdir(vim.fs.joinpath(project, "ignored"), "p")
 vim.fn.mkdir(vim.fs.joinpath(project, ".git"), "p")
 vim.fn.writefile({ "module example.test/project" }, vim.fs.joinpath(project, "go.mod"))
-vim.fn.writefile({ "ignored/", "vendor/" }, vim.fs.joinpath(project, ".gitignore"))
+vim.fn.writefile({ "ignored/" }, vim.fs.joinpath(project, ".gitignore"))
 
 local target = vim.fs.joinpath(project, "pkg", "target.go")
 local consumer = vim.fs.joinpath(project, "consumer.go")
@@ -38,6 +39,12 @@ local vendored = vim.fs.joinpath(project, "vendor", "ignored", "consumer.go")
 local generated = vim.fs.joinpath(project, "generated", "consumer.go")
 local ignored = vim.fs.joinpath(project, "ignored", "consumer.go")
 for _, path in ipairs({ target, consumer, other, vendored, generated, ignored }) do
+  vim.fn.writefile({ "package fixture" }, path)
+end
+local tracked_vendored = {}
+for index = 1, 6 do
+  local path = vim.fs.joinpath(project, "a", "vendor", "ignored", "fixture" .. index .. ".go")
+  tracked_vendored[#tracked_vendored + 1] = path
   vim.fn.writefile({ "package fixture" }, path)
 end
 
@@ -133,6 +140,25 @@ equal(result.edges[1].source.context.preserve_file_identity, true)
 equal(result.edges[1].presentation.section_anchor, { prefix = "for", label = "pkg" })
 equal(parsed[vendored], nil, "vendored paths should be excluded before parsing")
 equal(parsed[generated], nil, "generated paths should be excluded before parsing")
+
+local vendor_heavy
+local vendor_heavy_options = vim.tbl_deep_extend("force", {}, options, {
+  max_candidate_files = 4,
+})
+index.relationships(context, bufnr, vendor_heavy_options, function(value)
+  vendor_heavy = value
+end)
+assert(vim.wait(2500, function()
+  return vendor_heavy ~= nil
+end, 10))
+equal(#vendor_heavy.edges, 2, "vendored files must not consume the project candidate budget")
+for _, path in ipairs(tracked_vendored) do
+  equal(parsed[path], nil, "tracked vendored paths should be excluded before parsing")
+end
+assert(
+  not table.concat(vendor_heavy.notes, "\n"):find("relationships may be incomplete", 1, true),
+  "excluded vendored files must not make an otherwise complete project index partial"
+)
 
 local included_vendored
 local included_options = vim.tbl_deep_extend("force", {}, options, {
@@ -230,6 +256,7 @@ local package_snapshot = graph.new(target_context)
 graph.merge(package_snapshot, package_dependents)
 local package_model = require("archlens.model").build(target_context, package_snapshot, {})
 equal(package_model.sections[1].id, "module_importers")
+equal(package_model.sections[1].label, "Package dependents")
 equal(package_model.sections[1].anchor, nil, "boundary relationships should not repeat the focus")
 equal(#package_model.sections[1].rows, 2)
 
@@ -274,8 +301,8 @@ assert(
   "the capped project import index timed out"
 )
 assert(
-  table.concat(capped.notes, "\n"):find("scan limit", 1, true),
-  "a candidate cap should report incomplete results"
+  table.concat(capped.notes, "\n"):find("project index limit", 1, true),
+  "the project index cap should report incomplete results"
 )
 
 local discovery_options = vim.tbl_deep_extend("force", {}, options, {
@@ -289,17 +316,17 @@ assert(vim.wait(2500, function()
   return discovery_limited ~= nil
 end, 10))
 assert(
-  table.concat(discovery_limited.notes, "\n"):find("candidate limit", 1, true),
-  "the raw candidate bound should report unexamined files"
+  table.concat(discovery_limited.notes, "\n"):find("source discovery reached", 1, true),
+  "the eligible source bound should report incomplete discovery"
 )
 local has_limited_summary = false
 for _, record in ipairs(discovery_limited.note_records or {}) do
-  if record.summary == "module scan limited" and record.severity == "warn" then
+  if record.summary == "project index incomplete" and record.severity == "warn" then
     has_limited_summary = true
     break
   end
 end
-assert(has_limited_summary, "module scan bounds should expose a compact warning summary")
+assert(has_limited_summary, "project index bounds should expose a compact warning summary")
 
 local cancelled = false
 local cancel_options = vim.tbl_deep_extend("force", {}, options, { max_index_files = 7 })
@@ -395,7 +422,7 @@ assert(
 equal(timed_out.notes, {})
 equal(timed_out_outcome, {
   state = "timed_out",
-  message = "Project module scan stopped after 10 ms; module-dependent results may be incomplete.",
+  message = "Project relationship scan stopped after 10 ms; results may be incomplete.",
 })
 
 index.clear_cache()

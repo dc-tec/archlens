@@ -360,8 +360,13 @@ local function enumerate(root, specs, _, filters, options, callback)
     return function() end
   end
   local globs = language_globs(specs)
-  local base = { command, "--files", "--hidden", "--glob", "!.git/**" }
+  local exclusions = scope.exclusion_globs(filters)
+  local base = { command, "--files", "--hidden", "--sort", "path" }
   for _, glob in ipairs(globs) do
+    vim.list_extend(base, { "--glob", glob })
+  end
+  vim.list_extend(base, { "--glob", "!.git/**" })
+  for _, glob in ipairs(exclusions) do
     vim.list_extend(base, { "--glob", glob })
   end
   local cancelled = false
@@ -382,7 +387,7 @@ local function enumerate(root, specs, _, filters, options, callback)
         return
       end
 
-      local extra = { command, "--files", "--hidden", "--no-ignore", "--glob", "!.git/**" }
+      local extra = { command, "--files", "--hidden", "--no-ignore", "--sort", "path" }
       local category_globs = {}
       if filters.include_vendored == true then
         vim.list_extend(category_globs, {
@@ -407,6 +412,10 @@ local function enumerate(root, specs, _, filters, options, callback)
         })
       end
       for _, glob in ipairs(category_globs) do
+        vim.list_extend(extra, { "--glob", glob })
+      end
+      vim.list_extend(extra, { "--glob", "!.git/**" })
+      for _, glob in ipairs(exclusions) do
         vim.list_extend(extra, { "--glob", glob })
       end
       cancel_current = run_rg(
@@ -504,7 +513,7 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
     finish({
       state = "timed_out",
       message = string.format(
-        "Project module scan stopped after %d ms; module-dependent results may be incomplete.",
+        "Project relationship scan stopped after %d ms; results may be incomplete.",
         options.timeout_ms
       ),
     })
@@ -537,10 +546,10 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         add_index_note(
           index,
           string.format(
-            "Project module discovery reached the %d-candidate limit; module-dependent results may be incomplete.",
+            "Project source discovery reached the %d-file limit; relationships may be incomplete.",
             options.max_candidate_files
           ),
-          "module scan limited",
+          "project index incomplete",
           "warn"
         )
       end
@@ -548,11 +557,11 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         add_index_note(
           index,
           string.format(
-            "%d module source candidate%s not examined by the discovery limit.",
+            "%d project source candidate%s not examined by the discovery limit.",
             unexamined,
             unexamined == 1 and " was" or "s were"
           ),
-          "module scan limited",
+          "project index incomplete",
           "warn"
         )
       end
@@ -560,11 +569,11 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         add_index_note(
           index,
           string.format(
-            "%d module source file%s omitted by the project module scan limit.",
+            "%d project source file%s omitted by the project index limit.",
             omitted,
             omitted == 1 and "" or "s"
           ),
-          "module scan limited",
+          "project index incomplete",
           "warn"
         )
       end
@@ -572,11 +581,11 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         add_index_note(
           index,
           string.format(
-            "%d oversized module source file%s skipped.",
+            "%d oversized project source file%s skipped.",
             oversized,
             oversized == 1 and "" or "s"
           ),
-          "module scan limited",
+          "project index incomplete",
           "warn"
         )
       end
@@ -625,11 +634,11 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
             add_index_note(
               index,
               string.format(
-                "%d module source file%s could not be parsed.",
+                "%d project source file%s could not be parsed.",
                 parse_errors,
                 parse_errors == 1 and "" or "s"
               ),
-              "module scan incomplete",
+              "project index incomplete",
               "warn"
             )
           end

@@ -1,4 +1,5 @@
 local common = require("archlens.adapters.common")
+local go_workspace = require("archlens.go_workspace")
 
 local M = {}
 ---@type table<string, { name?: string, root?: string }>
@@ -15,6 +16,12 @@ local function section_presentation(context, relation, row)
     elseif relation.id == "module_importers" then
       return { label = "Package dependents" }
     end
+  elseif
+    context.is_boundary
+    and context.boundary_level == "workspace"
+    and relation.id == "workspace_members"
+  then
+    return { label = "Workspace modules" }
   end
   if context.kind ~= vim.lsp.protocol.SymbolKind.Interface then
     return nil
@@ -158,7 +165,7 @@ local function resolve_boundaries(path, root)
   end
   local name = relative and relative ~= "." and relative:gsub("\\", "/")
     or vim.fs.basename(module_name)
-  return {
+  local resolved = {
     {
       id = "go-package:" .. import_path,
       class = "language",
@@ -189,6 +196,11 @@ local function resolve_boundaries(path, root)
       },
     },
   }
+  local workspace = go_workspace.resolve(path)
+  if workspace then
+    resolved[#resolved + 1] = go_workspace.boundary(workspace.file)
+  end
+  return resolved
 end
 
 local configuration_tags = {
@@ -236,6 +248,7 @@ end
 
 function M.clear_cache()
   module_cache = {}
+  go_workspace.clear_cache()
 end
 
 M.spec = {

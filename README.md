@@ -65,7 +65,7 @@ Built-in adapters provide the following additional analysis:
 
 | Language                 | Built-in analysis                                                                                             |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| Go                       | Tree-sitter symbols and imports, build-aware package relationships, package boundaries, ast-grep matches, and Go interface presentation |
+| Go                       | Tree-sitter symbols and imports, build-aware package/module relationships, package/module/workspace boundaries, ast-grep matches, and Go interface presentation |
 | Rust                     | Tree-sitter symbols and modules, ast-grep matches, and Rust implementation presentation                       |
 | Nix                      | Tree-sitter bindings and module imports, plus ast-grep matches                                                |
 | OCaml (`.ml` and `.mli`) | Tree-sitter symbols, module relationships, and member presentation; ast-grep does not provide an OCaml parser |
@@ -233,18 +233,20 @@ symbol, and does not add automatic changes to navigation history. Enabling
 follow preserves existing history. Press `f`, `<BS>`, or `h` to return to
 pinned exploration.
 
-### Move between symbol, package, and module context
+### Move between symbol, package, module, and workspace context
 
 When a language adapter resolves real language or build boundaries, the focus
 hierarchy shows only the immediate enclosing boundary instead of repeating the
 source path. Press `f` on it to move outward one level, `<CR>` to open its
 representative file, or `?` to inspect its identity, parent, and evidence.
 
-Go package and module contexts are the first supported boundary chain. Package
-identity combines the nearest `go.mod` module path with the source directory;
-module identity uses the declared module path. Symbol focus shows its package,
-and package focus reveals its module without crowding the symbol overview.
-Press `gs` from a package or module view to focus the symbol at the current
+Go package, module, and workspace contexts are the first supported boundary
+chain. Package identity combines the nearest `go.mod` module path with the
+source directory; module identity uses the declared module path. An effective
+`go.work` contributes a workspace only when its `use` directives include the
+current module. Symbol focus shows its package, package focus reveals its
+module, and module focus reveals the workspace without crowding lower-level
+views. Press `gs` from any boundary view to focus the symbol at the current
 source cursor. If boundary following is active, `gs` changes it to symbol
 following; `<BS>` or `h` restores and pins the boundary view.
 ArchLens does not infer packages from directories for languages without
@@ -292,6 +294,11 @@ between active Go workspace modules. This keeps one module row per real build
 boundary and records how many package edges support it. It does not turn every
 external `go.mod` requirement into an architectural row. A single-module
 project therefore has no peer module relationships to invent.
+
+At workspace focus, ArchLens uses `go list -m` to show the bounded set of active
+workspace modules. Explicit `go.work` members remain visible even when they
+live outside the workspace directory or project root. Workspace focus does not
+repeat the complete module dependency graph or expose external requirements.
 
 The package scan is cached while you navigate and rebuilt when you refresh the
 pane. It does not write an index to disk or start language servers for scanned

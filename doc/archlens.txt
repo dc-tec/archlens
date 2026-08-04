@@ -117,13 +117,16 @@ Press `f` on the boundary to move outward one level, `<CR>` to open its
 representative file, or `?` to inspect its stable identity, parent, and
 evidence.
 
-Go package and module contexts are the first supported boundary chain. The Go
-adapter derives package identity from the nearest `go.mod` module path and the
-source directory; module identity uses the declared module path. Symbol focus
-shows its package, and package focus reveals its module. A package focus
+Go package, module, and workspace contexts are the first supported boundary
+chain. The Go adapter derives package identity from the nearest `go.mod` module
+path and the source directory; module identity uses the declared module path.
+An effective `go.work` contributes a workspace only when its `use` directives
+include the current module. Symbol focus shows its package, package focus
+reveals its module, and module focus reveals its workspace. A package focus
 aggregates project-local dependencies and dependents across its visible files.
-External targets remain summarized; ArchLens does not synthesize package rows
-for them.
+Module focus aggregates production edges between active workspace modules.
+Workspace focus shows bounded, explicit member modules. External targets
+remain summarized; ArchLens does not synthesize package rows for them.
 
 ArchLens does not treat directories as packages when a language adapter cannot
 provide an authoritative boundary.
@@ -228,9 +231,9 @@ Built-in relationship IDs are: >
 
     children              supertypes             subtypes
     implementations       incoming               outgoing
-    module_imports        module_importers       configuration_consumers
-    test_references       references             test_structural
-    structural            siblings
+    workspace_members     module_imports          module_importers
+    configuration_consumers test_references       references
+    test_structural       structural              siblings
 <
 Extensions can register additional IDs. See |archlens-providers|.
 
@@ -491,8 +494,10 @@ merges Tree-sitter locations from active Go and cgo files. When the command is
 unavailable, fails, or reaches its bound, the provider retains the Tree-sitter
 package result and reports the fallback. Package focus scans the focused
 module. Module focus aggregates production package imports that cross between
-active Go workspace modules, without exposing a workspace boundary or turning
-the complete external requirement list into architecture rows.
+active Go workspace modules. Workspace focus uses `go list -m` to expose its
+bounded member modules, including explicit members outside the workspace
+directory. Neither view turns the complete external requirement list into
+architecture rows.
 
 The optional `report` callback accepts `"running"` or `"retrying"`. Retry
 metadata can include `retry_delay_ms` and a short `message`. ArchLens records

@@ -144,6 +144,35 @@ equal(go_module.level, "module")
 equal(go_module.kind_name, "Go module")
 equal(go_module.name, "example.com/project")
 equal(go_module.representative_path, vim.fs.joinpath(fixture_root, "go.mod"))
+
+local workspace_root = vim.fn.tempname()
+local workspace_module = vim.fs.joinpath(workspace_root, "app")
+vim.fn.mkdir(workspace_module, "p")
+vim.fn.writefile({ "go 1.26.5", "use ./app" }, vim.fs.joinpath(workspace_root, "go.work"))
+vim.fn.writefile({ "module example.test/app" }, vim.fs.joinpath(workspace_module, "go.mod"))
+local workspace_source = vim.fs.joinpath(workspace_module, "main.go")
+vim.fn.writefile({ "package main" }, workspace_source)
+local previous_gowork = vim.env.GOWORK
+vim.env.GOWORK = "auto"
+local workspace_boundaries =
+  assert(adapters.resolve_boundaries("go", workspace_source, workspace_module, {}))
+vim.env.GOWORK = previous_gowork
+equal(#workspace_boundaries, 3, "a used Go module should expose its explicit workspace")
+local go_workspace = workspace_boundaries[3]
+equal(go_workspace.level, "workspace")
+equal(go_workspace.class, "build")
+equal(go_workspace.kind_name, "Go workspace")
+equal(go_workspace.path, workspace_root)
+equal(go_workspace.representative_path, vim.fs.joinpath(workspace_root, "go.work"))
+equal(go_workspace.evidence.method, "go.work/use")
+local workspace_contexts = require("archlens.boundaries").contexts({
+  language = "go",
+  root_dir = workspace_module,
+  path = workspace_source,
+}, workspace_boundaries)
+equal(workspace_contexts[1].boundary_level, "package")
+equal(workspace_contexts[1].enclosing_boundaries[1].boundary_level, "module")
+equal(workspace_contexts[2].enclosing_boundaries[1].boundary_level, "workspace")
 equal(adapters.resolve_boundaries("rust", go_fixture, fixture_root, {}), nil)
 equal(adapters.get("rust").treesitter.symbol_types.impl_item, "Implementation")
 equal(adapters.get("rust").treesitter.symbol_types.field_declaration, "Field")

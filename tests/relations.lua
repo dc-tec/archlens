@@ -71,6 +71,16 @@ equal(relations.ordered(), {
     sort = "name",
   },
   {
+    id = "workspace_members",
+    label = "Workspace members",
+    marker = "└",
+    order = 44,
+    source = "semantic",
+    endpoint = "target",
+    sort = "name",
+    suppress_self = true,
+  },
+  {
     id = "module_imports",
     label = "Module dependencies",
     marker = "⇢",
@@ -175,7 +185,7 @@ local ordered = relations.ordered()
 ordered[1].marker = "mutated"
 table.remove(ordered, 2)
 equal(relations.ordered()[1].marker, "└", "ordered should return deep copies")
-equal(#relations.ordered(), 14, "mutating an ordered result must not mutate the registry")
+equal(#relations.ordered(), 15, "mutating an ordered result must not mutate the registry")
 
 local custom_input = {
   id = "dependencies",
@@ -198,7 +208,7 @@ equal(relations.get("dependencies"), {
   endpoint = "target",
   sort = "location",
 })
-equal(relations.ordered()[7].id, "dependencies", "custom kinds should follow declared order")
+equal(relations.ordered()[8].id, "dependencies", "custom kinds should follow declared order")
 
 local alias = relations.register("owns", {
   label = "Owns",
@@ -220,6 +230,7 @@ equal(
     "implementations",
     "incoming",
     "outgoing",
+    "workspace_members",
     "dependencies",
     "module_imports",
     "owns",

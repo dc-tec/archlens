@@ -1,4 +1,5 @@
 local boundaries = require("archlens.boundaries")
+local go_workspace = require("archlens.go_workspace")
 local graph = require("archlens.graph")
 
 local M = {}
@@ -42,28 +43,14 @@ local function normalized_options(options)
 end
 
 local function workspace_file(context, root)
-  local configured = normalized(context.go_workspace_file)
-  if configured and vim.uv.fs_stat(configured) then
-    return configured
-  end
-  local environment = vim.env.GOWORK
-  if environment == "off" then
-    return nil
-  end
-  if environment and environment ~= "" and environment ~= "auto" then
-    local environment_file = normalized(environment)
-    if environment_file and vim.uv.fs_stat(environment_file) then
-      return environment_file
-    end
-  end
-  local found = vim.fs.find("go.work", { path = root, upward = true, type = "file", limit = 1 })[1]
-  return normalized(found)
+  return go_workspace.find(root, context.go_workspace_file)
 end
 
-local function scan_key(root, workspace, options)
+local function scan_key(root, workspace, mode, options)
   return table.concat({
     root,
     workspace or "",
+    mode,
     tostring(options.command),
     tostring(options.timeout_ms),
     tostring(options.max_modules),
@@ -270,12 +257,15 @@ local function select_modules(values, focus_key, maximum)
   while #modules > maximum do
     table.remove(modules)
   end
-  if not by_path[focus_key] then
+  if focus_key and not by_path[focus_key] then
     return nil, omitted, "Focused module was not loaded by go list."
   end
-  if not vim.iter(modules):any(function(module)
-    return module.Path == focus_key
-  end) then
+  if
+    focus_key
+    and not vim.iter(modules):any(function(module)
+      return module.Path == focus_key
+    end)
+  then
     return nil, omitted, "Focused module was omitted by the Go workspace module limit."
   end
   return modules, omitted
@@ -320,7 +310,7 @@ local function notify(scan)
   end
 end
 
-local function start_scan(cache_key, root, workspace, focus_key, options)
+local function start_scan(cache_key, root, workspace, focus_key, include_packages, options)
   local scan = {
     root = root,
     ready = false,
@@ -348,7 +338,7 @@ local function start_scan(cache_key, root, workspace, focus_key, options)
       finish(nil, { state = "failed", message = selection_error })
       return
     end
-    if #modules == 1 then
+    if not include_packages or #modules == 1 then
       finish({
         modules = modules,
         packages = package_index({}, modules, options.max_packages),
@@ -388,8 +378,9 @@ end
 local function scan(context, options, callback)
   options = normalized_options(options)
   local focus_key = module_key(context)
-  local root = module_root(context)
-  if not focus_key or not root or not vim.uv.fs_stat(root) then
+  local workspace_focus = context.boundary_level == "workspace"
+  local root = workspace_focus and normalized(context.boundary_path) or module_root(context)
+  if (not workspace_focus and not focus_key) or not root or not vim.uv.fs_stat(root) then
     callback(nil, { state = "failed", message = "Go module root could not be resolved." })
     return function() end
   end
@@ -401,11 +392,16 @@ local function scan(context, options, callback)
     return function() end
   end
 
-  local work_file = workspace_file(context, root)
+  local work_file = workspace_focus and normalized(context.path) or workspace_file(context, root)
+  if workspace_focus and (not work_file or not vim.uv.fs_stat(work_file)) then
+    callback(nil, { state = "failed", message = "Go workspace file could not be resolved." })
+    return function() end
+  end
   local scan_root = work_file and vim.fs.dirname(work_file) or root
-  local cache_key = scan_key(scan_root, work_file, options)
+  local mode = workspace_focus and "members" or "relationships"
+  local cache_key = scan_key(scan_root, work_file, mode, options)
   local current = scans[cache_key]
-    or start_scan(cache_key, scan_root, work_file, focus_key, options)
+    or start_scan(cache_key, scan_root, work_file, focus_key, not workspace_focus, options)
   if current.ready then
     callback(current.workspace, current.outcome)
     return function() end
@@ -422,6 +418,14 @@ local function mapped_import(package, import_path)
 end
 
 local function module_context(module, workspace_file_path)
+  local enclosing = {}
+  if workspace_file_path then
+    enclosing[1] = boundaries.context({
+      root_dir = vim.fs.dirname(workspace_file_path),
+      path = workspace_file_path,
+      language = "go",
+    }, go_workspace.boundary(workspace_file_path))
+  end
   local result = boundaries.context({
     root_dir = module.Dir,
     path = module.GoMod,
@@ -439,8 +443,51 @@ local function module_context(module, workspace_file_path)
       method = "go list -m",
       class = "semantic",
     },
-  })
+  }, enclosing)
   result.go_workspace_file = workspace_file_path
+  return result
+end
+
+local function add_workspace_member(result, context, module, work_file)
+  local source = graph.node_from_context(context)
+  local target = graph.node_from_context(module_context(module, work_file))
+  target.visibility_scope = "project"
+  local relative = vim.fs.relpath(context.boundary_path, module.Dir)
+  if relative and relative ~= "." then
+    target.detail = relative
+  end
+  graph.add_edge(
+    result,
+    graph.edge("workspace_members", source, target, {
+      provider = "Go tool",
+      method = "go list -m",
+      class = "semantic",
+    })
+  )
+end
+
+local function add_omitted_module_note(result, workspace)
+  if workspace.omitted_modules > 0 then
+    graph.add_note(
+      result,
+      string.format(
+        "%d workspace module%s omitted by the module limit.",
+        workspace.omitted_modules,
+        workspace.omitted_modules == 1 and " was" or "s were"
+      ),
+      { summary = "Go workspace scan limited", severity = "warn" }
+    )
+  end
+end
+
+local function workspace_relationships(context, workspace)
+  local result = graph.delta()
+  local work_file = normalized(context.path)
+  for _, module in ipairs(workspace.modules or {}) do
+    add_workspace_member(result, context, module, work_file)
+  end
+  graph.add_contributor(result, "go_build", "Go tool")
+  add_omitted_module_note(result, workspace)
   return result
 end
 
@@ -460,7 +507,7 @@ local function add_module_edge(result, kind, source_context, target_context, cou
   )
 end
 
-local function relationships(context, workspace, options)
+local function module_relationships(context, workspace, options)
   local result = graph.delta()
   local focus_key = module_key(context)
   local modules = {}
@@ -535,17 +582,7 @@ local function relationships(context, workspace, options)
     )
   end
   graph.add_contributor(result, "go_build", "Go tool")
-  if workspace.omitted_modules > 0 then
-    graph.add_note(
-      result,
-      string.format(
-        "%d workspace module%s omitted by the module limit.",
-        workspace.omitted_modules,
-        workspace.omitted_modules == 1 and " was" or "s were"
-      ),
-      { summary = "Go workspace scan limited", severity = "warn" }
-    )
-  end
+  add_omitted_module_note(result, workspace)
   if workspace.packages.omitted > 0 then
     graph.add_note(
       result,
@@ -585,7 +622,7 @@ end
 function M.supports(context)
   return context
     and context.is_boundary == true
-    and context.boundary_level == "module"
+    and (context.boundary_level == "module" or context.boundary_level == "workspace")
     and context.language == "go"
 end
 
@@ -601,6 +638,10 @@ function M.relationships(context, _, options, callback)
         })
       end
       callback(result, outcome)
+      return
+    end
+    if context.boundary_level == "workspace" then
+      callback(workspace_relationships(context, workspace))
       return
     end
     local focus_key = module_key(context)
@@ -621,12 +662,13 @@ function M.relationships(context, _, options, callback)
       callback(result, omitted)
       return
     end
-    callback(relationships(context, workspace, options))
+    callback(module_relationships(context, workspace, options))
   end)
 end
 
 function M.clear_cache(_)
   scans = {}
+  go_workspace.clear_cache()
 end
 
 M._decode_json_stream = decode_json_stream

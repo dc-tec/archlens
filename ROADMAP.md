@@ -30,22 +30,23 @@ ArchLens should move between local code and larger contexts only when a
 language or build system provides a real identity. Directories are not treated
 as packages by default.
 
-The first vertical slice is a Go package and module boundary chain. The Go
-adapter derives package identity from the nearest `go.mod` module path and the
-source directory, and module identity from the declared module path. A symbol
-view shows only its immediate package in the existing focus hierarchy;
-focusing that row reveals its module and replaces symbol relationships with
-package dependencies and dependents. Go package focus now uses bounded
-`go list` output as the authority for active production edges and enriches
-those edges with exact Tree-sitter import sites. When build analysis is
-unavailable, the source-derived package view remains available. Module focus
-aggregates actual production package imports between active Go workspace
+The first vertical slice is a Go package, module, and workspace boundary chain.
+The Go adapter derives package identity from the nearest `go.mod` module path
+and the source directory, module identity from the declared module path, and
+workspace identity from an effective `go.work` that explicitly uses the current
+module.
+A symbol view shows only its immediate package in the existing focus hierarchy;
+focusing outward reveals its module and then workspace. Go package focus uses
+bounded `go list` output as the authority for active production edges and
+enriches those edges with exact Tree-sitter import sites. When build analysis
+is unavailable, the source-derived package view remains available. Module
+focus aggregates actual production package imports between active Go workspace
 modules, retaining one relationship per real module boundary rather than
-listing every external manifest requirement.
+listing every external manifest requirement. Workspace focus exposes its
+bounded active member modules without repeating their dependency graph.
 
 Next steps may include:
 
-- A `go.work` workspace boundary above module focus
 - Package or module identities for other ecosystems with authoritative metadata
 - Test and configuration relationships at boundary level
 - Optional project-specific boundary annotations without assuming one

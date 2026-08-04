@@ -187,6 +187,16 @@ for _, kind in ipairs({
     sort = "name",
   },
   {
+    id = "workspace_members",
+    label = "Workspace members",
+    marker = "└",
+    order = 44,
+    source = "semantic",
+    endpoint = "target",
+    sort = "name",
+    suppress_self = true,
+  },
+  {
     id = "module_imports",
     label = "Module dependencies",
     marker = "⇢",

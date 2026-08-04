@@ -146,6 +146,8 @@ vim.fn.writefile({
 assert(vim.uv.fs_chmod(fake_go, 493))
 
 local go_modules = require("archlens.go_modules")
+local boundaries = require("archlens.boundaries")
+local go_workspace = require("archlens.go_workspace")
 local graph = require("archlens.graph")
 local model = require("archlens.model")
 
@@ -215,6 +217,11 @@ equal(#outbound_only.edges, 2, "disabling inbound analysis should omit module de
 equal(vim.fn.readfile(invocations)[1], "xx", "a workspace scan should run two Go commands")
 local sdk_context = rows["module_imports\0go-module:" .. module_specs.sdk.path].target.context
 equal(sdk_context.go_workspace_file, vim.fs.joinpath(project, "go.work"))
+equal(
+  sdk_context.enclosing_boundaries[1].boundary_level,
+  "workspace",
+  "module relationship targets should retain their workspace parent"
+)
 local sdk_result = run(sdk_context)
 equal(#sdk_result.edges, 2, "focused workspace peers should reuse the cached module graph")
 equal(
@@ -223,9 +230,41 @@ equal(
   "module navigation within one workspace should reuse the Go scan"
 )
 
+local work_file = vim.fs.joinpath(project, "go.work")
+local workspace_focus = boundaries.context({
+  root_dir = project,
+  path = work_file,
+  language = "go",
+}, go_workspace.boundary(work_file))
+equal(go_modules.supports(workspace_focus), true, "Go workspace boundaries should enable members")
+local workspace_result, workspace_outcome = run(workspace_focus)
+equal(workspace_outcome, nil, "a successful workspace member scan should complete normally")
+equal(#workspace_result.edges, 3, "workspace focus should expose each active module once")
+for _, edge in ipairs(workspace_result.edges) do
+  equal(edge.kind, "workspace_members")
+  local member = assert(graph.related_node(edge))
+  equal(member.visibility_scope, "project")
+  equal(member.context.enclosing_boundaries[1].boundary_id, workspace_focus.boundary_id)
+end
+local workspace_model = model.build(
+  workspace_focus,
+  vim.tbl_extend("force", workspace_result, {
+    focus = graph.node_from_context(workspace_focus),
+  }),
+  { include_external = false }
+)
+equal(#workspace_model.sections, 1)
+equal(workspace_model.sections[1].label, "Workspace modules")
+equal(#workspace_model.sections[1].rows, 3)
+equal(
+  vim.fn.readfile(invocations)[1],
+  "xxx",
+  "workspace membership should require only the module-list command"
+)
+
 go_modules.clear_cache()
 run(focus)
-equal(vim.fn.readfile(invocations)[1], "xxxx", "cache clearing should rebuild the module graph")
+equal(vim.fn.readfile(invocations)[1], "xxxxx", "cache clearing should rebuild the module graph")
 
 local fallback, unavailable = run(focus, vim.fs.joinpath(project, "missing-go"))
 equal(unavailable.state, "unavailable", "a missing Go command should use a typed outcome")

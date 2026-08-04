@@ -84,7 +84,7 @@ presentation.
 
 ```lua
 {
-  "dc-tec/archlens",
+  "dc-tec/archlens.nvim",
   config = function()
     require("archlens").setup()
 
@@ -104,7 +104,7 @@ Add the ArchLens flake input:
 
 ```nix
 inputs.archlens = {
-  url = "github:dc-tec/archlens";
+  url = "github:dc-tec/archlens.nvim";
   inputs.nixpkgs.follows = "nixpkgs";
   inputs.nixvim.follows = "nixvim";
 };

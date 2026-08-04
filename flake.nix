@@ -48,7 +48,7 @@
             src = archlensSource;
             meta = {
               description = "Human-first architectural relationship lens for Neovim";
-              homepage = "https://github.com/dc-tec/archlens";
+              homepage = "https://github.com/dc-tec/archlens.nvim";
               license = lib.licenses.asl20;
               platforms = [ system ];
             };

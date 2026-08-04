@@ -109,6 +109,7 @@ local function run()
     root_dir = "/workspace",
     supports_calls = true,
   })
+  context.language = "go"
 
   local function call_context(name, uri, line)
     return model.context_from_item({
@@ -787,6 +788,22 @@ local function run()
   add_incoming(usage_graph, "TestReconcile", caller_uri, 40, { call_location.range })
   add_location(usage_graph, "test_references", call_location)
   add_location(usage_graph, "test_references", non_call_location)
+  local production_caller_uri = "file:///workspace/internal/controller/worker.go"
+  local production_call_location = {
+    uri = production_caller_uri,
+    range = {
+      start = { line = 52, character = 4 },
+      ["end"] = { line = 52, character = 13 },
+    },
+  }
+  add_incoming(
+    usage_graph,
+    "RunWorker",
+    production_caller_uri,
+    50,
+    { production_call_location.range }
+  )
+  add_location(usage_graph, "references", production_call_location)
   local corroborating_call = vim.deepcopy(call_location)
   corroborating_call.range.start.character = 2
   corroborating_call.range["end"].character = 24
@@ -800,14 +817,35 @@ local function run()
   local incoming_section = vim.iter(usage_map.sections):find(function(value)
     return value.id == "incoming"
   end)
-  local remaining_references = vim.iter(usage_map.sections):find(function(value)
+  local test_references = vim.iter(usage_map.sections):find(function(value)
     return value.id == "test_references"
   end)
   local remaining_structural = vim.iter(usage_map.sections):find(function(value)
     return value.id == "test_structural"
   end)
-  assert_equal(#incoming_section.rows, 1, "incoming callers should remain the primary relationship")
+  assert_equal(
+    #incoming_section.rows,
+    1,
+    "production callers should remain under the primary incoming relationship"
+  )
+  assert_equal(
+    incoming_section.rows[1].name,
+    "RunWorker",
+    "production callers should remain under Entered through"
+  )
   assert_equal(incoming_section.rows[1].evidence_records, {
+    {
+      provider = "gopls",
+      method = "callHierarchy/incomingCalls",
+      class = "semantic",
+    },
+    {
+      provider = "gopls",
+      method = "textDocument/references",
+      class = "semantic",
+    },
+  }, "production references should enrich callers without another row")
+  assert_equal(test_references.rows[1].evidence_records, {
     {
       provider = "gopls",
       method = "callHierarchy/incomingCalls",
@@ -823,24 +861,24 @@ local function run()
       method = "structural",
       class = "structural",
     },
-  }, "covered references should enrich incoming callers without another row")
+  }, "covered test references should enrich test callers without another row")
   assert_equal(
-    incoming_section.rows[1].occurrences,
+    test_references.rows[1].occurrences,
     { { uri = caller_uri, ranges = { call_location.range } } },
     "consolidated caller details should retain the exact call site"
   )
   assert_equal(
-    #remaining_references.rows,
-    1,
-    "non-call semantic references should remain independently visible"
+    #test_references.rows,
+    2,
+    "test callers and non-call references should share the test section without duplicates"
   )
   assert_equal(
-    remaining_references.rows[1].location.uri,
+    test_references.rows[2].location.uri,
     non_call_location.uri,
     "reference consolidation must retain the non-call source file"
   )
   assert_equal(
-    remaining_references.rows[1].location.range,
+    test_references.rows[2].location.range,
     non_call_location.range,
     "reference consolidation must retain uses outside incoming call ranges"
   )

@@ -3,6 +3,7 @@ local graph = require("archlens.graph")
 local relevance = require("archlens.relevance")
 local relations = require("archlens.relations")
 local scope = require("archlens.scope")
+local test_paths = require("archlens.test_paths")
 
 local M = {}
 
@@ -341,23 +342,101 @@ local function covering_incoming(row, exact, by_line)
   end
 end
 
-local function coalesce_call_references(grouped)
-  local exact, by_line = incoming_occurrence_index(grouped.incoming)
+local function merge_covered_references(rows, exact, by_line)
+  local remaining = {}
+  for _, row in ipairs(rows or {}) do
+    local incoming = covering_incoming(row, exact, by_line)
+    if incoming then
+      merge_row(incoming, row)
+    else
+      remaining[#remaining + 1] = row
+    end
+  end
+  return remaining
+end
+
+local function classified_occurrences(row, context)
+  local production = {}
+  local tests = {}
+  local classified = false
+  for _, occurrence in ipairs(row.occurrences or {}) do
+    local path_ok, path = pcall(vim.uri_to_fname, occurrence.uri or "")
+    local production_ranges = {}
+    local test_ranges = {}
+    for _, range in ipairs(occurrence.ranges or {}) do
+      classified = true
+      local target = path_ok
+          and test_paths.is_test(context.language, path, context.root_dir, range.start.line)
+          and test_ranges
+        or production_ranges
+      target[#target + 1] = vim.deepcopy(range)
+    end
+    if #production_ranges > 0 then
+      production[#production + 1] = { uri = occurrence.uri, ranges = production_ranges }
+    end
+    if #test_ranges > 0 then
+      tests[#tests + 1] = { uri = occurrence.uri, ranges = test_ranges }
+    end
+  end
+  return production, tests, classified
+end
+
+local function test_caller(row, occurrences)
+  local classified = vim.deepcopy(row)
+  classified.id = "test_references:caller:" .. row.id
+  if occurrences then
+    classified.occurrences = occurrences
+  end
+  return classified
+end
+
+local function split_incoming_callers(rows, context)
+  local production = {}
+  local tests = {}
+  for _, row in ipairs(rows or {}) do
+    local production_occurrences, test_occurrences, classified =
+      classified_occurrences(row, context)
+    if classified then
+      if #production_occurrences > 0 then
+        local production_row = vim.deepcopy(row)
+        production_row.occurrences = production_occurrences
+        production[#production + 1] = production_row
+      end
+      if #test_occurrences > 0 then
+        tests[#tests + 1] = test_caller(row, test_occurrences)
+      end
+    else
+      local location = row.location
+      local path_ok, path = pcall(vim.uri_to_fname, location.uri)
+      if
+        path_ok
+        and test_paths.is_test(context.language, path, context.root_dir, location.range.start.line)
+      then
+        tests[#tests + 1] = test_caller(row)
+      else
+        production[#production + 1] = row
+      end
+    end
+  end
+  return production, tests
+end
+
+local function coalesce_call_references(grouped, context)
+  local incoming, test_callers = split_incoming_callers(grouped.incoming, context)
+  grouped.incoming = incoming
+
+  local exact, by_line = incoming_occurrence_index(test_callers)
+  if not vim.tbl_isempty(exact) then
+    grouped.test_references = merge_covered_references(grouped.test_references, exact, by_line)
+  end
+  vim.list_extend(test_callers, grouped.test_references)
+  grouped.test_references = test_callers
+
+  exact, by_line = incoming_occurrence_index(grouped.incoming)
   if vim.tbl_isempty(exact) then
     return
   end
-  for _, relation_id in ipairs({ "test_references", "references" }) do
-    local remaining = {}
-    for _, row in ipairs(grouped[relation_id] or {}) do
-      local incoming = covering_incoming(row, exact, by_line)
-      if incoming then
-        merge_row(incoming, row)
-      else
-        remaining[#remaining + 1] = row
-      end
-    end
-    grouped[relation_id] = remaining
-  end
+  grouped.references = merge_covered_references(grouped.references, exact, by_line)
 end
 
 local function section_anchor(rows)
@@ -537,7 +616,8 @@ local function normalize_edges(snapshot, context, filters, report_adapter_issue)
     end
   end
 
-  coalesce_call_references(grouped)
+  coalesce_call_references(grouped, context)
+  sort_rows(grouped.test_references, relations.get("test_references").sort)
 
   return grouped, hidden
 end

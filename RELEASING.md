@@ -3,8 +3,9 @@
 ArchLens releases use signed tags from a validated `main` branch.
 
 1. Confirm that `main` is clean and synchronized with `origin/main`.
-2. Set the package version in `flake.nix` to the release version without the
-   `-dev` suffix.
+2. Add the release's notable user-facing changes to `CHANGELOG.md` and set the
+   package version in `flake.nix` to the release version without the `-dev`
+   suffix.
 3. Evaluate every supported system, run the current-system validation, and run
    the local performance report:
 

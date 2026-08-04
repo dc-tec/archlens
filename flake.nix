@@ -44,7 +44,7 @@
           };
           archlens = pkgs.vimUtils.buildVimPlugin {
             pname = "archlens.nvim";
-            version = "0.1.1";
+            version = "0.2.0-dev";
             src = archlensSource;
             meta = {
               description = "Human-first architectural relationship lens for Neovim";

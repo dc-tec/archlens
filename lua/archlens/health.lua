@@ -227,6 +227,17 @@ local function inspect_ripgrep(command, enabled, filetype, path)
   return vim.tbl_extend("force", inspect_executable(command), { enabled = true, supported = true })
 end
 
+local function inspect_go(command, enabled, language)
+  command = command or "go"
+  if enabled == false then
+    return { command = command, enabled = false }
+  end
+  if language ~= "go" then
+    return { command = command, enabled = true, supported = false }
+  end
+  return vim.tbl_extend("force", inspect_executable(command), { enabled = true, supported = true })
+end
+
 local function inspect()
   local bufnr = context_buffer()
   local buffer = inspect_buffer(bufnr)
@@ -235,6 +246,7 @@ local function inspect()
   local ast_grep = configured.ast_grep or {}
   local imports = configured.imports or {}
   local inbound = imports.inbound or {}
+  local go = (configured.providers and configured.providers.go) or {}
   return {
     version = vim.version(),
     buffer = buffer,
@@ -247,6 +259,7 @@ local function inspect()
       buffer.filetype,
       buffer.name
     ),
+    go = inspect_go(go.command, go.enabled, buffer.language),
   }
 end
 
@@ -450,6 +463,36 @@ function M._diagnose(state)
     end
   end
 
+  local go = { title = "ArchLens Go tool", items = {} }
+  sections[#sections + 1] = go
+  local go_state = state.go or { command = "go", available = false }
+  if go_state.enabled == false then
+    go.items[#go.items + 1] =
+      item("info", "Go build-aware package analysis is disabled by the ArchLens configuration.")
+  elseif go_state.supported == false then
+    go.items[#go.items + 1] =
+      item("info", "Go build-aware package analysis does not apply to the source buffer.")
+  elseif not go_state.available then
+    go.items[#go.items + 1] = item(
+      "warn",
+      string.format(
+        "%s is unavailable; Go package relationships will fall back to Tree-sitter evidence.",
+        go_state.command
+      )
+    )
+  else
+    go.items[#go.items + 1] = item("ok", "Executable: " .. (go_state.path or go_state.command))
+    if go_state.version then
+      go.items[#go.items + 1] = item("ok", "Version: " .. go_state.version)
+    else
+      go.items[#go.items + 1] = item(
+        "warn",
+        "The Go version could not be determined"
+          .. (go_state.error and ": " .. go_state.error or ".")
+      )
+    end
+  end
+
   return sections
 end
 
@@ -470,5 +513,6 @@ M._context_buffer = context_buffer
 M._inspect_buffer = inspect_buffer
 M._inspect_treesitter = inspect_treesitter
 M._inspect_ripgrep = inspect_ripgrep
+M._inspect_go = inspect_go
 
 return M

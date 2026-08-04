@@ -45,14 +45,15 @@ analysis sources:
 | LSP                                              | An attached language server     | Semantic calls, references, implementations, and type hierarchies |
 | [ast-grep](https://ast-grep.github.io/)          | `ast-grep` on Neovim's `PATH`   | Project-wide structural matches                                   |
 | [ripgrep](https://github.com/BurntSushi/ripgrep) | `rg` on Neovim's `PATH`         | Reverse module lookup                                             |
+| Go tool                                          | `go` on Neovim's `PATH`         | Build-aware Go package dependencies and dependents                |
 
 If a source is unavailable, ArchLens omits its relationships and continues with
 the remaining sources.
 
 Run `:checkhealth archlens` from a source buffer to inspect the selected
 project root, Tree-sitter parser and adapter, attached LSP capabilities,
-ast-grep, and ripgrep. To inspect a provider failure, open the pane and press
-`?` on the `Analysis` or `Results` line.
+ast-grep, ripgrep, and the Go tool where applicable. To inspect a provider
+failure, open the pane and press `?` on the `Analysis` or `Results` line.
 
 ### Built-in language support
 
@@ -64,7 +65,7 @@ Built-in adapters provide the following additional analysis:
 
 | Language                 | Built-in analysis                                                                                             |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| Go                       | Tree-sitter symbols and imports, Go package boundaries, ast-grep matches, and Go interface presentation        |
+| Go                       | Tree-sitter symbols and imports, build-aware package relationships, package boundaries, ast-grep matches, and Go interface presentation |
 | Rust                     | Tree-sitter symbols and modules, ast-grep matches, and Rust implementation presentation                       |
 | Nix                      | Tree-sitter bindings and module imports, plus ast-grep matches                                                |
 | OCaml (`.ml` and `.mli`) | Tree-sitter symbols, module relationships, and member presentation; ast-grep does not provide an OCaml parser |
@@ -268,10 +269,18 @@ interfaces, and concrete implementations.
 
 For an ordinary symbol without a supported boundary, module dependencies come
 from bounded import sites in the focused file and module dependents come from a
-bounded in-memory project scan. A Go package focus instead aggregates
-project-local dependencies and dependents across visible files assigned to
-that package. External dependency targets remain summarized rather than being
-turned into synthetic package rows.
+bounded in-memory project scan. A Go package focus instead asks `go list` which
+project-local packages are active production dependencies and dependents for
+the current build. It merges exact Tree-sitter import sites from active Go and
+cgo files into those edges. Test-only, ignored, and syntax-only imports do not
+become production edges. If the Go tool is unavailable, fails, or exceeds its
+bound, ArchLens retains the Tree-sitter package view and explains the fallback.
+External dependency targets remain summarized rather than becoming synthetic
+package rows.
+
+The Go scan currently covers the focused module. A `go.work` file is supported
+as build context, but other workspace modules are not yet aggregated into the
+package graph.
 
 The package scan is cached while you navigate and rebuilt when you refresh the
 pane. It does not write an index to disk or start language servers for scanned
@@ -334,7 +343,8 @@ during the cold-start window. Set `lsp.cold_start_retry.enabled` to `false` to
 disable it.
 
 Each provider has separate time, input, and output bounds. Use `imports` and
-`imports.inbound` to bound module analysis, `lsp.max_results` and
+`imports.inbound` to bound module analysis, `providers.go` to bound Go build
+analysis, `lsp.max_results` and
 `lsp.max_occurrences` to bound semantic responses, `grouping` to bound context
 group detection, and `ast_grep.max_results` and
 `ast_grep.max_output_bytes` to bound structural search.

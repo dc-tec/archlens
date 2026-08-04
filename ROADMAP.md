@@ -35,11 +35,14 @@ adapter derives package identity from the nearest `go.mod` module path and the
 source directory, and module identity from the declared module path. A symbol
 view shows only its immediate package in the existing focus hierarchy;
 focusing that row reveals its module and replaces symbol relationships with
-package dependencies and dependents aggregated across visible package files.
+package dependencies and dependents. Go package focus now uses bounded
+`go list` output as the authority for active production edges and enriches
+those edges with exact Tree-sitter import sites. When build analysis is
+unavailable, the source-derived package view remains available.
 
 Next steps may include:
 
-- Build-aware Go package facts and module dependency aggregation
+- Go module dependency aggregation
 - A `go.work` workspace boundary above module focus
 - Package or module identities for other ecosystems with authoritative metadata
 - Test and configuration relationships at boundary level

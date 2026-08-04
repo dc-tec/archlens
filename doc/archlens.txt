@@ -382,7 +382,8 @@ Run the health check from a source buffer: >vim
 
 The report shows the selected project root, Tree-sitter adapter and parser,
 attached language-server capabilities, ast-grep availability, and ripgrep
-availability for reverse module analysis.
+availability for reverse module analysis. For Go buffers it also reports the
+Go tool used for build-aware package analysis.
 
 Missing optional sources reduce the available relationships but do not
 prevent the pane from opening. To inspect provider-specific runtime failures,
@@ -467,6 +468,25 @@ or retrying state: >lua
 
 Store provider-specific settings under `providers.<id>`. Register relationship
 types with `require("archlens.relations").register()` before returning edges.
+
+The built-in Go package provider accepts these settings under `providers.go`: >lua
+
+    providers = {
+      go = {
+        enabled = true,
+        command = "go",
+        timeout_ms = 8000,
+        max_packages = 1000,
+        max_output_bytes = 2097152,
+      },
+    }
+<
+It uses `go list` as the authority for active production package edges and
+merges Tree-sitter locations from active Go and cgo files. When the command is
+unavailable, fails, or reaches its bound, the provider retains the Tree-sitter
+package result and reports the fallback. The scan covers the focused module;
+`go.work` is valid build context but workspace-module aggregation is not yet
+performed.
 
 The optional `report` callback accepts `"running"` or `"retrying"`. Retry
 metadata can include `retry_delay_ms` and a short `message`. ArchLens records

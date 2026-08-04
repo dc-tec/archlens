@@ -229,7 +229,9 @@ local function row_from_edge(edge, relation, context, cache, report_adapter_issu
     row.kind_name = projected.kind_name or row.kind_name
   end
   local id
-  if edge.evidence.class == "syntax" then
+  if node.scope == "boundary" and node.id then
+    id = table.concat({ edge.kind, node.id }, ":")
+  elseif edge.evidence.class == "syntax" then
     id = table.concat({ edge.kind, graph.location_key(location), row.name or "" }, ":")
   elseif relation.sort == "name" then
     id = table.concat({ edge.kind, graph.location_key(location), row.name or "" }, ":")
@@ -527,8 +529,8 @@ local function normalize_edges(snapshot, context, filters, report_adapter_issue)
     local location = node and node.location
     if relation and node and location and location.uri and location.range then
       local key = graph.location_key(location)
-      local dedupe_key = relation.sort == "name" and table.concat({ key, node.name or "" }, ":")
-        or key
+      local dedupe_key = node.scope == "boundary" and node.id
+        or (relation.sort == "name" and table.concat({ key, node.name or "" }, ":") or key)
       local suppress_overlapping_self = relation.id == "configuration_consumers"
         or relation.id == "references"
         or relation.id == "test_references"

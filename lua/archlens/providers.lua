@@ -1,6 +1,7 @@
 local ast_grep = require("archlens.ast_grep")
 local containers = require("archlens.containers")
 local graph = require("archlens.graph")
+local go_packages = require("archlens.go_packages")
 local import_index = require("archlens.import_index")
 local imports = require("archlens.imports")
 local lsp = require("archlens.lsp")
@@ -384,6 +385,32 @@ M.register("lsp", {
   start = start_lsp,
 })
 
+local function go_package_provider_enabled(context, config)
+  local options = config.providers.go or {}
+  return go_packages.supports(context) and options.enabled ~= false and config.imports.enabled
+end
+
+M.register("go", {
+  order = 19,
+  label = "Go build",
+  enabled = function(context, _, config)
+    return go_package_provider_enabled(context, config)
+  end,
+  start = function(context, source_buffer, config, done)
+    local import_options = provider_options(config.imports.inbound, config)
+    import_options.filetype = context.import_filetype
+    import_options.max_imports = config.imports.max_imports
+    return go_packages.relationships(context, source_buffer, {
+      build = config.providers.go or {},
+      imports = import_options,
+      include_dependents = config.imports.inbound.enabled,
+      max_imports = config.imports.max_imports,
+      max_importers = config.imports.inbound.max_importers,
+    }, done)
+  end,
+  clear_cache = go_packages.clear_cache,
+})
+
 M.register("imports", {
   order = 20,
   label = function(context)
@@ -392,6 +419,7 @@ M.register("imports", {
   enabled = function(context, source_buffer, config)
     if context.is_boundary then
       return context.boundary_level == "package"
+        and not go_package_provider_enabled(context, config)
         and config.imports.enabled
         and treesitter.supports_imports(source_buffer)
     end
@@ -428,6 +456,7 @@ M.register("importers", {
   enabled = function(context, source_buffer, config)
     if context.is_boundary then
       return context.boundary_level == "package"
+        and not go_package_provider_enabled(context, config)
         and config.imports.enabled
         and config.imports.inbound.enabled
         and (treesitter.supports_imports(source_buffer) or context.import_filetype)

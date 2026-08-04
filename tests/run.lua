@@ -1143,6 +1143,53 @@ local function run()
     contains(package_rendered.lines, "   └─ internal/controller  Go package"),
     "package focus should remain visible below its module"
   )
+  local package_context = context.enclosing_boundaries[1]
+  local package_graph = graph.new(package_context)
+  local dependency_boundary = vim.tbl_extend("force", vim.deepcopy(package_context), {
+    name = "internal/storage",
+    boundary_id = "go-package:example.com/workspace/internal/storage",
+    boundary_path = "/workspace/internal/storage",
+    boundary_keys = { "go-package:example.com/workspace/internal/storage" },
+    location = {
+      uri = "file:///workspace/internal/storage/read.go",
+      range = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 0 } },
+    },
+  })
+  graph.add_edge(
+    package_graph,
+    graph.edge(
+      "module_imports",
+      package_graph.focus,
+      graph.node_from_context(dependency_boundary),
+      { provider = "Go tool", method = "go list/Imports", class = "semantic" }
+    )
+  )
+  dependency_boundary.location.uri = "file:///workspace/internal/storage/write.go"
+  graph.add_edge(
+    package_graph,
+    graph.edge(
+      "module_imports",
+      package_graph.focus,
+      graph.node_from_context(dependency_boundary),
+      { provider = "Tree-sitter", method = "adapter/moduleTarget", class = "semantic" }
+    )
+  )
+  local package_relationships = model.build(package_context, package_graph, {})
+  assert_equal(
+    #package_relationships.sections[1].rows,
+    1,
+    "a stable boundary identity should deduplicate provider-specific representative files"
+  )
+  assert_equal(
+    package_relationships.sections[1].rows[1].id,
+    "module_imports:go-package:example.com/workspace/internal/storage",
+    "boundary rows should keep a stable navigation identity"
+  )
+  assert_equal(
+    package_relationships.sections[1].rows[1].evidence.provider,
+    "Go tool+Tree-sitter",
+    "deduplicated boundary rows should retain evidence from every provider"
+  )
   local collapsed = render.build(mapped, {
     width = 56,
     max_items = 2,

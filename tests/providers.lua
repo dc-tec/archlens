@@ -76,6 +76,17 @@ package.loaded["archlens.import_index"] = {
     error("module dependents should be disabled")
   end,
 }
+package.loaded["archlens.go_packages"] = {
+  supports = function(current)
+    return current.is_boundary == true
+      and current.boundary_level == "package"
+      and current.language == "go"
+  end,
+  relationships = function()
+    error("Go package analysis should be disabled")
+  end,
+  clear_cache = function() end,
+}
 package.loaded["archlens.treesitter"] = {
   supports_imports = function()
     return supports_imports
@@ -251,7 +262,7 @@ local provider_ids = vim.tbl_map(function(provider)
 end, providers.ordered())
 equal(
   provider_ids,
-  { "lsp", "imports", "custom", "broken", "importers", "ast_grep" },
+  { "lsp", "go", "imports", "custom", "broken", "importers", "ast_grep" },
   "custom providers should participate in stable orchestration order"
 )
 equal(providers.local_pending(config), {
@@ -289,8 +300,15 @@ boundary_context.is_boundary = true
 boundary_context.module_context = true
 boundary_context.boundary_level = "package"
 boundary_context.boundary_keys = { "go-package:example.test/project" }
+boundary_context.language = "go"
+equal(registered.go.enabled(boundary_context, bufnr, config), true)
+equal(registered.imports.enabled(boundary_context, bufnr, config), false)
+equal(registered.importers.enabled(boundary_context, bufnr, config), false)
+config.providers.go = { enabled = false }
+equal(registered.go.enabled(boundary_context, bufnr, config), false)
 equal(registered.imports.enabled(boundary_context, bufnr, config), true)
 equal(registered.importers.enabled(boundary_context, bufnr, config), true)
+config.providers.go = nil
 local module_boundary = vim.deepcopy(boundary_context)
 module_boundary.boundary_level = "module"
 module_boundary.boundary_keys = {}

@@ -4,6 +4,7 @@ local ast_grep_command = assert(vim.env.ARCHLENS_AST_GREP, "ARCHLENS_AST_GREP is
 local graph = require("archlens.graph")
 local model = require("archlens.model")
 local test_paths = require("archlens.test_paths")
+local boundaries = require("archlens.boundaries")
 local treesitter = require("archlens.treesitter")
 
 local function assert_equal(actual, expected, message)
@@ -170,6 +171,13 @@ end
 
 vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/main.go"))
 vim.bo.filetype = "go"
+local followed_go_boundary = boundaries.for_buffer(0, "package")
+assert(followed_go_boundary, "Go buffers should resolve a package boundary without a symbol")
+assert_equal(
+  followed_go_boundary.boundary_id,
+  go_boundary.boundary_id,
+  "buffer-level package resolution should retain stable boundary identity"
+)
 local refocused_go_boundary = treesitter.resolve(0, { line = 2, character = 5 }, go_boundary)
 assert_equal(
   refocused_go_boundary.boundary_id,

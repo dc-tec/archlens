@@ -186,7 +186,7 @@ The following keys are available in the pane:
 | --------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `<CR>`                | Open a relationship, or toggle a section or context group                                                   |
 | `f`                   | Focus the selected relationship and add the current symbol to navigation history                            |
-| `F`                   | Toggle source-cursor following; pinned exploration is the default                                           |
+| `F`                   | Toggle source-cursor following at the current symbol or boundary scope; pinned exploration is the default    |
 | `<BS>` or `h`         | Return to the previous focus                                                                                |
 | `<Tab>` and `<S-Tab>` | Move between actionable rows                                                                                |
 | `]s` and `[s`         | Move between sections                                                                                       |
@@ -318,7 +318,10 @@ require("archlens").setup({
 ```
 
 Set `cursor_follow.enabled` to `true` to start `:ArchLensHere` in follow
-mode. The `F` mapping changes the mode for the current pane.
+mode. The `F` mapping changes the mode for the current pane. Follow mode
+preserves the current focus scope: symbols follow the symbol under the cursor,
+while package and module views refresh only when the cursor crosses that kind
+of boundary.
 
 The `sections` table controls initial collapse state, visibility, ordering, and
 row limits. ArchLens preserves manual expansion state when it refreshes the

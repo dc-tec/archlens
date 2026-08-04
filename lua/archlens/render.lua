@@ -215,7 +215,12 @@ function M.build(model, opts)
     add(path, nil, "DiagnosticHint", { navigation = model.navigation })
   end
   if model.cursor_follow then
-    add("Following source cursor", nil, "DiagnosticHint")
+    local scope = model.cursor_follow_scope
+    add(
+      scope and scope ~= "symbol" and "Following source " .. scope or "Following source cursor",
+      nil,
+      "DiagnosticHint"
+    )
   end
 
   if model.focus then

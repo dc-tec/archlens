@@ -95,4 +95,34 @@ function M.attach(context)
   return context
 end
 
+---@param bufnr integer
+---@param level string
+---@return table?
+function M.for_buffer(bufnr, level)
+  local path = vim.api.nvim_buf_get_name(bufnr)
+  if path == "" then
+    return nil
+  end
+
+  path = vim.fs.normalize(path)
+  local filetype = vim.bo[bufnr].filetype
+  local language = adapters.language_for_filetype(filetype, path)
+  if not adapters.supports_boundaries(language) then
+    return nil
+  end
+
+  local root_dir = vim.fs.root(path, adapters.root_markers(filetype, path)) or vim.fs.dirname(path)
+  local source = M.attach({
+    language = language,
+    path = path,
+    root_dir = root_dir,
+  })
+  for _, boundary in ipairs(source.enclosing_boundaries or {}) do
+    if boundary.boundary_level == level then
+      return boundary
+    end
+  end
+  return nil
+end
+
 return M

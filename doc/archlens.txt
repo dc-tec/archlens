@@ -47,7 +47,8 @@ The following mappings apply only to the ArchLens pane:
 
 <CR>            Open a relationship or toggle a section or context group.
 f               Focus a relationship and add the current symbol to history.
-F               Toggle source-cursor following. Pinned mode is the default.
+F               Toggle source-cursor following at the current symbol or
+                boundary scope. Pinned mode is the default.
 <BS>, h         Return to the previous focus.
 <Tab>           Move to the next actionable row.
 <S-Tab>         Move to the previous actionable row.
@@ -189,7 +190,9 @@ CURSOR FOLLOWING ~
 
 `cursor_follow.enabled` (boolean, default `false`)
     Whether |:ArchLensHere| starts in source-cursor-following mode. The `F`
-    pane mapping changes the mode for the current pane.
+    pane mapping changes the mode for the current pane. Follow mode preserves
+    the current focus scope: symbol views follow symbols, while package and
+    module views refresh when the cursor crosses that kind of boundary.
 
 `cursor_follow.debounce_ms` (integer, default `150`)
     Delay after the latest source cursor movement, in milliseconds.

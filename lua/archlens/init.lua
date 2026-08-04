@@ -1,4 +1,5 @@
 local config_module = require("archlens.config")
+local boundaries = require("archlens.boundaries")
 local graph = require("archlens.graph")
 local lsp = require("archlens.lsp")
 local model = require("archlens.model")
@@ -45,6 +46,8 @@ local config = config_module.new()
 ---@field follow_timer? any
 ---@field follow_token integer
 ---@field follow_identity? string
+---@field follow_scope? string
+---@field follow_dirty? boolean
 ---@field invalidated? boolean
 
 ---@type table<integer, ArchLensSession>
@@ -192,6 +195,7 @@ local function render(session, rendered_model)
   performance.observe(session.performance, rendered_model)
   rendered_model.performance = performance.snapshot(session.performance)
   rendered_model.cursor_follow = session.cursor_follow == true
+  rendered_model.cursor_follow_scope = session.cursor_follow and session.follow_scope or nil
   rendered_model.navigation = navigation.snapshot(session, rendered_model.focus)
   ensure_view(session)
   view.render(session, rendered_model, config)
@@ -362,6 +366,8 @@ function M.show_here(tabpage)
   cancel_follow_timer(session)
   session.cursor_follow = config.cursor_follow.enabled == true
   session.follow_identity = nil
+  session.follow_scope = session.cursor_follow and "symbol" or nil
+  session.follow_dirty = false
   session.active = true
 
   local cursor = vim.api.nvim_win_get_cursor(session.source_window)
@@ -451,6 +457,40 @@ local function disable_cursor_follow(session)
   cancel_follow_timer(session)
   session.cursor_follow = false
   session.follow_identity = nil
+  session.follow_scope = nil
+  session.follow_dirty = false
+end
+
+local function follow_boundary(session, buffer, scope)
+  session.source_buffer = buffer
+  local context = boundaries.for_buffer(buffer, scope)
+  local identity = context and context.boundary_id
+    or table.concat({ "missing", scope, vim.uri_from_bufnr(buffer) }, "\0")
+  local force = session.follow_dirty == true
+  session.follow_dirty = false
+  if identity == session.follow_identity and not force then
+    return
+  end
+  if
+    session.follow_identity == nil
+    and not force
+    and context
+    and same_context(context, session.current)
+  then
+    session.follow_identity = identity
+    return
+  end
+
+  session.follow_identity = identity
+  local generation = begin_run(session)
+  if not context then
+    render(
+      session,
+      model.error(string.format("No %s boundary could be resolved at the source cursor.", scope))
+    )
+    return
+  end
+  load_context(session, context, generation)
 end
 
 local function follow_source_cursor(session, allow_background)
@@ -469,6 +509,11 @@ local function follow_source_cursor(session, allow_background)
   if not valid_buffer(buffer) then
     return
   end
+  if session.follow_scope and session.follow_scope ~= "symbol" then
+    follow_boundary(session, buffer, session.follow_scope)
+    return
+  end
+
   local cursor = vim.api.nvim_win_get_cursor(session.source_window)
   local position = { line = cursor[1] - 1, character = cursor[2] }
   local changedtick = vim.api.nvim_buf_get_changedtick(buffer)
@@ -478,11 +523,14 @@ local function follow_source_cursor(session, allow_background)
       { vim.uri_from_bufnr(buffer), position.line, position.character, changedtick },
       "\0"
     )
-  if identity == session.follow_identity then
+  local force = session.follow_dirty == true
+  session.follow_dirty = false
+  if identity == session.follow_identity and not force then
     return
   end
   if
     session.follow_identity == nil
+    and not force
     and syntax_context
     and navigation.same_symbol(syntax_context, session.current)
   then
@@ -527,6 +575,11 @@ function M.toggle_follow(tabpage)
     cancel_follow_timer(session)
     session.cursor_follow = true
     session.follow_identity = nil
+    session.follow_scope = session.current
+        and session.current.is_boundary
+        and session.current.boundary_level
+      or "symbol"
+    session.follow_dirty = false
     navigation.reset(session)
   end
   if session.model then
@@ -768,13 +821,13 @@ function M.setup(options)
       end
       local changedtick = vim.api.nvim_buf_get_changedtick(event.buf)
       for _, session in pairs(sessions) do
-        if
-          session.active
-          and event.buf == session.run_source_buffer
+        local run_source_changed = event.buf == session.run_source_buffer
           and session.run_changedtick
           and changedtick ~= session.run_changedtick
-        then
+        local followed_source_changed = session.cursor_follow and event.buf == session.source_buffer
+        if session.active and (run_source_changed or followed_source_changed) then
           local following = session.cursor_follow
+          session.follow_dirty = following
           invalidate_analysis(
             session,
             following and "Source changed; ArchLens is resolving the source cursor again."

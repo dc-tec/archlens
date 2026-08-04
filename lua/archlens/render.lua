@@ -216,11 +216,12 @@ function M.build(model, opts)
   end
   if model.cursor_follow then
     local scope = model.cursor_follow_scope
-    add(
-      scope and scope ~= "symbol" and "Following source " .. scope or "Following source cursor",
-      nil,
-      "DiagnosticHint"
-    )
+    local label = scope and scope ~= "symbol" and "Following source " .. scope
+      or "Following source cursor"
+    if scope and scope ~= "symbol" then
+      label = label .. " · gs symbol"
+    end
+    add(label, nil, "DiagnosticHint")
   end
 
   if model.focus then

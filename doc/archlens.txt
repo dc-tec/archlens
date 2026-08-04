@@ -49,6 +49,8 @@ The following mappings apply only to the ArchLens pane:
 f               Focus a relationship and add the current symbol to history.
 F               Toggle source-cursor following at the current symbol or
                 boundary scope. Pinned mode is the default.
+gs              Focus the symbol at the source cursor. Active boundary
+                following switches to symbol scope.
 <BS>, h         Return to the previous focus.
 <Tab>           Move to the next actionable row.
 <S-Tab>         Move to the previous actionable row.
@@ -192,7 +194,9 @@ CURSOR FOLLOWING ~
     Whether |:ArchLensHere| starts in source-cursor-following mode. The `F`
     pane mapping changes the mode for the current pane. Follow mode preserves
     the current focus scope: symbol views follow symbols, while package and
-    module views refresh when the cursor crosses that kind of boundary.
+    module views refresh when the cursor crosses that kind of boundary. The
+    `gs` mapping focuses the symbol at the source cursor, changes active
+    boundary following to symbol scope, and retains the boundary in history.
 
 `cursor_follow.debounce_ms` (integer, default `150`)
     Delay after the latest source cursor movement, in milliseconds.

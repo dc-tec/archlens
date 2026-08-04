@@ -188,6 +188,7 @@ The following keys are available in the pane:
 | `<CR>`                | Open a relationship, or toggle a section or context group                                                   |
 | `f`                   | Focus the selected relationship and add the current symbol to navigation history                            |
 | `F`                   | Toggle source-cursor following at the current symbol or boundary scope; pinned exploration is the default    |
+| `gs`                  | Focus the symbol at the source cursor; active boundary following switches to symbol following               |
 | `<BS>` or `h`         | Return to the previous focus                                                                                |
 | `<Tab>` and `<S-Tab>` | Move between actionable rows                                                                                |
 | `]s` and `[s`         | Move between sections                                                                                       |
@@ -228,8 +229,9 @@ to 32 previous focuses.
 
 Press `F` to follow the symbol under the cursor in the tracked source window.
 ArchLens debounces cursor movement, ignores repeated positions within the same
-symbol, and does not add automatic changes to navigation history. Press `f`,
-`<BS>`, or `h` to return to pinned exploration.
+symbol, and does not add automatic changes to navigation history. Enabling
+follow preserves existing history. Press `f`, `<BS>`, or `h` to return to
+pinned exploration.
 
 ### Move between symbol, package, and module context
 
@@ -242,6 +244,9 @@ Go package and module contexts are the first supported boundary chain. Package
 identity combines the nearest `go.mod` module path with the source directory;
 module identity uses the declared module path. Symbol focus shows its package,
 and package focus reveals its module without crowding the symbol overview.
+Press `gs` from a package or module view to focus the symbol at the current
+source cursor. If boundary following is active, `gs` changes it to symbol
+following; `<BS>` or `h` restores and pins the boundary view.
 ArchLens does not infer packages from directories for languages without
 adapter-provided boundaries.
 
@@ -336,7 +341,9 @@ Set `cursor_follow.enabled` to `true` to start `:ArchLensHere` in follow
 mode. The `F` mapping changes the mode for the current pane. Follow mode
 preserves the current focus scope: symbols follow the symbol under the cursor,
 while package and module views refresh only when the cursor crosses that kind
-of boundary.
+of boundary. From a boundary view, `gs` focuses the symbol at the source cursor
+and changes active following to symbol scope. The previous boundary remains in
+navigation history.
 
 The `sections` table controls initial collapse state, visibility, ordering, and
 row limits. ArchLens preserves manual expansion state when it refreshes the

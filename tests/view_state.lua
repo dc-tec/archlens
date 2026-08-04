@@ -180,6 +180,7 @@ local function run()
   local noop = function() end
   local focused_navigation
   local follow_toggles = 0
+  local source_symbol_focuses = 0
   view.ensure(session, options, {
     open = noop,
     focus = function(_, navigation_metadata)
@@ -192,6 +193,9 @@ local function run()
     toggle_follow = function()
       follow_toggles = follow_toggles + 1
     end,
+    focus_source_symbol = function()
+      source_symbol_focuses = source_symbol_focuses + 1
+    end,
   })
   view.render(session, model, options)
 
@@ -203,6 +207,9 @@ local function run()
   assert(mappings.F, "the pane should map cursor following")
   mappings.F()
   equal(follow_toggles, 1, "the cursor-follow mapping should toggle the session mode")
+  assert(mappings.gs, "the pane should map source-symbol focus")
+  mappings.gs()
+  equal(source_symbol_focuses, 1, "the source-symbol mapping should focus the source cursor")
 
   local outgoing_line = vim.fn.index(session.rendered.lines, "  → first") + 1
   vim.api.nvim_win_set_cursor(session.window, { outgoing_line, 0 })

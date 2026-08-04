@@ -181,6 +181,9 @@ local function actions_for(session)
     toggle_follow = function()
       M.toggle_follow(session.tabpage)
     end,
+    focus_source_symbol = function()
+      M.focus_source_symbol(session.tabpage)
+    end,
   }
 end
 
@@ -580,13 +583,63 @@ function M.toggle_follow(tabpage)
         and session.current.boundary_level
       or "symbol"
     session.follow_dirty = false
-    navigation.reset(session)
   end
   if session.model then
     render(session, session.model)
   end
   if session.cursor_follow then
     schedule_cursor_follow(session, 0, true)
+  end
+end
+
+function M.focus_source_symbol(tabpage)
+  local session = session_for(tabpage)
+  if not session.active or not valid_window(session.source_window) then
+    return
+  end
+
+  local buffer = vim.api.nvim_win_get_buf(session.source_window)
+  if not valid_buffer(buffer) then
+    return
+  end
+
+  cancel_follow_timer(session)
+  session.source_buffer = buffer
+  local cursor = vim.api.nvim_win_get_cursor(session.source_window)
+  local position = { line = cursor[1] - 1, character = cursor[2] }
+  local syntax_context = treesitter.resolve(buffer, position, nil)
+  local entry
+  if session.current and session.current.is_boundary then
+    entry = navigation.push(session, {
+      relation_label = "Source cursor",
+      target_name = syntax_context and syntax_context.name or nil,
+    }, view.selected_row_id(session))
+    session.restore_row_id = nil
+  end
+
+  if session.cursor_follow then
+    session.follow_scope = "symbol"
+    session.follow_dirty = false
+  end
+
+  local resolved_context = resolve_at(session, buffer, position, {
+    syntax_context = syntax_context,
+    loading_message = "Resolving the symbol at the source cursor…",
+    failure_message = "No symbol could be resolved at the source cursor.",
+    timeout_message = "Source cursor resolution timed out.",
+    on_failure = function()
+      if entry then
+        navigation.rollback(session, entry)
+      end
+    end,
+  })
+  if session.cursor_follow then
+    local changedtick = vim.api.nvim_buf_get_changedtick(buffer)
+    session.follow_identity = navigation.context_identity(resolved_context, changedtick)
+      or table.concat(
+        { vim.uri_from_bufnr(buffer), position.line, position.character, changedtick },
+        "\0"
+      )
   end
 end
 

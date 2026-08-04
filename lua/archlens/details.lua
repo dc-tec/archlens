@@ -273,6 +273,7 @@ local function help_lines()
     "<CR>            Open an item or toggle a section or context group",
     "f               Focus an item and retain the previous focus in history",
     "F               Toggle source-cursor following",
+    "gs              Focus the symbol at the source cursor",
     "<BS>, h         Return to the previous focus",
     "<Tab>, <S-Tab>  Move to the next or previous actionable row",
     "]s, [s          Move to the next or previous section",

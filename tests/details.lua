@@ -228,6 +228,7 @@ local help_lines = details.lines({ help = true }, model)
 assert(contains(help_lines, "ArchLens keys"))
 assert(contains(help_lines, "zM, zR          Collapse or expand the complete view"))
 assert(contains(help_lines, "F               Toggle source-cursor following"))
+assert(contains(help_lines, "gs              Focus the symbol at the source cursor"))
 assert(contains(help_lines, "?               Inspect the current line, or show this help"))
 
 local section_lines = details.lines({ section = section }, model)

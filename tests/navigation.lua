@@ -371,11 +371,17 @@ local function run()
   local package_a = packages_by_buffer[source_buffer]
   archlens.focus({ context = package_a, location = package_a.location })
   equal(active_session.current.boundary_id, package_a.boundary_id, "package focus should activate")
+  local history_before_package_follow = active_session.model.navigation.back_count
   local resolves_before_package_follow = #resolve_calls
   local providers_before_package_follow = #provider_contexts
   archlens.toggle_follow()
   vim.wait(20)
   equal(active_session.follow_scope, "package", "following should preserve package focus")
+  equal(
+    active_session.model.navigation.back_count,
+    history_before_package_follow,
+    "enabling follow should preserve navigation history"
+  )
   equal(
     #resolve_calls,
     resolves_before_package_follow,
@@ -389,7 +395,7 @@ local function run()
   assert(
     vim.tbl_contains(
       require("archlens.render").build(rendered[#rendered], { width = 56 }).lines,
-      "Following source package"
+      "Following source package · gs symbol"
     ),
     "the pane should identify package-follow mode"
   )
@@ -403,6 +409,48 @@ local function run()
     "movement inside one package should not restart package analysis"
   )
 
+  archlens.focus_source_symbol()
+  equal(active_session.follow_scope, "symbol", "source-symbol focus should change follow scope")
+  equal(active_session.cursor_follow, true, "source-symbol focus should keep active following")
+  equal(#resolve_calls, resolves_before_package_follow + 1, "source-symbol focus should resolve")
+  equal(active_session.current.name, "Beta", "source-symbol focus should update immediately")
+  equal(
+    active_session.model.navigation.back_count,
+    history_before_package_follow + 1,
+    "source-symbol focus should retain the boundary in history"
+  )
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(beta_semantic))
+  archlens.back()
+  equal(active_session.cursor_follow, false, "back should pin the restored package")
+  equal(
+    active_session.current.boundary_id,
+    package_a.boundary_id,
+    "back should restore the package followed before source-symbol focus"
+  )
+
+  local resolves_before_pinned_symbol = #resolve_calls
+  archlens.focus_source_symbol()
+  equal(active_session.cursor_follow, false, "source-symbol focus should preserve pinned mode")
+  equal(
+    #resolve_calls,
+    resolves_before_pinned_symbol + 1,
+    "pinned source-symbol focus should resolve"
+  )
+  equal(active_session.current.name, "Beta", "pinned source-symbol focus should update immediately")
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(beta_semantic))
+  archlens.back()
+  equal(
+    active_session.current.boundary_id,
+    package_a.boundary_id,
+    "back should restore the package after pinned source-symbol focus"
+  )
+
+  archlens.toggle_follow()
+  vim.wait(20)
+  equal(active_session.follow_scope, "package", "restored package should resume package following")
+  local resolves_before_cross_package = #resolve_calls
+  local providers_before_cross_package = #provider_contexts
+
   local package_b_buffer = vim.api.nvim_create_buf(false, true)
   local package_b_path = vim.fn.tempname() .. ".lua"
   vim.api.nvim_buf_set_name(package_b_buffer, package_b_path)
@@ -415,7 +463,7 @@ local function run()
   vim.wait(20)
   equal(
     #provider_contexts,
-    providers_before_package_follow + 1,
+    providers_before_cross_package + 1,
     "crossing a package boundary should start one package analysis"
   )
   equal(
@@ -425,7 +473,7 @@ local function run()
   )
   equal(
     #resolve_calls,
-    resolves_before_package_follow,
+    resolves_before_cross_package,
     "cross-package follow should remain independent from symbol resolution"
   )
   vim.api.nvim_buf_set_lines(package_b_buffer, 0, -1, false, { "local package_b = false" })
@@ -433,7 +481,7 @@ local function run()
   vim.wait(20)
   equal(
     #provider_contexts,
-    providers_before_package_follow + 2,
+    providers_before_cross_package + 2,
     "editing the followed package should refresh its analysis"
   )
   archlens.toggle_follow()

@@ -124,18 +124,27 @@ equal(
   "import adapter reads should be defensive copies"
 )
 equal(adapters.imports_for_filetype("unknown"), nil)
-equal(adapters.supports_boundary("go"), true)
-equal(adapters.supports_boundary("rust"), false)
+equal(adapters.supports_boundaries("go"), true)
+equal(adapters.supports_boundaries("rust"), false)
 local go_fixture = vim.fs.joinpath(fixture_root, "main.go")
-local go_boundary, go_boundary_error =
-  adapters.resolve_boundary("go", go_fixture, vim.fs.dirname(go_fixture), {})
-assert(go_boundary, "Go package boundary resolution failed: " .. tostring(go_boundary_error))
+local go_boundaries, go_boundary_error =
+  adapters.resolve_boundaries("go", go_fixture, vim.fs.dirname(go_fixture), {})
+assert(go_boundaries, "Go boundary resolution failed: " .. tostring(go_boundary_error))
+local go_boundary = go_boundaries[1]
 equal(go_boundary.id, "go-package:example.com/project")
 equal(go_boundary.class, "language")
+equal(go_boundary.level, "package")
 equal(go_boundary.kind_name, "Go package")
 equal(go_boundary.name, "project")
 equal(go_boundary.import_keys, { "go-package:example.com/project" })
-equal(adapters.resolve_boundary("rust", go_fixture, fixture_root, {}), nil)
+local go_module = go_boundaries[2]
+equal(go_module.id, "go-module:example.com/project")
+equal(go_module.class, "build")
+equal(go_module.level, "module")
+equal(go_module.kind_name, "Go module")
+equal(go_module.name, "example.com/project")
+equal(go_module.representative_path, vim.fs.joinpath(fixture_root, "go.mod"))
+equal(adapters.resolve_boundaries("rust", go_fixture, fixture_root, {}), nil)
 equal(adapters.get("rust").treesitter.symbol_types.impl_item, "Implementation")
 equal(adapters.get("rust").treesitter.symbol_types.field_declaration, "Field")
 equal(adapters.get("rust").treesitter.symbol_types.function_signature_item, "Method")
@@ -431,13 +440,13 @@ local invalid_static_specs = {
   },
   {
     id = "invalid_boundary_field",
-    spec = { boundary = { resolve = function() end, fallback = "directory" } },
-    error = "unsupported boundary adapter field: fallback",
+    spec = { boundaries = { resolve = function() end, fallback = "directory" } },
+    error = "unsupported boundaries adapter field: fallback",
   },
   {
     id = "invalid_boundary_resolver",
-    spec = { boundary = { resolve = true } },
-    error = "boundary adapters require a resolve function",
+    spec = { boundaries = { resolve = true } },
+    error = "boundaries adapters require a resolve function",
   },
   {
     id = "invalid_presentation_field",
@@ -461,21 +470,24 @@ for _, invalid in ipairs(invalid_static_specs) do
 end
 
 adapters.register("broken_boundary", {
-  boundary = {
+  boundaries = {
     resolve = function()
       return {
-        id = "broken:value",
-        name = "broken",
-        kind_name = "Broken package",
-        path = "/workspace/broken",
-        class = "language",
-        representative_path = 42,
+        {
+          id = "broken:value",
+          name = "broken",
+          kind_name = "Broken package",
+          level = "package",
+          path = "/workspace/broken",
+          class = "language",
+          representative_path = 42,
+        },
       }
     end,
   },
 })
 local _, boundary_error =
-  adapters.resolve_boundary("broken_boundary", "/workspace/broken/source", "/workspace", {})
+  adapters.resolve_boundaries("broken_boundary", "/workspace/broken/source", "/workspace", {})
 assert(
   boundary_error
     and boundary_error:find("boundary representative_path must be a non-empty string", 1, true),

@@ -230,17 +230,19 @@ ArchLens debounces cursor movement, ignores repeated positions within the same
 symbol, and does not add automatic changes to navigation history. Press `f`,
 `<BS>`, or `h` to return to pinned exploration.
 
-### Move between symbol and package context
+### Move between symbol, package, and module context
 
-When a language adapter resolves a real language or build boundary, the focus
-hierarchy shows that boundary instead of repeating the source path. Press `f`
-on it to analyze the boundary, `<CR>` to open its representative source file,
-or `?` to inspect its identity and evidence.
+When a language adapter resolves real language or build boundaries, the focus
+hierarchy shows only the immediate enclosing boundary instead of repeating the
+source path. Press `f` on it to move outward one level, `<CR>` to open its
+representative file, or `?` to inspect its identity, parent, and evidence.
 
-Go package context is the first supported boundary. Its stable identity is the
-import path derived from the nearest `go.mod` module path and the source
-directory. ArchLens does not infer packages from directories for languages
-without an adapter-provided boundary.
+Go package and module contexts are the first supported boundary chain. Package
+identity combines the nearest `go.mod` module path with the source directory;
+module identity uses the declared module path. Symbol focus shows its package,
+and package focus reveals its module without crowding the symbol overview.
+ArchLens does not infer packages from directories for languages without
+adapter-provided boundaries.
 
 ### Evaluate relationship evidence
 
@@ -339,8 +341,8 @@ adapter registry. Built-in adapters are in
 [`lua/archlens/adapters/`](lua/archlens/adapters/).
 
 An adapter maps Neovim filetypes to a canonical language. It can define
-Tree-sitter symbols, project root markers, module analysis, a language or build
-boundary, an ast-grep language and query, and relationship presentation.
+Tree-sitter symbols, project root markers, module analysis, language and build
+boundaries, an ast-grep language and query, and relationship presentation.
 
 Register an adapter before you open ArchLens:
 
@@ -356,11 +358,13 @@ require("archlens.adapters").register("zig", {
 })
 ```
 
-The optional `boundary.resolve(path, root, context)` hook returns `nil` when no
-authoritative boundary exists. Otherwise it returns a stable `id`, concise
-`name`, `kind_name`, `path`, and `class` (`"language"` or `"build"`). It can
-also provide `representative_path`, import-matching `import_keys`, and an
-evidence record. ArchLens uses this contract for focus, navigation, and
+The optional `boundaries.resolve(path, root, context)` hook returns `nil` when
+no authoritative boundary exists. Otherwise it returns a non-empty inside-out
+list, such as package then module. Each entry provides a stable `id`, concise
+`name`, `kind_name`, `path`, `level` (`"package"`, `"module"`, or
+`"workspace"`), and `class` (`"language"` or `"build"`). Entries can also
+provide `representative_path`, import-matching `import_keys`, and an evidence
+record. ArchLens uses this contract for progressive focus, navigation, and
 boundary-level aggregation; it does not substitute a directory heuristic.
 
 The optional `presentation.section(context, relation, row)` and

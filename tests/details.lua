@@ -199,6 +199,7 @@ local boundary_lines = details.lines({
     name = "internal/service",
     kind_name = "Go package",
     boundary_class = "language",
+    boundary_level = "package",
     boundary_id = "go-package:example.com/project/internal/service",
     boundary_path = "/workspace/internal/service",
     path = "/workspace/internal/service/service.go",
@@ -207,12 +208,17 @@ local boundary_lines = details.lines({
       method = "go.mod/package",
       class = "semantic",
     },
+    enclosing_boundaries = {
+      { name = "example.com/project", kind_name = "Go module" },
+    },
   },
 }, model)
 assert(contains(boundary_lines, "Go package"))
 assert(contains(boundary_lines, "Name        internal/service"))
+assert(contains(boundary_lines, "Level       Package"))
 assert(contains(boundary_lines, "Class       Language"))
 assert(contains(boundary_lines, "Identity    go-package:example.com/project/internal/service"))
+assert(contains(boundary_lines, "Parent      example.com/project (Go module)"))
 assert(contains(boundary_lines, "Path        internal/service"))
 assert(contains(boundary_lines, "Opens       internal/service/service.go"))
 assert(contains(boundary_lines, "Provider    Go adapter"))

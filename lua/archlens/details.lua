@@ -237,8 +237,14 @@ local function boundary_lines(boundary, model)
   local title = boundary.kind_name or "Boundary"
   local lines = { title, string.rep("─", math.min(vim.fn.strchars(title), 24)) }
   append(lines, "Name", boundary.name)
+  local levels = { module = "Module", package = "Package", workspace = "Workspace" }
+  append(lines, "Level", levels[boundary.boundary_level] or boundary.boundary_level)
   append(lines, "Class", boundary.boundary_class == "build" and "Build" or "Language")
   append(lines, "Identity", boundary.boundary_id)
+  local parent = boundary.enclosing_boundaries and boundary.enclosing_boundaries[1]
+  if parent then
+    append(lines, "Parent", string.format("%s (%s)", parent.name, parent.kind_name or "Boundary"))
+  end
   local root = model and model.focus and model.focus.root_dir
   local boundary_path = boundary.boundary_path
   if boundary_path and root then

@@ -106,18 +106,21 @@ ArchLens debounces cursor movement, ignores repeated positions within the same
 symbol, and does not add automatic focus changes to history. Manual focus and
 back navigation return to pinned mode.
 
-PACKAGE CONTEXT ~
+BOUNDARY CONTEXT ~
 
-When an adapter resolves a real language or build boundary, the focus
-hierarchy shows that boundary instead of the raw source path. Press `f` on the
-boundary to analyze it, `<CR>` to open its representative source file, or `?`
-to inspect its stable identity and evidence.
+When an adapter resolves real language or build boundaries, the focus hierarchy
+shows only the immediate enclosing boundary instead of the raw source path.
+Press `f` on the boundary to move outward one level, `<CR>` to open its
+representative file, or `?` to inspect its stable identity, parent, and
+evidence.
 
-Go package context is the first supported boundary. The Go adapter derives its
-identity from the nearest `go.mod` module path and the source directory. A Go
-package focus aggregates project-local dependencies and dependents across the
-visible files assigned to that package. External targets remain summarized;
-ArchLens does not synthesize package rows for them.
+Go package and module contexts are the first supported boundary chain. The Go
+adapter derives package identity from the nearest `go.mod` module path and the
+source directory; module identity uses the declared module path. Symbol focus
+shows its package, and package focus reveals its module. A package focus
+aggregates project-local dependencies and dependents across its visible files.
+External targets remain summarized; ArchLens does not synthesize package rows
+for them.
 
 ArchLens does not treat directories as packages when a language adapter cannot
 provide an authoritative boundary.
@@ -383,7 +386,7 @@ press `?` on the pane's `Analysis` or `Results` line.
 LANGUAGE ADAPTERS                                          *archlens-adapters*
 
 Language adapters define Tree-sitter symbols, project root markers, module
-analysis, language or build boundaries, relationship presentation, and
+analysis, language and build boundaries, relationship presentation, and
 ast-grep behavior.
 
 Register an adapter before you open ArchLens: >lua
@@ -399,11 +402,13 @@ Register an adapter before you open ArchLens: >lua
     })
 <
 
-The optional `boundary.resolve(path, root, context)` hook returns `nil` when no
-authoritative boundary exists. Otherwise it returns a stable `id`, concise
-`name`, `kind_name`, `path`, and a `class` of `"language"` or `"build"`. It may
-also return `representative_path`, import-matching `import_keys`, and an
-evidence record. ArchLens uses this identity for focus, navigation, and
+The optional `boundaries.resolve(path, root, context)` hook returns `nil` when
+no authoritative boundary exists. Otherwise it returns a non-empty inside-out
+list, such as package then module. Each entry provides a stable `id`, concise
+`name`, `kind_name`, `path`, a `level` of `"package"`, `"module"`, or
+`"workspace"`, and a `class` of `"language"` or `"build"`. It may also return
+`representative_path`, import-matching `import_keys`, and an evidence record.
+ArchLens uses these identities for progressive focus, navigation, and
 boundary-level aggregation. It does not fall back to treating a directory as
 a package.
 

@@ -30,15 +30,17 @@ ArchLens should move between local code and larger contexts only when a
 language or build system provides a real identity. Directories are not treated
 as packages by default.
 
-The first vertical slice is Go package context. The Go adapter derives package
-identity from the nearest `go.mod` module path and the source directory. A
-symbol view shows only its immediate package in the existing focus hierarchy;
-focusing that row replaces symbol relationships with package dependencies and
-dependents aggregated across visible package files.
+The first vertical slice is a Go package and module boundary chain. The Go
+adapter derives package identity from the nearest `go.mod` module path and the
+source directory, and module identity from the declared module path. A symbol
+view shows only its immediate package in the existing focus hierarchy;
+focusing that row reveals its module and replaces symbol relationships with
+package dependencies and dependents aggregated across visible package files.
 
 Next steps may include:
 
-- A build-level Go module boundary above package focus
+- Build-aware Go package facts and module dependency aggregation
+- A `go.work` workspace boundary above module focus
 - Package or module identities for other ecosystems with authoritative metadata
 - Test and configuration relationships at boundary level
 - Optional project-specific boundary annotations without assuming one

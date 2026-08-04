@@ -1054,30 +1054,62 @@ local function run()
     children = {},
     siblings = {},
   }
-  context.enclosing_boundary = {
-    name = "internal/controller",
-    kind = vim.lsp.protocol.SymbolKind.Package,
-    kind_name = "Go package",
+  local go_module_boundary = {
+    name = "example.com/workspace",
+    kind = vim.lsp.protocol.SymbolKind.Module,
+    kind_name = "Go module",
     scope = "boundary",
     root_dir = context.root_dir,
     location = {
-      uri = context.location.uri,
+      uri = "file:///workspace/go.mod",
       range = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 0 } },
     },
-    path = context.path,
-    path_label = context.path_label,
+    path = "/workspace/go.mod",
+    path_label = "go.mod",
     language = "go",
     is_boundary = true,
     module_context = true,
     preserve_file_identity = true,
-    boundary_id = "go-package:example.com/workspace/internal/controller",
-    boundary_class = "language",
-    boundary_path = "/workspace/internal/controller",
-    boundary_keys = { "go-package:example.com/workspace/internal/controller" },
+    enclosing_boundaries = {},
+    boundary_id = "go-module:example.com/workspace",
+    boundary_class = "build",
+    boundary_level = "module",
+    boundary_path = "/workspace",
+    boundary_keys = {},
     boundary_evidence = {
       provider = "Go adapter",
-      method = "go.mod/package",
+      method = "go.mod/module",
       class = "semantic",
+    },
+  }
+  context.enclosing_boundaries = {
+    {
+      name = "internal/controller",
+      kind = vim.lsp.protocol.SymbolKind.Package,
+      kind_name = "Go package",
+      scope = "boundary",
+      root_dir = context.root_dir,
+      location = {
+        uri = context.location.uri,
+        range = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 0 } },
+      },
+      path = context.path,
+      path_label = context.path_label,
+      language = "go",
+      is_boundary = true,
+      module_context = true,
+      preserve_file_identity = true,
+      enclosing_boundaries = { go_module_boundary },
+      boundary_id = "go-package:example.com/workspace/internal/controller",
+      boundary_class = "language",
+      boundary_level = "package",
+      boundary_path = "/workspace/internal/controller",
+      boundary_keys = { "go-package:example.com/workspace/internal/controller" },
+      boundary_evidence = {
+        provider = "Go adapter",
+        method = "go.mod/package",
+        class = "semantic",
+      },
     },
   }
 
@@ -1089,12 +1121,28 @@ local function run()
     contains(rendered.lines, "└─ internal/controller  Go package"),
     "the immediate language boundary should replace the raw source path"
   )
+  assert(
+    not contains(rendered.lines, "└─ example.com/workspace  Go module"),
+    "symbol focus should keep outer build boundaries out of the compact hierarchy"
+  )
   assert(contains(rendered.lines, "└─ Reconcile  Method"), "focus hierarchy should render")
   assert(
     contains(rendered.lines, "reconcile.go:11"),
     "boundary context should shorten the file label"
   )
   assert(contains(rendered.lines, "… 1 more"), "bounded sections should expose omitted rows")
+  local package_model = vim.deepcopy(mapped)
+  package_model.focus = context.enclosing_boundaries[1]
+  package_model.sections = {}
+  local package_rendered = render.build(package_model, { width = 56 })
+  assert(
+    contains(package_rendered.lines, "└─ example.com/workspace  Go module"),
+    "package focus should reveal its immediate module parent"
+  )
+  assert(
+    contains(package_rendered.lines, "   └─ internal/controller  Go package"),
+    "package focus should remain visible below its module"
+  )
   local collapsed = render.build(mapped, {
     width = 56,
     max_items = 2,

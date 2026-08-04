@@ -634,17 +634,18 @@ local function run()
   importer_callbacks[6](graph.delta())
   structural_callbacks[6](structural_delta(semantic_implementation, {}, true))
 
-  local module_context = vim.deepcopy(base_context)
-  module_context.name = "example.module"
-  module_context.module_context = true
-  module_context.is_boundary = true
-  module_context.scope = "boundary"
-  module_context.boundary_id = "go-package:example.module"
-  module_context.boundary_keys = { "go-package:example.module" }
-  module_context.import_filetype = "go"
-  module_context.location = location(3)
-  module_context.supports_calls = false
-  archlens.focus({ context = module_context, location = module_context.location })
+  local package_context = vim.deepcopy(base_context)
+  package_context.name = "example.module"
+  package_context.module_context = true
+  package_context.is_boundary = true
+  package_context.scope = "boundary"
+  package_context.boundary_id = "go-package:example.module"
+  package_context.boundary_level = "package"
+  package_context.boundary_keys = { "go-package:example.module" }
+  package_context.import_filetype = "go"
+  package_context.location = location(3)
+  package_context.supports_calls = false
+  archlens.focus({ context = package_context, location = package_context.location })
   assert_equal(
     #relationship_callbacks,
     6,

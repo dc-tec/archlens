@@ -169,12 +169,14 @@ assert(vim.tbl_contains(rendered.lines, "  for pkg"), "the module anchor should 
 
 local adapters = require("archlens.adapters")
 local boundaries = require("archlens.boundaries")
-local root_boundary = assert(adapters.resolve_boundary("go", consumer, project, context))
-local root_context = boundaries.context({
+local root_boundaries = assert(adapters.resolve_boundaries("go", consumer, project, context))
+local root_context = boundaries.contexts({
   root_dir = project,
   path = consumer,
   language = "go",
-}, root_boundary)
+}, root_boundaries)[1]
+equal(root_context.boundary_level, "package")
+equal(root_context.enclosing_boundaries[1].boundary_id, "go-module:example.test/project")
 local package_dependencies
 index.dependencies(root_context, bufnr, options, function(value)
   package_dependencies = value
@@ -201,12 +203,12 @@ assert(
   "external package targets should be summarized instead of becoming synthetic rows"
 )
 
-local target_boundary = assert(adapters.resolve_boundary("go", target, project, context))
-local target_context = boundaries.context({
+local target_boundaries = assert(adapters.resolve_boundaries("go", target, project, context))
+local target_context = boundaries.contexts({
   root_dir = project,
   path = target,
   language = "go",
-}, target_boundary)
+}, target_boundaries)[1]
 local package_dependents
 index.dependents(target_context, bufnr, options, function(value)
   package_dependents = value

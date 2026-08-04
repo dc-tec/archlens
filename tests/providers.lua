@@ -269,7 +269,7 @@ config.imports = {
   inbound = { enabled = true },
 }
 local boundary_symbol = vim.deepcopy(context)
-boundary_symbol.enclosing_boundary = { boundary_id = "go-package:example.test/project" }
+boundary_symbol.enclosing_boundaries = { { boundary_id = "go-package:example.test/project" } }
 equal(
   registered.imports.enabled(boundary_symbol, bufnr, config),
   false,
@@ -287,9 +287,15 @@ config.imports.show_on_symbols = false
 local boundary_context = vim.deepcopy(context)
 boundary_context.is_boundary = true
 boundary_context.module_context = true
+boundary_context.boundary_level = "package"
 boundary_context.boundary_keys = { "go-package:example.test/project" }
 equal(registered.imports.enabled(boundary_context, bufnr, config), true)
 equal(registered.importers.enabled(boundary_context, bufnr, config), true)
+local module_boundary = vim.deepcopy(boundary_context)
+module_boundary.boundary_level = "module"
+module_boundary.boundary_keys = {}
+equal(registered.imports.enabled(module_boundary, bufnr, config), false)
+equal(registered.importers.enabled(module_boundary, bufnr, config), false)
 supports_imports = false
 config.imports = { enabled = false, inbound = { enabled = false } }
 local duplicate_ok = pcall(providers.register, "custom", {})

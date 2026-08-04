@@ -26,7 +26,7 @@ local M = {}
 ---@field query? function
 ---@field unsupported_note? string
 
----@class ArchLensBoundaryAdapter
+---@class ArchLensBoundariesAdapter
 ---@field resolve function
 
 ---@class ArchLensAdapterSpec
@@ -34,7 +34,7 @@ local M = {}
 ---@field filename_extensions? string[]
 ---@field treesitter? ArchLensTreeSitterAdapter
 ---@field ast_grep? ArchLensAstGrepAdapter
----@field boundary? ArchLensBoundaryAdapter
+---@field boundaries? ArchLensBoundariesAdapter
 ---@field configuration? function
 ---@field presentation? { row?: function, section?: function }
 
@@ -87,7 +87,7 @@ local default_name_node_types = common.name_node_types()
 
 local adapter_fields = {
   ast_grep = true,
-  boundary = true,
+  boundaries = true,
   configuration = true,
   filename_extensions = true,
   filetypes = true,
@@ -132,6 +132,7 @@ local boundary_value_fields = {
   id = true,
   import_keys = true,
   kind_name = true,
+  level = true,
   name = true,
   path = true,
   representative_path = true,
@@ -320,12 +321,12 @@ local function normalize(language, adapter)
       )
     end
   end
-  if normalized.boundary ~= nil then
-    assert(type(normalized.boundary) == "table", "adapter boundary must be a table")
-    validate_fields(normalized.boundary, boundary_fields, "boundary adapter")
+  if normalized.boundaries ~= nil then
+    assert(type(normalized.boundaries) == "table", "adapter boundaries must be a table")
+    validate_fields(normalized.boundaries, boundary_fields, "boundaries adapter")
     assert(
-      type(normalized.boundary.resolve) == "function",
-      "boundary adapters require a resolve function"
+      type(normalized.boundaries.resolve) == "function",
+      "boundaries adapters require a resolve function"
     )
   end
   if normalized.configuration ~= nil then
@@ -444,9 +445,9 @@ end
 
 ---@param language string
 ---@return boolean
-function M.supports_boundary(language)
+function M.supports_boundaries(language)
   local adapter = registry[language]
-  return adapter ~= nil and adapter.boundary ~= nil
+  return adapter ~= nil and adapter.boundaries ~= nil
 end
 
 local function valid_evidence(value)
@@ -457,11 +458,15 @@ local function valid_evidence(value)
 end
 
 local function validate_boundary(value)
-  assert(type(value) == "table", "boundary resolver must return a table or nil")
+  assert(type(value) == "table", "boundary descriptors must be tables")
   validate_fields(value, boundary_value_fields, "boundary descriptor")
-  for _, field in ipairs({ "id", "name", "kind_name", "path" }) do
+  for _, field in ipairs({ "id", "name", "kind_name", "level", "path" }) do
     assert(nonempty_string(value[field]), "boundary " .. field .. " must be a non-empty string")
   end
+  assert(
+    value.level == "package" or value.level == "module" or value.level == "workspace",
+    "boundary level must be package, module, or workspace"
+  )
   assert(
     value.class == "language" or value.class == "build",
     "boundary class must be language or build"
@@ -477,24 +482,41 @@ local function validate_boundary(value)
   return vim.deepcopy(value)
 end
 
+local function validate_boundaries(value)
+  assert(
+    type(value) == "table" and vim.islist(value),
+    "boundaries resolver must return a list or nil"
+  )
+  assert(#value > 0, "boundaries resolver must return a non-empty list or nil")
+  local normalized = {}
+  local seen = {}
+  for index, boundary in ipairs(value) do
+    local validated = validate_boundary(boundary)
+    assert(not seen[validated.id], "boundary ids must be unique within a resolved chain")
+    seen[validated.id] = true
+    normalized[index] = validated
+  end
+  return normalized
+end
+
 ---@param language string
 ---@param path string
 ---@param root? string
 ---@param context table
 ---@return table?
 ---@return string? error
-function M.resolve_boundary(language, path, root, context)
+function M.resolve_boundaries(language, path, root, context)
   local adapter = registry[language]
-  local resolver = adapter and adapter.boundary and adapter.boundary.resolve
+  local resolver = adapter and adapter.boundaries and adapter.boundaries.resolve
   if not resolver then
     return nil
   end
-  return call_hook(language, "boundary resolution", function()
+  return call_hook(language, "boundaries resolution", function()
     local value = resolver(path, root, vim.deepcopy(context))
     if value == nil then
       return nil
     end
-    return validate_boundary(value)
+    return validate_boundaries(value)
   end)
 end
 

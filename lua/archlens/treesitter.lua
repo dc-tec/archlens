@@ -285,10 +285,10 @@ function M.resolve(bufnr, position, base_context)
   local fallback_context
   if base_context then
     fallback_context = vim.deepcopy(base_context)
-    fallback_context.language = language
     if fallback_context.is_boundary then
       return fallback_context
     end
+    fallback_context.language = language
   end
   local adapter = adapters.get(language)
   if not adapter or not adapter.treesitter then

@@ -14,7 +14,13 @@ local function add_issue(context, issue)
   context.adapter_issues[#context.adapter_issues + 1] = issue
 end
 
-function M.context(source, boundary)
+local symbol_kinds = {
+  module = vim.lsp.protocol.SymbolKind.Module,
+  package = vim.lsp.protocol.SymbolKind.Package,
+  workspace = vim.lsp.protocol.SymbolKind.Namespace,
+}
+
+function M.context(source, boundary, enclosing_boundaries)
   local representative = boundary.representative_path or source.path or boundary.path
   local location = {
     uri = vim.uri_from_fname(representative),
@@ -25,7 +31,7 @@ function M.context(source, boundary)
   return {
     id = boundary.id,
     name = boundary.name,
-    kind = vim.lsp.protocol.SymbolKind.Package,
+    kind = symbol_kinds[boundary.level] or vim.lsp.protocol.SymbolKind.Namespace,
     kind_name = boundary.kind_name,
     scope = "boundary",
     root_dir = source.root_dir,
@@ -39,18 +45,35 @@ function M.context(source, boundary)
     is_boundary = true,
     module_context = true,
     preserve_file_identity = true,
+    enclosing_boundaries = vim.deepcopy(enclosing_boundaries or {}),
     boundary_id = boundary.id,
     boundary_class = boundary.class,
+    boundary_level = boundary.level,
     boundary_path = vim.fs.normalize(boundary.path),
     boundary_keys = vim.deepcopy(boundary.import_keys or {}),
     boundary_evidence = vim.deepcopy(boundary.evidence),
   }
 end
 
+---@param source table
+---@param resolved table[]
+---@return table[]
+function M.contexts(source, resolved)
+  local contexts = {}
+  for index = #resolved, 1, -1 do
+    local enclosing = {}
+    for outer = index + 1, #resolved do
+      enclosing[#enclosing + 1] = contexts[outer]
+    end
+    contexts[index] = M.context(source, resolved[index], enclosing)
+  end
+  return contexts
+end
+
 ---@param context table
 ---@return table
 function M.attach(context)
-  if not context or context.is_boundary or context.enclosing_boundary then
+  if not context or context.is_boundary or context.enclosing_boundaries then
     return context
   end
   local path = context.path
@@ -62,12 +85,12 @@ function M.attach(context)
     return context
   end
 
-  local boundary, err =
-    adapters.resolve_boundary(context.language, vim.fs.normalize(path), context.root_dir, context)
+  local resolved, err =
+    adapters.resolve_boundaries(context.language, vim.fs.normalize(path), context.root_dir, context)
   if err then
     add_issue(context, err)
-  elseif boundary then
-    context.enclosing_boundary = M.context(context, boundary)
+  elseif resolved then
+    context.enclosing_boundaries = M.contexts(context, resolved)
   end
   return context
 end

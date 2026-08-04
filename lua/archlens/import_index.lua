@@ -591,7 +591,7 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         local last = math.min(#files, cursor + options.batch_size - 1)
         for file_index = cursor, last do
           local file = files[file_index]
-          if adapters.supports_boundary(file.spec.language) then
+          if adapters.supports_boundaries(file.spec.language) then
             local member_keys, member_key_error, member_key_failure =
               target_keys(file.spec.language, file.spec.imports, file.path, root)
             if member_key_failure and member_key_error then
@@ -691,20 +691,26 @@ local function boundary_context(index, context, key, issues)
   if not member then
     return nil
   end
-  local boundary, err =
-    adapters.resolve_boundary(member.language, member.path, context.root_dir, context)
+  local resolved, err =
+    adapters.resolve_boundaries(member.language, member.path, context.root_dir, context)
   if err then
     issues[err] = true
     return nil
   end
-  if not boundary then
+  if not resolved then
     return nil
   end
-  return boundaries.context({
+  local contexts = boundaries.contexts({
     root_dir = context.root_dir,
     path = member.path,
     language = member.language,
-  }, boundary)
+  }, resolved)
+  for index, boundary in ipairs(resolved) do
+    if boundary.id == key or vim.tbl_contains(boundary.import_keys or {}, key) then
+      return contexts[index]
+    end
+  end
+  return nil
 end
 
 local function add_boundary_issues(result, issues)

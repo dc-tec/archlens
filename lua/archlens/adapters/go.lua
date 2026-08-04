@@ -138,7 +138,7 @@ local function site_keys(site)
   return { "go-package:" .. site.name }
 end
 
-local function resolve_boundary(path, root)
+local function resolve_boundaries(path, root)
   local module_name, module_root = module(path, root)
   if not module_name then
     return nil
@@ -152,17 +152,34 @@ local function resolve_boundary(path, root)
   local name = relative and relative ~= "." and relative:gsub("\\", "/")
     or vim.fs.basename(module_name)
   return {
-    id = "go-package:" .. import_path,
-    class = "language",
-    kind_name = "Go package",
-    name = name,
-    path = directory,
-    representative_path = path,
-    import_keys = { "go-package:" .. import_path },
-    evidence = {
-      provider = "Go adapter",
-      method = "go.mod/package",
-      class = "semantic",
+    {
+      id = "go-package:" .. import_path,
+      class = "language",
+      level = "package",
+      kind_name = "Go package",
+      name = name,
+      path = directory,
+      representative_path = path,
+      import_keys = { "go-package:" .. import_path },
+      evidence = {
+        provider = "Go adapter",
+        method = "go.mod/package",
+        class = "semantic",
+      },
+    },
+    {
+      id = "go-module:" .. module_name,
+      class = "build",
+      level = "module",
+      kind_name = "Go module",
+      name = module_name,
+      path = module_root,
+      representative_path = vim.fs.joinpath(module_root, "go.mod"),
+      evidence = {
+        provider = "Go adapter",
+        method = "go.mod/module",
+        class = "semantic",
+      },
     },
   }
 end
@@ -215,7 +232,7 @@ function M.clear_cache()
 end
 
 M.spec = {
-  boundary = { resolve = resolve_boundary },
+  boundaries = { resolve = resolve_boundaries },
   configuration = configuration,
   presentation = {
     row = row_presentation,

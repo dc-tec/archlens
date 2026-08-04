@@ -62,7 +62,7 @@ local function location_label(row)
 end
 
 local function focus_location_label(focus)
-  local boundary = focus.enclosing_boundary
+  local boundary = focus.enclosing_boundaries and focus.enclosing_boundaries[1]
   if boundary and boundary.boundary_path and focus.path then
     local relative = vim.fs.relpath(boundary.boundary_path, focus.path)
     if relative and relative ~= "." then
@@ -224,7 +224,7 @@ function M.build(model, opts)
     local root_label = focus.root_dir and vim.fs.basename(focus.root_dir) or "workspace"
     add(root_label, nil, "Directory")
     local depth = 0
-    local boundary = focus.is_boundary and focus or focus.enclosing_boundary
+    local boundary = focus.enclosing_boundaries and focus.enclosing_boundaries[1]
     if boundary then
       local boundary_label =
         string.format("%s  %s", boundary.name, boundary.kind_name or "Boundary")
@@ -237,7 +237,7 @@ function M.build(model, opts)
         },
       }, "Identifier", { boundary = boundary })
       depth = 1
-    elseif focus.path_label and focus.path_label ~= "" then
+    elseif not focus.is_boundary and focus.path_label and focus.path_label ~= "" then
       add("└─ " .. focus.path_label, nil, "Directory")
       depth = 1
     end
@@ -256,7 +256,17 @@ function M.build(model, opts)
       depth = depth + 1
     end
 
-    if not focus.is_boundary then
+    if focus.is_boundary then
+      local focus_label = string.format("%s  %s", focus.name, focus.kind_name or "Boundary")
+      add(string.rep("   ", depth) .. "└─ " .. focus_label, {
+        action = "open",
+        row = {
+          id = focus.boundary_id,
+          location = focus.location,
+          context = focus,
+        },
+      }, "Identifier", { boundary = focus })
+    else
       local focus_label = string.format("%s  %s", focus.name, focus.kind_name or "Symbol")
       add(string.rep("   ", depth) .. "└─ " .. focus_label, {
         action = "open",

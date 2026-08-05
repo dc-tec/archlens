@@ -216,7 +216,7 @@ function M.build(model, opts)
   end
   if model.cursor_follow then
     local scope = model.cursor_follow_scope
-    local label = scope and scope ~= "symbol" and "Following source " .. scope
+    local label = scope and scope ~= "symbol" and "Following " .. scope .. " at source cursor"
       or "Following source cursor"
     if scope and scope ~= "symbol" then
       label = label .. " · gs symbol"

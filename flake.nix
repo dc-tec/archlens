@@ -1,5 +1,5 @@
 {
-  description = "Human-first architectural relationship lens for Neovim";
+  description = "Contextual code relationships for Neovim";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -47,7 +47,7 @@
             version = "0.2.0-dev";
             src = archlensSource;
             meta = {
-              description = "Human-first architectural relationship lens for Neovim";
+              description = "Contextual code relationships for Neovim";
               homepage = "https://github.com/dc-tec/archlens.nvim";
               license = lib.licenses.asl20;
               platforms = [ system ];

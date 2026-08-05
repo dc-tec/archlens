@@ -274,41 +274,26 @@ interfaces, and concrete implementations.
 
 ![ArchLens exploring Go type relationships and following the source cursor](docs/assets/archlens-demo.gif)
 
-For an ordinary symbol without a supported boundary, module dependencies come
-from bounded import sites in the focused file and module dependents come from a
-bounded in-memory project scan. A Go package focus instead asks `go list` which
-project-local packages are active production dependencies and dependents for
-the current build. It merges exact Tree-sitter import sites from active Go and
-cgo files into those edges. Imports used only by internal or external tests
-appear separately under `Test dependencies` and `Test dependents`; packages
-already connected through production code are not duplicated there. Ignored
-and syntax-only imports do not become build-authoritative edges. If the Go tool
-is unavailable, fails, or exceeds its bound, ArchLens retains the Tree-sitter
-package view, classifies `_test.go` import sites separately, and explains the
-fallback. External dependency targets remain summarized rather than becoming
-synthetic package rows.
+For an ordinary symbol without a supported boundary, ArchLens derives module
+relationships from the focused file and a bounded project search. A Go package
+view instead uses the active Go build configuration to show production
+dependencies and dependents. Imports used only by tests appear separately
+under `Test dependencies` and `Test dependents`.
 
-The Go scan currently covers the focused module. A `go.work` file is supported
-as build context, but other workspace modules are not yet aggregated into the
-package graph.
+If Go build information is unavailable or incomplete, ArchLens retains
+syntax-derived package relationships and explains the limitation. It summarizes
+external dependencies instead of creating package rows for code outside the
+project.
 
-At module focus, ArchLens aggregates production package imports that cross
-between active Go workspace modules. This keeps one module row per real build
-boundary and records how many package edges support it. It does not turn every
-external `go.mod` requirement into an architectural row. A single-module
-project therefore has no peer module relationships to invent.
+Package analysis covers the focused module. A module view summarizes production
+relationships between active modules in the Go workspace. A workspace view
+shows its active member modules, including explicit members outside the
+workspace directory. These views do not repeat the complete package graph or
+list every external requirement.
 
-At workspace focus, ArchLens uses `go list -m` to show the bounded set of active
-workspace modules. Explicit `go.work` members remain visible even when they
-live outside the workspace directory or project root. Workspace focus does not
-repeat the complete module dependency graph or expose external requirements.
-
-The package scan is cached while you navigate and rebuilt when you refresh the
-pane. It does not write an index to disk or start language servers for scanned
-files. Vendored, generated, and explicitly excluded paths are removed during
-discovery so they do not consume the project source budget. To keep symbol
-views compact, their file-level module sections are hidden when a real
-enclosing boundary is available. Set
+ArchLens performs package analysis on demand. It does not write an index to disk
+or start additional language servers. By default, symbol views hide file-level
+module sections when an enclosing boundary is available. Set
 `imports.show_on_symbols = true` to retain those sections.
 
 ![ArchLens relationship evidence for a Rust reference](docs/assets/relationship-details.png)
@@ -374,11 +359,8 @@ group detection, and `ast_grep.max_results` and
 
 ## Add language support
 
-[`lua/archlens/adapters.lua`](lua/archlens/adapters.lua) manages the language
-adapter registry. Built-in adapters are in
-[`lua/archlens/adapters/`](lua/archlens/adapters/).
-
-An adapter maps Neovim filetypes to a canonical language. It can define
+Register language adapters through `require("archlens.adapters")`. An adapter
+maps Neovim filetypes to a canonical language. It can define
 Tree-sitter symbols, project root markers, module analysis, language and build
 boundaries, an ast-grep language and query, and relationship presentation.
 
@@ -397,23 +379,27 @@ require("archlens.adapters").register("zig", {
 ```
 
 The optional `boundaries.resolve(path, root, context)` hook returns `nil` when
-no authoritative boundary exists. Otherwise it returns a non-empty inside-out
-list, such as target, package, then workspace. The adapter-defined list order
-is the hierarchy; `level` is an opaque lowercase identifier rather than a
-fixed universal taxonomy. Each entry provides a stable `id`, concise `name`,
-`kind_name`, `path`, `level`, and `class` (`"language"` or `"build"`). Entries
-can also provide `representative_path`, import-matching `import_keys`, an LSP
-`symbol_kind`, and an evidence record.
+no authoritative boundary exists. Otherwise, return a non-empty list from the
+innermost boundary outward, such as target, package, then workspace. The list
+order defines the hierarchy. The `level` field is an opaque lowercase
+identifier rather than a fixed universal taxonomy.
 
-Adapters that require a build tool can additionally implement
+Each entry provides a stable `id`, concise `name`, `kind_name`, `path`, `level`,
+and `class` (`"language"` or `"build"`). Entries can also provide
+`representative_path`, import-matching `import_keys`, an LSP `symbol_kind`, and
+an evidence record.
+
+If boundary discovery requires a build tool, implement
 `boundaries.discover(path, root, context, done)`. ArchLens keeps the source
-symbol usable while discovery runs, then refreshes its boundary hierarchy when
-`done(boundaries, outcome)` completes. Discovery must return a cancellation
-function and is bounded by `boundaries.timeout_ms`. An optional
-`boundaries.clear_cache()` hook participates in manual refresh. The synchronous
-resolver remains useful for cheap or cached identities. ArchLens uses these
-contracts for progressive focus, navigation, and boundary-level aggregation;
-it does not substitute a directory heuristic.
+symbol usable until `done(boundaries, outcome)` completes. Discovery must
+return a cancellation function. ArchLens cancels it after
+`boundaries.timeout_ms`.
+Implement `boundaries.clear_cache()` when manual refresh must invalidate
+adapter state. The synchronous resolver remains useful for inexpensive or
+cached identities.
+
+ArchLens uses these contracts for progressive focus, navigation, and
+boundary-level aggregation. It does not infer a boundary from directory layout.
 
 The optional `presentation.section(context, relation, row)` and
 `presentation.row(context, relation, row)` hooks can adapt labels and concise
@@ -458,8 +444,8 @@ require("archlens.providers").register("ownership", {
 ```
 
 Register relationship types through
-[`lua/archlens/relations.lua`](lua/archlens/relations.lua). Store
-provider-specific options under `providers.<id>`.
+`require("archlens.relations").register()`. Store provider-specific options
+under `providers.<id>`.
 
 Providers that depend on an executable can expose it to
 `:checkhealth archlens` with `tools(buffer, config)`. Return requirements only
@@ -479,7 +465,7 @@ tools = function(buffer, config)
       command = options.command or "cargo",
       enabled = options.enabled ~= false,
       version_args = { "--version" },
-      unavailable_message = "Workspace relationships will be unavailable.",
+      unavailable_message = "Workspace relationships are unavailable.",
       version_label = "Cargo",
     },
   }
@@ -524,10 +510,9 @@ symbol.
 
 ## Develop ArchLens
 
-Relationship providers exchange graph deltas defined in
-[`lua/archlens/graph.lua`](lua/archlens/graph.lua). Relationship names,
-ordering, and directions are registered in
-[`lua/archlens/relations.lua`](lua/archlens/relations.lua).
+Relationship providers create graph deltas with `require("archlens.graph")`.
+Register relationship names, ordering, and directions through
+`require("archlens.relations")`.
 
 Run the package, unit, integration, formatting, and Lua static-analysis checks:
 

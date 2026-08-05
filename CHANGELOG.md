@@ -10,23 +10,21 @@ Notable user-facing changes to ArchLens are recorded here.
   workspace boundaries without treating directories as architecture.
 - Show bounded, build-aware package dependencies and dependents, including
   separate test-only relationships and workspace member modules.
-- Let language adapters discover arbitrary boundary chains asynchronously and
-  let relationship providers declare language-scoped executable health checks.
+- Add language-neutral extension points for build-boundary discovery and
+  build-tool health checks.
 
 ### Changed
 
 - Keep source-symbol analysis available while slower boundary discovery runs,
   and return from a boundary view to function or type focus when following
   source code.
-- Isolate built-in build integrations behind the provider registry so another
-  language does not require Go-specific core behavior.
 
 ### Fixed
 
-- Re-resolve package, module, and workspace identities on refresh after build
-  metadata changes.
-- Retain test-only Go packages as dependents and canonicalize quoted `go.mod`
-  module paths before forming boundary IDs.
+- Update package, module, and workspace context after build metadata changes
+  and a manual refresh.
+- Show test-only Go packages as dependents and recognize quoted module paths in
+  `go.mod`.
 
 ## [0.1.1] - 2026-08-05
 

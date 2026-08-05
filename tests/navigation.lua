@@ -472,7 +472,7 @@ local function run()
   assert(
     vim.tbl_contains(
       require("archlens.render").build(rendered[#rendered], { width = 56 }).lines,
-      "Following source package · gs symbol"
+      "Following package at source cursor · gs symbol"
     ),
     "the pane should identify package-follow mode"
   )

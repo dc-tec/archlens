@@ -10,7 +10,7 @@ languages.
 
 ## Principles
 
-- Start from the current symbol, file, or module.
+- Start from the current symbol or file, or from a language or build boundary.
 - Prioritize comprehension and navigation over graph completeness.
 - Keep analysis bounded and the editor responsive.
 - Show useful results while slower analysis continues.
@@ -30,21 +30,15 @@ ArchLens should move between local code and larger contexts only when a
 language or build system provides a real identity. Directories are not treated
 as packages by default.
 
-The first vertical slice is a Go package, module, and workspace boundary chain.
-The Go adapter derives package identity from the nearest `go.mod` module path
-and the source directory, module identity from the declared module path, and
-workspace identity from an effective `go.work` that explicitly uses the current
-module.
-A symbol view shows only its immediate package in the existing focus hierarchy;
-focusing outward reveals its module and then workspace. Go package focus uses
-bounded `go list` output as the authority for active production edges and
-separate test-only edges, and enriches both with exact Tree-sitter import sites
-from matching production or test files. When build analysis is unavailable,
-the source-derived package view remains available with `_test.go` relationships
-still classified separately. Module focus aggregates actual production package
-imports between active Go workspace modules, retaining one relationship per
-real module boundary rather than listing every external manifest requirement.
-Workspace focus exposes its bounded active member modules without repeating
+Go is the first language with a package, module, and workspace boundary chain.
+ArchLens uses `go.mod` and `go.work` metadata to identify each boundary.
+
+From a symbol, you can move outward to its package, module, and workspace.
+Package views distinguish production relationships from test-only relationships
+for the active build configuration. When build information is unavailable,
+ArchLens keeps syntax-derived relationships available and reports the
+limitation. Module views summarize production relationships between active
+workspace modules. Workspace views list active member modules without repeating
 their dependency graph.
 
 Next steps may include:
@@ -54,14 +48,11 @@ Next steps may include:
 - Optional project-specific boundary annotations without assuming one
   architectural style
 
-Each step should keep boundary resolution in language adapters, retain evidence
-for the identity, and preserve bounded on-demand analysis. Boundary chains use
-adapter-defined levels rather than assuming every ecosystem shares Go's
-package, module, and workspace vocabulary. Build tools may discover those
-chains asynchronously while the local symbol view remains usable. Built-in
-build integrations are isolated provider modules, and provider-declared tool
-requirements keep health reporting language-neutral and relevant to the
-current buffer.
+Future boundary support should use authoritative ecosystem metadata, retain
+identity evidence, and preserve bounded on-demand analysis. Each ecosystem can
+use its own boundary levels instead of adopting Go's vocabulary. Slow build
+discovery must not block local symbol results. Health checks should report only
+the tools relevant to the current language.
 
 ## Longer-term direction
 

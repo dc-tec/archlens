@@ -26,8 +26,9 @@ COMMANDS                                                   *archlens-commands*
                        pane is open, refresh it for the current cursor symbol.
 
                                                         *:ArchLensRefresh*
-:ArchLensRefresh       Refresh the current focus and rebuild cached module
-                       relationships. ArchLens preserves manual section state.
+:ArchLensRefresh       Refresh the current focus, rediscover its enclosing
+                       boundaries, and rebuild its relationships. ArchLens
+                       preserves manual section state.
 
                                                         *:ArchLensClose*
 :ArchLensClose         Close the ArchLens pane.
@@ -111,22 +112,25 @@ back navigation return to pinned mode.
 
 BOUNDARY CONTEXT ~
 
-When an adapter resolves real language or build boundaries, the focus hierarchy
-shows only the immediate enclosing boundary instead of the raw source path.
+When an adapter resolves real language or build boundaries, the focus
+hierarchy shows only the immediate enclosing boundary instead of the raw
+source path.
 Press `f` on the boundary to move outward one level, `<CR>` to open its
 representative file, or `?` to inspect its stable identity, parent, and
 evidence.
 
 Go package, module, and workspace contexts are the first supported boundary
-chain. The Go adapter derives package identity from the nearest `go.mod` module
-path and the source directory; module identity uses the declared module path.
+chain. The Go adapter derives package identity from the nearest `go.mod`
+module path and the source directory. Module identity uses the declared module
+path.
 An effective `go.work` contributes a workspace only when its `use` directives
 include the current module. Symbol focus shows its package, package focus
 reveals its module, and module focus reveals its workspace. A package focus
-aggregates project-local dependencies and dependents across its visible files.
-Module focus aggregates production edges between active workspace modules.
-Workspace focus shows bounded, explicit member modules. External targets
-remain summarized; ArchLens does not synthesize package rows for them.
+shows project-local production dependencies and dependents for the active
+build configuration. It classifies test-only relationships separately. Module
+focus aggregates production edges between active workspace modules. Workspace
+focus shows bounded, explicit member modules. External targets remain
+summarized; ArchLens does not synthesize package rows for them.
 
 ArchLens does not treat directories as packages when a language adapter cannot
 provide an authoritative boundary.
@@ -423,23 +427,28 @@ Register an adapter before you open ArchLens: >lua
 <
 
 The optional `boundaries.resolve(path, root, context)` hook returns `nil` when
-no authoritative boundary exists. Otherwise it returns a non-empty inside-out
-list, such as target, package, then workspace. The adapter-defined list order
-is the hierarchy; `level` is an opaque lowercase identifier rather than a
-fixed universal taxonomy. Each entry provides a stable `id`, concise `name`,
-`kind_name`, `path`, `level`, and a `class` of `"language"` or `"build"`. It may
-also return `representative_path`, import-matching `import_keys`, an LSP
-`symbol_kind`, and an evidence record.
+no authoritative boundary exists. Otherwise, return a non-empty list from the
+innermost boundary outward, such as target, package, then workspace. The list
+order defines the hierarchy. The `level` field is an opaque lowercase
+identifier rather than a fixed universal taxonomy.
 
-Adapters that require a build tool can additionally implement
+Each entry provides a stable `id`, concise `name`, `kind_name`, `path`,
+`level`, and a `class` of `"language"` or `"build"`. It may also return
+`representative_path`, import-matching `import_keys`, an LSP `symbol_kind`,
+and an evidence record.
+
+If boundary discovery requires a build tool, implement
 `boundaries.discover(path, root, context, done)`. ArchLens keeps the source
-symbol usable while discovery runs, then refreshes its boundary hierarchy when
-`done(boundaries, outcome)` completes. Discovery must return a cancellation
-function and is bounded by `boundaries.timeout_ms`. An optional
-`boundaries.clear_cache()` hook participates in manual refresh. The synchronous
-resolver remains useful for cheap or cached identities. ArchLens uses these
-identities for progressive focus, navigation, and boundary-level aggregation.
-It does not fall back to treating a directory as a package.
+symbol usable until `done(boundaries, outcome)` completes. Discovery must
+return a cancellation function. ArchLens cancels it after
+`boundaries.timeout_ms`.
+Implement `boundaries.clear_cache()` when manual refresh must invalidate
+adapter state. The synchronous resolver remains useful for inexpensive or
+cached identities.
+
+ArchLens uses these identities for progressive focus, navigation, and
+boundary-level aggregation. It does not treat a directory as a package when
+an adapter cannot provide an authoritative identity.
 
 The optional `presentation.section(context, relation, row)` and
 `presentation.row(context, relation, row)` hooks adapt relationship labels and
@@ -455,9 +464,8 @@ failure in `Results` details. Presentation falls back to canonical labels and
 rows. Module analysis keeps unaffected relationships and omits results that
 depend on the failed callback.
 
-`lua/archlens/graph.lua` defines the focused relationship graph.
-`lua/archlens/relations.lua` registers relationship names, directions, and
-ordering.
+Use `require("archlens.graph")` to create graph deltas. Register relationship
+names, directions, and ordering through `require("archlens.relations")`.
 
 ==============================================================================
 PROVIDER EXTENSIONS                                       *archlens-providers*
@@ -507,7 +515,7 @@ source buffer so health output remains focused as languages are added: >lua
           command = options.command or "cargo",
           enabled = options.enabled ~= false,
           version_args = { "--version" },
-          unavailable_message = "Workspace relationships will be unavailable.",
+          unavailable_message = "Workspace relationships are unavailable.",
           version_label = "Cargo",
         },
       }
@@ -525,7 +533,8 @@ enabled, and its `order` must be lower than every replaced provider. The
 replacing provider then owns the complete behavior, including useful
 source-derived results when its build tool is unavailable.
 
-The built-in Go package provider accepts these settings under `providers.go`: >lua
+The built-in Go package provider accepts these settings under
+`providers.go`: >lua
 
     providers = {
       go = {
@@ -539,8 +548,8 @@ The built-in Go package provider accepts these settings under `providers.go`: >l
     }
 <
 It uses `go list` as the authority for active production package edges and
-separate internal or external test-only package edges. Packages already used by
-production code are not duplicated under test relationships. Tree-sitter
+separate internal or external test-only package edges. Packages already used
+by production code are not duplicated under test relationships. Tree-sitter
 locations are merged from the matching active Go, cgo, or `_test.go` files.
 When the command is unavailable, fails, or reaches its bound, the provider
 retains the Tree-sitter package result, classifies Go test import sites

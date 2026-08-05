@@ -106,6 +106,7 @@
 
             unit = pkgs.runCommand "archlens-unit-tests" {
               nativeBuildInputs = [
+                pkgs.cargo
                 pkgs.neovim-unwrapped
                 pkgs.ripgrep
               ];
@@ -168,6 +169,9 @@
                 -l ${./tests/languages/go/workspace.lua}
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/languages/rust/cargo.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
                 -l ${./tests/containers.lua}
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
@@ -192,6 +196,7 @@
                 {
                   nativeBuildInputs = [
                     pkgs.ast-grep
+                    pkgs.cargo
                     pkgs.ripgrep
                     testNeovim
                   ];
@@ -210,6 +215,8 @@
 
                   ARCHLENS_FIXTURE_ROOT=${./tests/fixtures/project} \
                     ARCHLENS_AST_GREP=${lib.getExe pkgs.ast-grep} \
+                    ARCHLENS_RUST_FIXTURE_ROOT=${./tests/fixtures/rust-workspace} \
+                    ARCHLENS_CARGO=${lib.getExe pkgs.cargo} \
                     nvim --headless -i NONE -l ${./tests/integration.lua}
 
                   touch "$out"

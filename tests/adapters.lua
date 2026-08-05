@@ -125,7 +125,8 @@ equal(
 )
 equal(adapters.imports_for_filetype("unknown"), nil)
 equal(adapters.supports_boundaries("go"), true)
-equal(adapters.supports_boundaries("rust"), false)
+equal(adapters.supports_boundaries("rust"), true)
+equal(adapters.supports_boundary_discovery("rust"), true)
 local go_fixture = vim.fs.joinpath(fixture_root, "main.go")
 local go_boundaries, go_boundary_error =
   adapters.resolve_boundaries("go", go_fixture, vim.fs.dirname(go_fixture), {})

@@ -1,5 +1,8 @@
 local fixture_root = assert(vim.env.ARCHLENS_FIXTURE_ROOT, "ARCHLENS_FIXTURE_ROOT is required")
 local ast_grep_command = assert(vim.env.ARCHLENS_AST_GREP, "ARCHLENS_AST_GREP is required")
+local rust_fixture_root =
+  assert(vim.env.ARCHLENS_RUST_FIXTURE_ROOT, "ARCHLENS_RUST_FIXTURE_ROOT is required")
+local cargo_command = assert(vim.env.ARCHLENS_CARGO, "ARCHLENS_CARGO is required")
 
 local graph = require("archlens.graph")
 local model = require("archlens.model")
@@ -889,5 +892,78 @@ for _, edge in ipairs(structural.edges) do
   assert(edge.kind == "structural", "ast-grep returned a non-structural graph edge")
 end
 
-print("archlens.nvim parser and ast-grep integration tests passed")
+local rust_source = rust_fixture_root .. "/app/src/lib.rs"
+vim.cmd.edit(vim.fn.fnameescape(rust_source))
+vim.bo.filetype = "rust"
+local rust_context = assert(
+  treesitter.resolve(0, { line = 3, character = 7 }),
+  "the Cargo fixture did not resolve through Tree-sitter"
+)
+local discovered_rust
+local rust_discovery_outcome
+boundaries.discover(rust_context, {
+  timeout_ms = 5000,
+  adapters = {
+    rust = {
+      command = cargo_command,
+      timeout_ms = 4000,
+      max_packages = 32,
+      max_output_bytes = 128 * 1024,
+    },
+  },
+}, function(enriched, outcome)
+  discovered_rust = enriched
+  rust_discovery_outcome = outcome
+end)
+assert(
+  vim.wait(6000, function()
+    return discovered_rust ~= nil
+  end, 20),
+  "Cargo boundary integration timed out"
+)
+assert(not rust_discovery_outcome, "Cargo boundary discovery failed")
+assert_equal(
+  #discovered_rust.enclosing_boundaries,
+  2,
+  "the Cargo fixture should expose package and workspace boundaries"
+)
+local rust_package = discovered_rust.enclosing_boundaries[1]
+local rust_workspace = discovered_rust.enclosing_boundaries[2]
+assert_equal(rust_package.boundary_level, "package", "the nearest Cargo boundary is wrong")
+assert_equal(rust_package.name, "archlens-app", "the Cargo package name is wrong")
+assert_equal(rust_workspace.boundary_level, "workspace", "the outer Cargo boundary is wrong")
+
+local rust_relationships
+local rust_relationship_outcome
+require("archlens.languages.rust.cargo").relationships(rust_package, 0, {
+  build = {
+    command = cargo_command,
+    timeout_ms = 4000,
+    max_packages = 32,
+    max_output_bytes = 128 * 1024,
+  },
+  include_dependents = true,
+  max_imports = 24,
+  max_importers = 24,
+}, function(result, outcome)
+  rust_relationships = result
+  rust_relationship_outcome = outcome
+end)
+assert(
+  vim.wait(6000, function()
+    return rust_relationships ~= nil
+  end, 20),
+  "Cargo relationship integration timed out"
+)
+assert(not rust_relationship_outcome, "Cargo relationship discovery failed")
+assert_equal(#rust_relationships.edges, 5, "Cargo should expose all local dependency kinds")
+local rust_kinds = {}
+for _, edge in ipairs(rust_relationships.edges) do
+  rust_kinds[edge.kind] = (rust_kinds[edge.kind] or 0) + 1
+end
+assert_equal(rust_kinds.module_imports, 3, "Cargo normal dependencies are incomplete")
+assert_equal(rust_kinds.build_dependencies, 1, "Cargo build dependencies are incomplete")
+assert_equal(rust_kinds.test_dependencies, 1, "Cargo dev dependencies are incomplete")
+
+print("archlens.nvim parser, ast-grep, and Cargo integration tests passed")
 vim.cmd.quitall()

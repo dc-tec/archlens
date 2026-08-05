@@ -30,8 +30,10 @@ ArchLens should move between local code and larger contexts only when a
 language or build system provides a real identity. Directories are not treated
 as packages by default.
 
-Go is the first language with a package, module, and workspace boundary chain.
-ArchLens uses `go.mod` and `go.work` metadata to identify each boundary.
+Go has a package, module, and workspace boundary chain identified from
+`go.mod` and `go.work`. Rust has a Cargo package and workspace chain identified
+from `cargo metadata`; crate-target boundaries remain out of scope until
+source ownership can be established without directory heuristics.
 
 From a symbol, you can move outward to its package, module, and workspace.
 Package views distinguish production relationships from test-only relationships
@@ -41,9 +43,14 @@ limitation. Module views summarize production relationships between active
 workspace modules. Workspace views list active member modules without repeating
 their dependency graph.
 
+Rust package views distinguish normal, build, and dev relationships. Cargo
+workspace views list member packages. Resolved metadata is locked and offline
+by default; a declaration-only fallback keeps local relationships useful when
+the resolved graph is unavailable and makes that limitation visible.
+
 Next steps may include:
 
-- Package or module identities for other ecosystems with authoritative metadata
+- Package or module identities for further ecosystems with authoritative metadata
 - Configuration relationships at boundary level
 - Optional project-specific boundary annotations without assuming one
   architectural style

@@ -1,0 +1,4 @@
+[package]
+name = "archlens-renamed"
+edition.workspace = true
+version.workspace = true

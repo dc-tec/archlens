@@ -1,3 +1,4 @@
 /result
+/tests/fixtures/rust-workspace/target/
 /.direnv
 .DS_Store

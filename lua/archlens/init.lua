@@ -239,6 +239,12 @@ local function load_context(session, context, generation)
   })
 end
 
+local function boundary_options()
+  local options = vim.deepcopy(config.boundaries)
+  options.adapters = vim.deepcopy(config.providers or {})
+  return options
+end
+
 local function discover_context_boundaries(session, context, generation)
   if
     (context.enclosing_boundaries and #context.enclosing_boundaries > 0)
@@ -246,7 +252,7 @@ local function discover_context_boundaries(session, context, generation)
   then
     return
   end
-  local cancel = boundaries.discover(context, config.boundaries, function(enriched, outcome)
+  local cancel = boundaries.discover(context, boundary_options(), function(enriched, outcome)
     if not is_current(session, generation) then
       return
     end
@@ -501,7 +507,7 @@ local function follow_boundary(session, buffer, scope)
   local cancel = boundaries.resolve_buffer(
     buffer,
     scope,
-    config.boundaries,
+    boundary_options(),
     function(context, outcome)
       settled = true
       if session.follow_token ~= token then
@@ -780,7 +786,7 @@ function M.refresh(tabpage)
   session.restore_row_id = view.selected_row_id(session)
   local generation = begin_run(session, true)
   providers.clear_cache(session.current.root_dir)
-  local cancel = boundaries.refresh(session.current, config.boundaries, function(context, outcome)
+  local cancel = boundaries.refresh(session.current, boundary_options(), function(context, outcome)
     if not is_current(session, generation) then
       return
     end

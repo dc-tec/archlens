@@ -119,10 +119,9 @@ Press `f` on the boundary to move outward one level, `<CR>` to open its
 representative file, or `?` to inspect its stable identity, parent, and
 evidence.
 
-Go package, module, and workspace contexts are the first supported boundary
-chain. The Go adapter derives package identity from the nearest `go.mod`
-module path and the source directory. Module identity uses the declared module
-path.
+Go provides a package, module, and workspace boundary chain. The Go adapter
+derives package identity from the nearest `go.mod` module path and the source
+directory. Module identity uses the declared module path.
 An effective `go.work` contributes a workspace only when its `use` directives
 include the current module. Symbol focus shows its package, package focus
 reveals its module, and module focus reveals its workspace. A package focus
@@ -131,6 +130,19 @@ build configuration. It classifies test-only relationships separately. Module
 focus aggregates production edges between active workspace modules. Workspace
 focus shows bounded, explicit member modules. External targets remain
 summarized; ArchLens does not synthesize package rows for them.
+
+Rust provides Cargo package and workspace boundaries identified by normalized
+manifest and workspace-root paths from `cargo metadata`. Package views
+distinguish normal, build, and dev dependencies and dependents. Workspace
+views list member packages. A workspace boundary is omitted when it would only
+duplicate a standalone package. Exact target source paths reported by Cargo
+can establish ownership outside the package directory. ArchLens does not infer
+crate-target ownership from directory layout.
+
+With a `Cargo.lock`, metadata uses `--locked` and the configured feature and
+target options. It runs offline by default. If the resolved graph is not
+available locally, or no lock exists, ArchLens uses `--no-deps` and reports
+the limitations of declarations whose packages are present in that metadata.
 
 ArchLens does not treat directories as packages when a language adapter cannot
 provide an authoritative boundary.
@@ -241,7 +253,8 @@ Built-in relationship IDs are: >
     children              supertypes             subtypes
     implementations       incoming               outgoing
     workspace_members     module_imports          module_importers
-    test_dependencies     test_dependents         configuration_consumers
+    build_dependencies    build_dependents        test_dependencies
+    test_dependents       configuration_consumers
     test_references       references              test_structural
     structural            siblings
 <
@@ -400,7 +413,8 @@ Run the health check from a source buffer: >vim
 The report shows the selected project root, Tree-sitter adapter and parser,
 attached language-server capabilities, ast-grep availability, and ripgrep
 availability for reverse module analysis. For Go buffers it also reports the
-Go tool used for build-aware package analysis.
+Go tool used for build-aware package analysis; for Rust buffers it reports the
+Cargo tool used for package and workspace analysis.
 
 Missing optional sources reduce the available relationships but do not
 prevent the pane from opening. To inspect provider-specific runtime failures,
@@ -438,7 +452,8 @@ Each entry provides a stable `id`, concise `name`, `kind_name`, `path`,
 and an evidence record.
 
 If boundary discovery requires a build tool, implement
-`boundaries.discover(path, root, context, done)`. ArchLens keeps the source
+`boundaries.discover(path, root, context, done, options)`. ArchLens passes the
+matching `providers.<language>` settings as `options` and keeps the source
 symbol usable until `done(boundaries, outcome)` completes. Discovery must
 return a cancellation function. ArchLens cancels it after
 `boundaries.timeout_ms`.
@@ -559,6 +574,37 @@ Go workspace modules. Workspace focus uses `go list -m` to expose its bounded
 member modules, including explicit members outside the workspace directory.
 Neither view turns the complete external requirement list into architecture
 rows.
+
+The built-in Cargo provider accepts these settings under `providers.rust`: >lua
+
+    providers = {
+      rust = {
+        enabled = true,
+        command = "cargo",
+        timeout_ms = 8000,
+        max_packages = 1000,
+        max_output_bytes = 2097152,
+        features = {},
+        all_features = false,
+        no_default_features = false,
+        offline = true,
+        filter_platform = nil,
+      },
+    }
+<
+With a `Cargo.lock`, it uses `cargo metadata --locked` to resolve active
+normal, build, and dev dependencies. `features`, `all_features`,
+`no_default_features`, and `filter_platform` affect that resolved graph.
+`offline = true` prevents implicit network access; set it to `false` only when
+Cargo may fetch missing metadata. If locked resolution fails, or no lockfile
+exists, the provider uses `--no-deps`, keeps non-optional local declarations,
+and reports that feature, target, optional, and out-of-workspace dependency
+resolution is incomplete. Only declarations whose packages are included in
+that metadata become rows. Package and workspace identities still come from
+Cargo metadata. Package results share `max_packages`; relationship rows also obey
+the existing `imports.max_imports` and `imports.inbound.max_importers` limits.
+Without `filter_platform`, resolved metadata may include dependencies for
+multiple targets. ArchLens does not derive crate-target boundaries.
 
 The optional `report` callback accepts `"running"` or `"retrying"`. Retry
 metadata can include `retry_delay_ms` and a short `message`. ArchLens records

@@ -99,6 +99,9 @@ local function run()
   local hold_provider = false
   local boundary_discovery_enabled = false
   local boundary_discovery_requests = {}
+  local boundary_refreshes = 0
+  local adapter_cache_clears = 0
+  local provider_cache_clears = 0
 
   package.loaded["archlens.lsp"] = {
     note_attach = function() end,
@@ -140,6 +143,17 @@ local function run()
         request.cancelled = true
       end
     end,
+    refresh = function(current, _, callback)
+      boundary_refreshes = boundary_refreshes + 1
+      adapter_cache_clears = adapter_cache_clears + 1
+      local refreshed = vim.deepcopy(current)
+      refreshed.enclosing_boundaries = { vim.deepcopy(packages_by_buffer[source_buffer]) }
+      callback(refreshed)
+      return function() end
+    end,
+    clear_cache = function()
+      adapter_cache_clears = adapter_cache_clears + 1
+    end,
     for_buffer = boundary_for_buffer,
     resolve_buffer = function(buffer, level, _, callback)
       callback(boundary_for_buffer(buffer, level))
@@ -147,7 +161,9 @@ local function run()
     end,
   }
   package.loaded["archlens.providers"] = {
-    clear_cache = function() end,
+    clear_cache = function()
+      provider_cache_clears = provider_cache_clears + 1
+    end,
     local_pending = function()
       return {}
     end,
@@ -227,6 +243,21 @@ local function run()
     "discovered boundaries should restart analysis for the enriched context"
   )
   boundary_discovery_enabled = false
+
+  local previous_adapter_clears = adapter_cache_clears
+  local previous_provider_clears = provider_cache_clears
+  packages_by_buffer[source_buffer] =
+    package_context("package-refreshed", "lua-package:refreshed", source_buffer)
+  archlens.refresh()
+  equal(boundary_refreshes, 1, "refresh should re-resolve the current boundary chain")
+  equal(
+    active_session.current.enclosing_boundaries[1].boundary_id,
+    "lua-package:refreshed",
+    "refresh should replace the stale boundary context"
+  )
+  equal(adapter_cache_clears, previous_adapter_clears + 1, "refresh should clear adapter caches")
+  equal(provider_cache_clears, previous_provider_clears + 1, "refresh should clear provider caches")
+  packages_by_buffer[source_buffer] = package_context("package-a", "lua-package:a", source_buffer)
 
   hold_provider = true
   archlens.show_here()

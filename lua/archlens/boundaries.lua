@@ -47,6 +47,8 @@ function M.context(source, boundary, enclosing_boundaries)
     is_boundary = true,
     module_context = true,
     preserve_file_identity = true,
+    boundary_source_path = source.boundary_source_path or source.path,
+    boundary_source_root_dir = source.boundary_source_root_dir or source.root_dir,
     enclosing_boundaries = vim.deepcopy(enclosing_boundaries or {}),
     boundary_id = boundary.id,
     boundary_class = boundary.class,
@@ -189,6 +191,98 @@ function M.discover(context, options, callback)
     stop_timer()
     pcall(cancel_adapter)
   end
+end
+
+local function refresh_source(context)
+  local source = vim.deepcopy(context)
+  source.path = context.boundary_source_path or context.path
+  source.root_dir = context.boundary_source_root_dir or context.root_dir
+  source.enclosing_boundaries = nil
+  source.adapter_issues = nil
+  if context.is_boundary then
+    for _, field in ipairs({
+      "boundary_class",
+      "boundary_evidence",
+      "boundary_id",
+      "boundary_keys",
+      "boundary_level",
+      "boundary_path",
+      "boundary_source_path",
+      "boundary_source_root_dir",
+      "is_boundary",
+      "module_context",
+      "preserve_file_identity",
+    }) do
+      source[field] = nil
+    end
+  end
+  return source
+end
+
+local function select_refreshed_context(original, enriched)
+  if not original.is_boundary then
+    return enriched
+  end
+  for _, boundary in ipairs(enriched.enclosing_boundaries or {}) do
+    if boundary.boundary_level == original.boundary_level then
+      return boundary
+    end
+  end
+  return nil
+end
+
+function M.clear_cache()
+  adapters.clear_cache()
+end
+
+---@param context table
+---@param options? { timeout_ms?: integer }
+---@param callback fun(context: table?, outcome: table?)
+---@return function
+function M.refresh(context, options, callback)
+  assert(type(context) == "table", "boundary refresh requires a context")
+  assert(type(callback) == "function", "boundary refresh requires a callback")
+  M.clear_cache()
+
+  local source = refresh_source(context)
+  local path = source.path
+    or (source.location and source.location.uri and source.location.uri:match("^file:") and vim.uri_to_fname(
+      source.location.uri
+    ))
+    or nil
+  if not path or not source.language then
+    callback(context.is_boundary and nil or source)
+    return function() end
+  end
+
+  path = vim.fs.normalize(path)
+  local resolved, err = adapters.resolve_boundaries(source.language, path, source.root_dir, source)
+  if err then
+    add_issue(source, err)
+  elseif resolved then
+    source.enclosing_boundaries = M.contexts(source, resolved)
+    callback(select_refreshed_context(context, source))
+    return function() end
+  end
+
+  if M.supports_discovery(source) then
+    return M.discover(source, options, function(enriched, outcome)
+      callback(select_refreshed_context(context, enriched), outcome)
+    end) or function() end
+  end
+
+  if context.is_boundary then
+    callback(nil, err and { state = "failed", message = err } or {
+      state = "unavailable",
+      message = string.format(
+        "The refreshed %s boundary is no longer available.",
+        context.boundary_level or "selected"
+      ),
+    })
+  else
+    callback(source, err and { state = "failed", message = err } or nil)
+  end
+  return function() end
 end
 
 local function source_for_buffer(bufnr)

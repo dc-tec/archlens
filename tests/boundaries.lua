@@ -14,6 +14,7 @@ vim.fn.writefile({ "[package]", 'name = "fixture"' }, vim.fs.joinpath(project, "
 vim.fn.writefile({ "pub fn fixture() {}" }, source_path)
 
 local requests = {}
+local cache_clears = 0
 require("archlens.adapters").register("async_boundary_fixture", {
   filetypes = { "async_boundary_fixture" },
   boundaries = {
@@ -32,6 +33,9 @@ require("archlens.adapters").register("async_boundary_fixture", {
       return function()
         request.cancelled = true
       end
+    end,
+    clear_cache = function()
+      cache_clears = cache_clears + 1
     end,
   },
 })
@@ -158,6 +162,46 @@ assert(
   timeout_context.adapter_issues[1]:find("boundary discovery exceeded 5 ms", 1, true),
   "boundary timeouts should remain visible as adapter issues"
 )
+
+local stale = vim.deepcopy(discovered)
+local refreshed
+local cancel_refresh = boundaries.refresh(stale, { timeout_ms = 100 }, function(value)
+  refreshed = value
+end)
+equal(cache_clears, 1, "refresh should invalidate adapter boundary caches")
+equal(#requests, 5, "refresh should rediscover an existing boundary chain")
+local refreshed_descriptors = descriptors()
+refreshed_descriptors[1].id = "cargo-target:fixture/refreshed"
+requests[5].done(refreshed_descriptors)
+equal(
+  refreshed.enclosing_boundaries[1].boundary_id,
+  "cargo-target:fixture/refreshed",
+  "refresh should replace stale boundary identities"
+)
+cancel_refresh()
+
+local stale_package = vim.deepcopy(discovered.enclosing_boundaries[2])
+local refreshed_package
+local cancel_package_refresh = boundaries.refresh(
+  stale_package,
+  { timeout_ms = 100 },
+  function(value)
+    refreshed_package = value
+  end
+)
+equal(cache_clears, 2, "refreshing a boundary view should invalidate adapter caches")
+equal(#requests, 6, "refreshing a boundary view should rediscover its source chain")
+local refreshed_package_descriptors = descriptors()
+refreshed_package_descriptors[2].id = "cargo-package:fixture-refreshed"
+requests[6].done(refreshed_package_descriptors)
+equal(refreshed_package.boundary_level, "package")
+equal(
+  refreshed_package.boundary_id,
+  "cargo-package:fixture-refreshed",
+  "refresh should preserve the selected level while replacing its stale identity"
+)
+equal(refreshed_package.boundary_source_path, source_path)
+cancel_package_refresh()
 
 vim.api.nvim_buf_delete(buffer, { force = true })
 print("archlens.nvim asynchronous boundary tests passed")

@@ -249,6 +249,16 @@ local function run()
       return context
     end,
   }
+  package.loaded["archlens.boundaries"] = {
+    supports_discovery = function()
+      return false
+    end,
+    refresh = function(context, _, callback)
+      callback(vim.deepcopy(context))
+      return function() end
+    end,
+    clear_cache = function() end,
+  }
   package.loaded["archlens.view"] = {
     ensure = function(session)
       active_session = session

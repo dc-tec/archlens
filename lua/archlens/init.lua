@@ -767,6 +767,9 @@ function M.refresh(tabpage)
     return
   end
   if session.invalidated then
+    cancel_requests(session)
+    providers.clear_cache(session.current.root_dir)
+    boundaries.clear_cache()
     M.show_here(tabpage)
     return
   end
@@ -777,7 +780,22 @@ function M.refresh(tabpage)
   session.restore_row_id = view.selected_row_id(session)
   local generation = begin_run(session, true)
   providers.clear_cache(session.current.root_dir)
-  load_context(session, session.current, generation)
+  local cancel = boundaries.refresh(session.current, config.boundaries, function(context, outcome)
+    if not is_current(session, generation) then
+      return
+    end
+    if not context then
+      render(
+        session,
+        model.error(
+          outcome and outcome.message or "The current architecture boundary is no longer available."
+        )
+      )
+      return
+    end
+    load_context(session, context, generation)
+  end)
+  register_cancel(session, cancel)
 end
 
 local function source_window(session)

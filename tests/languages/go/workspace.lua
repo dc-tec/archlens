@@ -1,5 +1,5 @@
 local source = debug.getinfo(1, "S").source:sub(2)
-local root = vim.fn.fnamemodify(source, ":p:h:h")
+local root = vim.fn.fnamemodify(source, ":p:h:h:h:h")
 vim.opt.runtimepath:prepend(root)
 
 local function equal(actual, expected, message)
@@ -39,8 +39,8 @@ vim.fn.writefile({
 
 local previous_gowork = vim.env.GOWORK
 vim.env.GOWORK = "auto"
-package.loaded["archlens.go_workspace"] = nil
-local go_workspace = require("archlens.go_workspace")
+package.loaded["archlens.languages.go.workspace"] = nil
+local go_workspace = require("archlens.languages.go.workspace")
 
 equal(
   go_workspace.find(vim.fs.joinpath(plugin, "example.go")),

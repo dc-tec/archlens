@@ -1,5 +1,5 @@
 local boundaries = require("archlens.boundaries")
-local go_workspace = require("archlens.go_workspace")
+local go_workspace = require("archlens.languages.go.workspace")
 local graph = require("archlens.graph")
 
 local M = {}

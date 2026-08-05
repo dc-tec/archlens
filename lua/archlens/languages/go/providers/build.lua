@@ -1,5 +1,5 @@
-local go_modules = require("archlens.go_modules")
-local go_packages = require("archlens.go_packages")
+local go_modules = require("archlens.languages.go.modules")
+local go_packages = require("archlens.languages.go.packages")
 
 local function import_options(context, config)
   local options = vim.deepcopy(config.imports.inbound)

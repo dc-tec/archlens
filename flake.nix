@@ -159,13 +159,13 @@
                 -l ${./tests/import_index.lua}
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
-                -l ${./tests/go_packages.lua}
+                -l ${./tests/languages/go/packages.lua}
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
-                -l ${./tests/go_modules.lua}
+                -l ${./tests/languages/go/modules.lua}
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
-                -l ${./tests/go_workspace.lua}
+                -l ${./tests/languages/go/workspace.lua}
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
                 -l ${./tests/containers.lua}

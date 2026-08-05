@@ -1,4 +1,4 @@
-local common = require("archlens.adapters.common")
+local common = require("archlens.adapter_support")
 
 local M = {}
 
@@ -773,31 +773,20 @@ function M.clear_cache()
   end
 end
 
-local builtin_languages = {
-  "go",
-  "nix",
-  "ocaml",
-  "ocaml_interface",
-  "rust",
-  "javascript",
-  "lua",
-  "python",
-  "tsx",
-  "typescript",
-}
+local builtin_languages = require("archlens.languages.builtins")
 
 for _, language in ipairs(builtin_languages) do
   ---@type ArchLensBuiltinAdapter
-  local builtin = require("archlens.adapters." .. language)
+  local builtin = require(language.adapter)
   assert(
     type(builtin) == "table" and type(builtin.spec) == "table",
-    string.format("built-in adapter must provide a spec: %s", language)
+    string.format("built-in adapter must provide a spec: %s", language.id)
   )
-  M.register(language, builtin.spec)
+  M.register(language.id, builtin.spec)
   if builtin.clear_cache then
     assert(
       type(builtin.clear_cache) == "function",
-      string.format("built-in adapter clear_cache must be a function: %s", language)
+      string.format("built-in adapter clear_cache must be a function: %s", language.id)
     )
     cache_clearers[#cache_clearers + 1] = builtin.clear_cache
   end

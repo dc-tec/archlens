@@ -1,5 +1,5 @@
 local source = debug.getinfo(1, "S").source:sub(2)
-local root = vim.fn.fnamemodify(source, ":p:h:h")
+local root = vim.fn.fnamemodify(source, ":p:h:h:h:h")
 vim.opt.runtimepath:prepend(root)
 
 local function equal(actual, expected, message)
@@ -190,8 +190,8 @@ package.loaded["archlens.import_index"] = {
     end
   end,
 }
-package.loaded["archlens.go_packages"] = nil
-local go_packages = require("archlens.go_packages")
+package.loaded["archlens.languages.go.packages"] = nil
+local go_packages = require("archlens.languages.go.packages")
 
 local framed, frame_error = go_packages._decode_json_stream(
   '{"ImportPath":"first","Detail":"a } brace and \\"quote\\""}'

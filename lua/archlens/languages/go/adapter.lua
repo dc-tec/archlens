@@ -1,5 +1,5 @@
-local common = require("archlens.adapters.common")
-local go_workspace = require("archlens.go_workspace")
+local common = require("archlens.adapter_support")
+local go_workspace = require("archlens.languages.go.workspace")
 
 local M = {}
 ---@type table<string, { name?: string, root?: string }>

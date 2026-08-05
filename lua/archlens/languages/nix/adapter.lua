@@ -1,4 +1,4 @@
-local common = require("archlens.adapters.common")
+local common = require("archlens.adapter_support")
 
 local function normalize_import(_, text, source, metadata)
   local source_file = common.source_path(source, metadata)

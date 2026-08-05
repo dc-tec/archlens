@@ -82,7 +82,7 @@ package.loaded["archlens.import_index"] = {
     error("module dependents should be disabled")
   end,
 }
-package.loaded["archlens.go_packages"] = {
+package.loaded["archlens.languages.go.packages"] = {
   supports = function(current)
     return current.is_boundary == true
       and current.boundary_level == "package"
@@ -95,7 +95,7 @@ package.loaded["archlens.go_packages"] = {
   end,
   clear_cache = function() end,
 }
-package.loaded["archlens.go_modules"] = {
+package.loaded["archlens.languages.go.modules"] = {
   supports = function(current)
     return current.is_boundary == true
       and current.boundary_level == "module"

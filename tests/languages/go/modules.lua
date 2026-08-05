@@ -1,5 +1,5 @@
 local source = debug.getinfo(1, "S").source:sub(2)
-local root = vim.fn.fnamemodify(source, ":p:h:h")
+local root = vim.fn.fnamemodify(source, ":p:h:h:h:h")
 vim.opt.runtimepath:prepend(root)
 
 local function equal(actual, expected, message)
@@ -145,9 +145,9 @@ vim.fn.writefile({
 }, fake_go)
 assert(vim.uv.fs_chmod(fake_go, 493))
 
-local go_modules = require("archlens.go_modules")
+local go_modules = require("archlens.languages.go.modules")
 local boundaries = require("archlens.boundaries")
-local go_workspace = require("archlens.go_workspace")
+local go_workspace = require("archlens.languages.go.workspace")
 local graph = require("archlens.graph")
 local model = require("archlens.model")
 

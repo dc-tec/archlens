@@ -1,4 +1,4 @@
-local ocaml = require("archlens.adapters.ocaml")
+local ocaml = require("archlens.languages.ocaml.adapter")
 
 return {
   spec = {

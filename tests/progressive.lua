@@ -164,6 +164,8 @@ local function run()
   local import_options = {}
   local importer_callbacks = {}
   local importer_options = {}
+  local boundary_dependency_callbacks = {}
+  local boundary_dependent_callbacks = {}
   local structural_callbacks = {}
   local structural_options = {}
   local resolve_callbacks = {}
@@ -214,6 +216,20 @@ local function run()
     end,
   }
   package.loaded["archlens.import_index"] = {
+    dependencies = function(_, _, options, callback)
+      import_options[#import_options + 1] = vim.deepcopy(options)
+      boundary_dependency_callbacks[#boundary_dependency_callbacks + 1] = callback
+      return function()
+        cancellation_count = cancellation_count + 1
+      end
+    end,
+    dependents = function(_, _, options, callback)
+      importer_options[#importer_options + 1] = vim.deepcopy(options)
+      boundary_dependent_callbacks[#boundary_dependent_callbacks + 1] = callback
+      return function()
+        cancellation_count = cancellation_count + 1
+      end
+    end,
     relationships = function(_, _, options, callback)
       importer_options[#importer_options + 1] = vim.deepcopy(options)
       importer_callbacks[#importer_callbacks + 1] = callback
@@ -232,6 +248,16 @@ local function run()
       context.language = "lua"
       return context
     end,
+  }
+  package.loaded["archlens.boundaries"] = {
+    supports_discovery = function()
+      return false
+    end,
+    refresh = function(context, _, callback)
+      callback(vim.deepcopy(context))
+      return function() end
+    end,
+    clear_cache = function() end,
   }
   package.loaded["archlens.view"] = {
     ensure = function(session)
@@ -618,25 +644,41 @@ local function run()
   importer_callbacks[6](graph.delta())
   structural_callbacks[6](structural_delta(semantic_implementation, {}, true))
 
-  local module_context = vim.deepcopy(base_context)
-  module_context.name = "example.module"
-  module_context.module_context = true
-  module_context.location = location(3)
-  module_context.supports_calls = false
-  archlens.focus({ context = module_context, location = module_context.location })
+  local package_context = vim.deepcopy(base_context)
+  package_context.name = "example.module"
+  package_context.module_context = true
+  package_context.is_boundary = true
+  package_context.scope = "boundary"
+  package_context.boundary_id = "go-package:example.module"
+  package_context.boundary_level = "package"
+  package_context.boundary_keys = { "go-package:example.module" }
+  package_context.import_filetype = "go"
+  package_context.location = location(3)
+  package_context.supports_calls = false
+  archlens.focus({ context = package_context, location = package_context.location })
   assert_equal(
     #relationship_callbacks,
     6,
     "module focus should skip symbol-level LSP relationships"
   )
   assert_equal(#structural_callbacks, 6, "module focus should skip symbol-name project search")
-  assert_equal(#import_callbacks, 7, "module focus should continue file-level dependency analysis")
   assert_equal(
-    #importer_callbacks,
-    7,
-    "module focus should continue project-level dependency analysis"
+    #import_callbacks,
+    6,
+    "package focus should not repeat single-file dependency analysis"
   )
-  import_callbacks[7](graph.delta())
+  assert_equal(
+    #boundary_dependency_callbacks,
+    1,
+    "package focus should start aggregate dependency analysis"
+  )
+  assert_equal(#importer_callbacks, 6, "package focus should not return individual importer files")
+  assert_equal(
+    #boundary_dependent_callbacks,
+    1,
+    "package focus should start aggregate dependent analysis"
+  )
+  boundary_dependency_callbacks[1](graph.delta())
 
   active_session.expanded = { module_imports = true }
   active_session.expanded_groups = { ["test_references:group:refresh"] = true }
@@ -646,7 +688,7 @@ local function run()
   local cache_clear_renders
   cache_clear_hook = function()
     local render_count = #rendered
-    importer_callbacks[7](graph.delta())
+    boundary_dependent_callbacks[1](graph.delta())
     cache_clear_renders = #rendered - render_count
   end
   archlens.refresh()

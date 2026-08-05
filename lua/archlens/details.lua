@@ -233,6 +233,39 @@ local function navigation_lines(navigation, model)
   return lines
 end
 
+local function boundary_lines(boundary, model)
+  local title = boundary.kind_name or "Boundary"
+  local lines = { title, string.rep("─", math.min(vim.fn.strchars(title), 24)) }
+  append(lines, "Name", boundary.name)
+  local levels = { module = "Module", package = "Package", workspace = "Workspace" }
+  append(lines, "Level", levels[boundary.boundary_level] or boundary.boundary_level)
+  append(lines, "Class", boundary.boundary_class == "build" and "Build" or "Language")
+  append(lines, "Identity", boundary.boundary_id)
+  local parent = boundary.enclosing_boundaries and boundary.enclosing_boundaries[1]
+  if parent then
+    append(lines, "Parent", string.format("%s (%s)", parent.name, parent.kind_name or "Boundary"))
+  end
+  local root = model and model.focus and model.focus.root_dir
+  local boundary_path = boundary.boundary_path
+  if boundary_path and root then
+    boundary_path = vim.fs.relpath(vim.fs.normalize(root), vim.fs.normalize(boundary_path))
+      or boundary_path
+  end
+  append(lines, "Path", boundary_path)
+  if boundary.path and boundary.path ~= boundary.boundary_path then
+    local representative = root and vim.fs.relpath(root, boundary.path) or boundary.path
+    append(lines, "Opens", representative)
+  end
+  if boundary.boundary_evidence then
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "Evidence"
+    append(lines, "Provider", boundary.boundary_evidence.provider)
+    append(lines, "Method", boundary.boundary_evidence.method)
+    append(lines, "Class", boundary.boundary_evidence.class)
+  end
+  return lines
+end
+
 local function help_lines()
   return {
     "ArchLens keys",
@@ -240,6 +273,7 @@ local function help_lines()
     "<CR>            Open an item or toggle a section or context group",
     "f               Focus an item and retain the previous focus in history",
     "F               Toggle source-cursor following",
+    "gs              Focus the symbol at the source cursor",
     "<BS>, h         Return to the previous focus",
     "<Tab>, <S-Tab>  Move to the next or previous actionable row",
     "]s, [s          Move to the next or previous section",
@@ -263,6 +297,9 @@ function M.lines(selection, model)
   end
   if selection and selection.navigation then
     return navigation_lines(selection.navigation, model)
+  end
+  if selection and selection.boundary then
+    return boundary_lines(selection.boundary, model)
   end
   local section = selection and selection.section
   if not section then

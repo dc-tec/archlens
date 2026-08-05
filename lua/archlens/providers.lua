@@ -1,10 +1,5 @@
-local ast_grep = require("archlens.ast_grep")
 local containers = require("archlens.containers")
 local graph = require("archlens.graph")
-local import_index = require("archlens.import_index")
-local imports = require("archlens.imports")
-local lsp = require("archlens.lsp")
-local treesitter = require("archlens.treesitter")
 
 local M = {}
 
@@ -25,7 +20,24 @@ local M = {}
 ---@field start function
 ---@field queued? boolean|function
 ---@field queued_label? string
+---@field replaces? string[]|function
 ---@field clear_cache? function
+---@field tools? function
+
+---@class ArchLensProviderTool
+---@field id string
+---@field provider_id string
+---@field label string
+---@field command string
+---@field enabled boolean
+---@field version_args string[]
+---@field disabled_message? string
+---@field unavailable_message? string
+---@field version_label? string
+
+---@class ArchLensProviderToolIssue
+---@field provider_id string
+---@field message string
 
 ---@class ArchLensProvider: ArchLensProviderSpec
 ---@field id string
@@ -47,11 +59,26 @@ local allowed_provider_fields = {
   order = true,
   queued = true,
   queued_label = true,
+  replaces = true,
   start = true,
+  tools = true,
 }
 
 local function nonempty_string(value)
   return type(value) == "string" and value:match("%S") ~= nil
+end
+
+local function validate_provider_ids(value, label)
+  assert(type(value) == "table" and vim.islist(value), label .. " must be a list")
+  local seen = {}
+  for index, id in ipairs(value) do
+    assert(
+      nonempty_string(id) and id:match("^[%l][%l%d_%-]*$"),
+      string.format("%s[%d] must be a lowercase provider id", label, index)
+    )
+    assert(not seen[id], string.format("%s contains duplicate provider id: %s", label, id))
+    seen[id] = true
+  end
 end
 
 local terminal_provider_states = {
@@ -60,14 +87,6 @@ local terminal_provider_states = {
   failed = true,
   timed_out = true,
   unavailable = true,
-}
-
-local terminal_state_priority = {
-  completed = 0,
-  cancelled = 1,
-  unavailable = 2,
-  timed_out = 3,
-  failed = 4,
 }
 
 ---@param outcome? ArchLensProviderOutcome
@@ -89,31 +108,6 @@ local function normalize_terminal_outcome(outcome)
     "provider outcome message must be a non-empty string"
   )
   return vim.deepcopy(outcome)
-end
-
----@param left? ArchLensProviderOutcome
----@param right? ArchLensProviderOutcome
----@return ArchLensProviderOutcome?
-local function combine_outcomes(left, right)
-  if not right or right.state == "completed" then
-    return left
-  end
-  if not left or left.state == "completed" then
-    return vim.deepcopy(right)
-  end
-  local combined = terminal_state_priority[right.state] > terminal_state_priority[left.state]
-      and vim.deepcopy(right)
-    or vim.deepcopy(left)
-  local messages = {}
-  local seen = {}
-  for _, outcome in ipairs({ left, right }) do
-    if outcome.message and not seen[outcome.message] then
-      messages[#messages + 1] = outcome.message
-      seen[outcome.message] = true
-    end
-  end
-  combined.message = #messages > 0 and table.concat(messages, "; ") or nil
-  return combined
 end
 
 ---@param id string
@@ -155,8 +149,21 @@ local function normalize_provider(id, spec)
       "provider queued_label must be a non-empty string"
     )
   end
+  if normalized.replaces ~= nil then
+    assert(
+      type(normalized.replaces) == "table" or type(normalized.replaces) == "function",
+      "provider replaces must be a list or function"
+    )
+    if type(normalized.replaces) == "table" then
+      validate_provider_ids(normalized.replaces, "provider replaces")
+      assert(not vim.list_contains(normalized.replaces, id), "providers cannot replace themselves")
+    end
+  end
   if normalized.clear_cache ~= nil then
     assert(type(normalized.clear_cache) == "function", "provider clear_cache must be a function")
+  end
+  if normalized.tools ~= nil then
+    assert(type(normalized.tools) == "function", "provider tools must be a function")
   end
   return normalized
 end
@@ -186,249 +193,107 @@ function M.ordered()
   return providers
 end
 
-local function provider_options(options, config)
-  options = vim.deepcopy(options)
-  options.filters = vim.deepcopy(config.filters)
-  options.filters.include_external = config.include_external
-  return options
-end
-
-local function empty_semantic_result(result, metadata)
-  return (metadata and metadata.request_count or 0) > 0
-    and #(result.edges or {}) == 0
-    and #(result.errors or {}) == 0
-    and #(result.notes or {}) == 0
-end
-
-local function explain_empty_semantic_result(result, context, metadata, retried)
-  if not empty_semantic_result(result, metadata) then
-    return
+local function normalize_provider_tool(provider_id, spec)
+  assert(type(spec) == "table", "provider tool must be a table")
+  local normalized = vim.deepcopy(spec)
+  local allowed_fields = {
+    command = true,
+    disabled_message = true,
+    enabled = true,
+    id = true,
+    label = true,
+    unavailable_message = true,
+    version_args = true,
+    version_label = true,
+  }
+  for key in pairs(normalized) do
+    assert(allowed_fields[key], "unsupported provider tool field: " .. tostring(key))
   end
-  local methods = table.concat(metadata.request_labels or {}, ", ")
-  local suffix = methods ~= "" and " (" .. methods .. ")" or ""
-  graph.add_note(
-    result,
-    string.format(
-      "%s returned no semantic relationships%s%s.",
-      context.client_name or "The language server",
-      retried and " after one cold-start retry" or "",
-      suffix
-    ),
-    { summary = "no semantic relationships", severity = "info" }
+  assert(
+    nonempty_string(normalized.id) and normalized.id:match("^[%l][%l%d_%-]*$"),
+    "provider tool id must be a lowercase identifier"
   )
-end
-
-local function lsp_contexts(context, source_buffer)
-  if type(lsp.relationship_contexts) == "function" then
-    return lsp.relationship_contexts(context, source_buffer)
+  assert(nonempty_string(normalized.label), "provider tool label must be a non-empty string")
+  assert(nonempty_string(normalized.command), "provider tool command must be a non-empty string")
+  if normalized.enabled ~= nil then
+    assert(type(normalized.enabled) == "boolean", "provider tool enabled must be a boolean")
   end
-  return { context }
+  normalized.enabled = normalized.enabled ~= false
+  if normalized.version_args ~= nil then
+    assert(
+      type(normalized.version_args) == "table" and vim.islist(normalized.version_args),
+      "provider tool version_args must be a list"
+    )
+    for index, argument in ipairs(normalized.version_args) do
+      assert(
+        nonempty_string(argument),
+        string.format("provider tool version_args[%d] must be a non-empty string", index)
+      )
+    end
+  else
+    normalized.version_args = { "--version" }
+  end
+  for _, field in ipairs({ "disabled_message", "unavailable_message", "version_label" }) do
+    assert(
+      normalized[field] == nil or nonempty_string(normalized[field]),
+      "provider tool " .. field .. " must be a non-empty string"
+    )
+  end
+  normalized.provider_id = provider_id
+  return normalized
 end
 
-local function start_lsp_context(context, source_buffer, config, done, report)
-  local lsp_cancel = function() end
-  local retry_timer
-  local retried = false
-  local cancelled = false
-  local run
-
-  local function finish(result, metadata)
-    if cancelled then
-      return
-    end
-    local outcome = metadata and metadata.outcome
-    local retry = config.lsp.cold_start_retry or {}
-    local retryable = not retried
-      and retry.enabled ~= false
-      and (not outcome or outcome.state == "completed")
-      and empty_semantic_result(result, metadata)
-      and type(lsp.recently_attached) == "function"
-      and lsp.recently_attached(context.client_id, retry.window_ms or 10000)
-    if retryable then
-      retried = true
-      report("retrying", { retry_delay_ms = math.max(0, retry.delay_ms or 3000) })
-      retry_timer = vim.defer_fn(function()
-        retry_timer = nil
-        if not cancelled then
-          report("running")
-          run()
+---@param buffer table
+---@param config table
+---@return ArchLensProviderTool[], ArchLensProviderToolIssue[]
+function M.tools(buffer, config)
+  local tools = {}
+  local issues = {}
+  for _, provider in ipairs(M.ordered()) do
+    if provider.tools then
+      local called, definitions = pcall(provider.tools, buffer, config)
+      local declaration_error
+      if not called then
+        declaration_error = tostring(definitions)
+      elseif type(definitions) ~= "table" or not vim.islist(definitions) then
+        declaration_error = "provider tools must return a list"
+      else
+        local seen = {}
+        local provider_tools = {}
+        for _, definition in ipairs(definitions) do
+          local valid, normalized = pcall(normalize_provider_tool, provider.id, definition)
+          if not valid then
+            declaration_error = tostring(normalized)
+            break
+          end
+          if seen[normalized.id] then
+            declaration_error = "provider tools contain duplicate id: " .. normalized.id
+            break
+          end
+          seen[normalized.id] = true
+          provider_tools[#provider_tools + 1] = normalized
         end
-      end, math.max(0, retry.delay_ms or 3000))
-      return
-    end
-
-    if not outcome or outcome.state == "completed" then
-      explain_empty_semantic_result(result, context, metadata, retried)
-    elseif outcome.message then
-      outcome = vim.deepcopy(outcome)
-      local label = context.client_name or "LSP"
-      if not vim.startswith(outcome.message, label) then
-        outcome.message = string.format("%s: %s", label, outcome.message)
+        if not declaration_error then
+          vim.list_extend(tools, provider_tools)
+        end
+      end
+      if declaration_error then
+        issues[#issues + 1] = {
+          provider_id = provider.id,
+          message = declaration_error,
+        }
       end
     end
-    done(result, outcome)
   end
-
-  run = function()
-    lsp_cancel = lsp.relationships(context, source_buffer, finish, {
-      timeout_ms = config.lsp.relationship_timeout_ms,
-      max_results = config.lsp.max_results,
-      max_occurrences = config.lsp.max_occurrences,
-      filters = vim.tbl_extend(
-        "force",
-        vim.deepcopy(config.filters),
-        { include_external = config.include_external }
-      ),
-    })
-  end
-  run()
-
-  return function()
-    cancelled = true
-    if retry_timer and not retry_timer:is_closing() then
-      retry_timer:stop()
-      retry_timer:close()
-    end
-    pcall(lsp_cancel)
-  end
+  return tools, issues
 end
 
-local function start_lsp(context, source_buffer, config, done, report)
-  local contexts = lsp_contexts(context, source_buffer)
-  local combined = graph.delta()
-  local pending = #contexts
-  local cancellations = {}
-  local outcomes = {}
-  local grouping_cancel = function() end
-  local cancelled = false
-
-  local function finish(result, outcome)
-    if cancelled then
-      return
-    end
-    graph.merge(combined, result)
-    outcomes[#outcomes + 1] = outcome or { state = "completed" }
-    pending = pending - 1
-    if pending ~= 0 then
-      return
-    end
-    local terminal_outcome
-    local unavailable = {}
-    for _, current in ipairs(outcomes) do
-      if current.state == "unavailable" then
-        unavailable[#unavailable + 1] = current
-      elseif current.state ~= "completed" then
-        terminal_outcome = combine_outcomes(terminal_outcome, current)
-      end
-    end
-    if terminal_outcome then
-      for _, current in ipairs(unavailable) do
-        terminal_outcome = combine_outcomes(terminal_outcome, current)
-      end
-    elseif #unavailable == #outcomes then
-      for _, current in ipairs(unavailable) do
-        terminal_outcome = combine_outcomes(terminal_outcome, current)
-      end
-    elseif #unavailable > 0 then
-      for _, current in ipairs(unavailable) do
-        graph.add_note(combined, current.message or "Some semantic analysis was unavailable.", {
-          summary = "some semantic analysis unavailable",
-          severity = "warn",
-        })
-      end
-    end
-    if not config.grouping.enabled then
-      done(combined, terminal_outcome)
-      return
-    end
-    grouping_cancel = containers.enrich(
-      combined,
-      context,
-      provider_options(config.grouping, config),
-      function(result)
-        done(result, terminal_outcome)
-      end
-    )
-  end
-
-  for _, semantic_context in ipairs(contexts) do
-    cancellations[#cancellations + 1] =
-      start_lsp_context(semantic_context, source_buffer, config, finish, report)
-  end
-
-  return function()
-    cancelled = true
-    for _, cancel in ipairs(cancellations) do
-      pcall(cancel)
-    end
-    pcall(grouping_cancel)
-  end
+for _, module_name in ipairs(require("archlens.providers.builtins")) do
+  local builtin = require(module_name)
+  assert(type(builtin) == "table", module_name .. " must return a provider definition")
+  assert(nonempty_string(builtin.id), module_name .. " must define a provider id")
+  M.register(builtin.id, builtin.spec)
 end
-
-local function lsp_label(context, source_buffer)
-  local names = {}
-  for _, semantic_context in ipairs(lsp_contexts(context, source_buffer)) do
-    names[#names + 1] = semantic_context.client_name or "LSP"
-  end
-  return table.concat(names, " + ")
-end
-
-M.register("lsp", {
-  order = 10,
-  label = lsp_label,
-  queued = true,
-  queued_label = "LSP",
-  enabled = function(context)
-    return context.client_id ~= nil and not context.module_context
-  end,
-  start = start_lsp,
-})
-
-M.register("imports", {
-  order = 20,
-  label = "Module dependencies",
-  enabled = function(_, source_buffer, config)
-    return config.imports.enabled and treesitter.supports_imports(source_buffer)
-  end,
-  start = function(context, source_buffer, config, done)
-    return imports.relationships(
-      context,
-      source_buffer,
-      provider_options(config.imports, config),
-      done
-    )
-  end,
-  clear_cache = imports.clear_cache,
-})
-
-M.register("importers", {
-  order = 30,
-  label = "Module dependents",
-  enabled = function(context, source_buffer, config)
-    return config.imports.enabled
-      and config.imports.inbound.enabled
-      and (treesitter.supports_imports(source_buffer) or context.import_filetype)
-  end,
-  start = function(context, source_buffer, config, done)
-    local options = provider_options(config.imports.inbound, config)
-    options.filetype = context.import_filetype
-    return import_index.relationships(context, source_buffer, options, done)
-  end,
-})
-
-M.register("ast_grep", {
-  order = 40,
-  label = "ast-grep",
-  queued = function(config)
-    return config.ast_grep.enabled
-  end,
-  enabled = function(context, _, config)
-    return config.ast_grep.enabled and not context.module_context and not context.configuration
-  end,
-  start = function(context, _, config, done)
-    return ast_grep.relationships(context, provider_options(config.ast_grep, config), done)
-  end,
-})
 
 ---@param config table
 ---@return { id: string, label: string }[]
@@ -452,8 +317,37 @@ function M.local_pending(config)
   return pending
 end
 
+local function provider_replacements(provider, context, source_buffer, config)
+  local replacements = provider.replaces
+  if type(replacements) == "function" then
+    replacements = replacements(context, source_buffer, config)
+  end
+  if replacements == nil then
+    return {}
+  end
+  validate_provider_ids(replacements, string.format("provider %s replaces", provider.id))
+  for _, id in ipairs(replacements) do
+    assert(id ~= provider.id, string.format("provider %s cannot replace itself", provider.id))
+    local replaced = registry[id]
+    assert(
+      replaced ~= nil,
+      string.format("provider %s replaces unknown provider: %s", provider.id, id)
+    )
+    assert(
+      replaced.order > provider.order,
+      string.format(
+        "provider %s can only replace later providers, but %s has order %d",
+        provider.id,
+        id,
+        replaced.order
+      )
+    )
+  end
+  return replacements
+end
+
 local function tasks_for(context, source_buffer, config)
-  local tasks = {}
+  local candidates = {}
   for _, provider in ipairs(M.ordered()) do
     local current_provider = provider
     local enabled_ok, enabled = pcall(provider.enabled, context, source_buffer, config)
@@ -467,26 +361,48 @@ local function tasks_for(context, source_buffer, config)
         label_ok = false
         label = "provider label function must return a non-empty string"
       end
-      tasks[#tasks + 1] = {
+      local replacements_ok, replacements =
+        pcall(provider_replacements, current_provider, context, source_buffer, config)
+      candidates[#candidates + 1] = {
         id = current_provider.id,
         label = label_ok and label or current_provider.id,
+        replacements = replacements_ok and replacements or {},
+        can_replace = label_ok and replacements_ok,
         start = function(done, report)
           if not label_ok then
             error(label)
+          end
+          if not replacements_ok then
+            error(replacements)
           end
           return current_provider.start(context, source_buffer, config, done, report)
         end,
       }
     elseif not enabled_ok then
       local enabled_error = enabled
-      tasks[#tasks + 1] = {
+      candidates[#candidates + 1] = {
         id = current_provider.id,
         label = type(current_provider.label) == "string" and current_provider.label
           or current_provider.id,
+        replacements = {},
+        can_replace = false,
         start = function()
           error(enabled_error)
         end,
       }
+    end
+  end
+
+  local tasks = {}
+  local replaced = {}
+  for _, candidate in ipairs(candidates) do
+    if not replaced[candidate.id] then
+      tasks[#tasks + 1] = candidate
+      if candidate.can_replace then
+        for _, id in ipairs(candidate.replacements) do
+          replaced[id] = true
+        end
+      end
     end
   end
   return tasks

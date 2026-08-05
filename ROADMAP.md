@@ -10,7 +10,7 @@ languages.
 
 ## Principles
 
-- Start from the current symbol, file, or module.
+- Start from the current symbol or file, or from a language or build boundary.
 - Prioritize comprehension and navigation over graph completeness.
 - Keep analysis bounded and the editor responsive.
 - Show useful results while slower analysis continues.
@@ -22,22 +22,39 @@ languages.
 - Let providers extend the model without turning the pane into an unstructured
   result list.
 
-## Longer-term direction
+## Current direction
 
-### Module and package context
+### Language and build boundaries
 
-ArchLens currently begins with local code. A natural extension is to move
-between symbols, files, modules, and packages while preserving the same bounded
-and explainable model.
+ArchLens should move between local code and larger contexts only when a
+language or build system provides a real identity. Directories are not treated
+as packages by default.
 
-This may include:
+Go is the first language with a package, module, and workspace boundary chain.
+ArchLens uses `go.mod` and `go.work` metadata to identify each boundary.
 
-- Module or package focus where the language provides a useful boundary
-- Aggregated dependency and dependent views
-- Test and configuration relationships at module level
-- Navigation between a symbol, its containing module, and neighboring modules
+From a symbol, you can move outward to its package, module, and workspace.
+Package views distinguish production relationships from test-only relationships
+for the active build configuration. When build information is unavailable,
+ArchLens keeps syntax-derived relationships available and reports the
+limitation. Module views summarize production relationships between active
+workspace modules. Workspace views list active member modules without repeating
+their dependency graph.
+
+Next steps may include:
+
+- Package or module identities for other ecosystems with authoritative metadata
+- Configuration relationships at boundary level
 - Optional project-specific boundary annotations without assuming one
   architectural style
+
+Future boundary support should use authoritative ecosystem metadata, retain
+identity evidence, and preserve bounded on-demand analysis. Each ecosystem can
+use its own boundary levels instead of adopting Go's vocabulary. Slow build
+discovery must not block local symbol results. Health checks should report only
+the tools relevant to the current language.
+
+## Longer-term direction
 
 ### Guided exploration
 
@@ -62,7 +79,7 @@ Future work may include:
 - Stable provider, relation, adapter, and graph interfaces
 - Compatibility and deprecation guidance
 - Tested examples for language adapters and project-specific providers
-- Consistent health reporting and evidence requirements for extensions
+- Consistent evidence requirements for extensions
 
 ## Possible future work
 

@@ -1,4 +1,4 @@
-local common = require("archlens.adapters.common")
+local common = require("archlens.adapter_support")
 
 local M = {}
 
@@ -26,11 +26,17 @@ local M = {}
 ---@field query? function
 ---@field unsupported_note? string
 
+---@class ArchLensBoundariesAdapter
+---@field resolve? function
+---@field discover? function
+---@field clear_cache? function
+
 ---@class ArchLensAdapterSpec
 ---@field filetypes? string[]
 ---@field filename_extensions? string[]
 ---@field treesitter? ArchLensTreeSitterAdapter
 ---@field ast_grep? ArchLensAstGrepAdapter
+---@field boundaries? ArchLensBoundariesAdapter
 ---@field configuration? function
 ---@field presentation? { row?: function, section?: function }
 
@@ -83,6 +89,7 @@ local default_name_node_types = common.name_node_types()
 
 local adapter_fields = {
   ast_grep = true,
+  boundaries = true,
   configuration = true,
   filename_extensions = true,
   filetypes = true,
@@ -115,6 +122,25 @@ local ast_grep_fields = {
   language = true,
   query = true,
   unsupported_note = true,
+}
+
+local boundary_fields = {
+  clear_cache = true,
+  discover = true,
+  resolve = true,
+}
+
+local boundary_value_fields = {
+  class = true,
+  evidence = true,
+  id = true,
+  import_keys = true,
+  kind_name = true,
+  level = true,
+  name = true,
+  path = true,
+  representative_path = true,
+  symbol_kind = true,
 }
 
 local presentation_fields = {
@@ -300,6 +326,21 @@ local function normalize(language, adapter)
       )
     end
   end
+  if normalized.boundaries ~= nil then
+    assert(type(normalized.boundaries) == "table", "adapter boundaries must be a table")
+    validate_fields(normalized.boundaries, boundary_fields, "boundaries adapter")
+    assert(
+      type(normalized.boundaries.resolve) == "function"
+        or type(normalized.boundaries.discover) == "function",
+      "boundaries adapters require resolve or discover"
+    )
+    for _, field in ipairs({ "resolve", "discover", "clear_cache" }) do
+      assert(
+        normalized.boundaries[field] == nil or type(normalized.boundaries[field]) == "function",
+        "boundaries adapter " .. field .. " must be a function"
+      )
+    end
+  end
   if normalized.configuration ~= nil then
     assert(type(normalized.configuration) == "function", "adapter configuration must be a function")
   end
@@ -337,6 +378,9 @@ function M.register(language, adapter)
   end
 
   registry[language] = normalized
+  if normalized.boundaries and normalized.boundaries.clear_cache then
+    cache_clearers[#cache_clearers + 1] = normalized.boundaries.clear_cache
+  end
   for _, filetype in ipairs(normalized.filetypes) do
     filetypes[filetype] = language
   end
@@ -412,6 +456,198 @@ function M.import_scan_specs(filetype, path)
     end
   end
   return specs
+end
+
+---@param language string
+---@return boolean
+function M.supports_boundaries(language)
+  local adapter = registry[language]
+  return adapter ~= nil and adapter.boundaries ~= nil
+end
+
+---@param language string
+---@return boolean
+function M.supports_boundary_discovery(language)
+  local adapter = registry[language]
+  return adapter ~= nil
+    and adapter.boundaries ~= nil
+    and type(adapter.boundaries.discover) == "function"
+end
+
+local function valid_evidence(value)
+  return type(value) == "table"
+    and nonempty_string(value.provider)
+    and nonempty_string(value.method)
+    and nonempty_string(value.class)
+end
+
+local function validate_boundary(value)
+  assert(type(value) == "table", "boundary descriptors must be tables")
+  validate_fields(value, boundary_value_fields, "boundary descriptor")
+  for _, field in ipairs({ "id", "name", "kind_name", "level", "path" }) do
+    assert(nonempty_string(value[field]), "boundary " .. field .. " must be a non-empty string")
+  end
+  assert(
+    value.level:match("^[%l][%l%d_%-]*$") ~= nil,
+    "boundary level must be a lowercase identifier"
+  )
+  assert(
+    value.class == "language" or value.class == "build",
+    "boundary class must be language or build"
+  )
+  if value.import_keys ~= nil then
+    validate_string_list(value.import_keys, "boundary import_keys")
+  end
+  assert(
+    value.representative_path == nil or nonempty_string(value.representative_path),
+    "boundary representative_path must be a non-empty string"
+  )
+  assert(value.evidence == nil or valid_evidence(value.evidence), "boundary evidence is invalid")
+  assert(
+    value.symbol_kind == nil
+      or (
+        type(value.symbol_kind) == "number"
+        and value.symbol_kind == math.floor(value.symbol_kind)
+        and value.symbol_kind >= vim.lsp.protocol.SymbolKind.File
+        and value.symbol_kind <= vim.lsp.protocol.SymbolKind.TypeParameter
+      ),
+    "boundary symbol_kind must be an LSP SymbolKind"
+  )
+  return vim.deepcopy(value)
+end
+
+local function validate_boundaries(value)
+  assert(
+    type(value) == "table" and vim.islist(value),
+    "boundaries resolver must return a list or nil"
+  )
+  assert(#value > 0, "boundaries resolver must return a non-empty list or nil")
+  local normalized = {}
+  local seen = {}
+  for index, boundary in ipairs(value) do
+    local validated = validate_boundary(boundary)
+    assert(not seen[validated.id], "boundary ids must be unique within a resolved chain")
+    seen[validated.id] = true
+    normalized[index] = validated
+  end
+  return normalized
+end
+
+---@param language string
+---@param path string
+---@param root? string
+---@param context table
+---@return table?
+---@return string? error
+function M.resolve_boundaries(language, path, root, context)
+  local adapter = registry[language]
+  local resolver = adapter and adapter.boundaries and adapter.boundaries.resolve
+  if not resolver then
+    return nil
+  end
+  return call_hook(language, "boundaries resolution", function()
+    local value = resolver(path, root, vim.deepcopy(context))
+    if value == nil then
+      return nil
+    end
+    return validate_boundaries(value)
+  end)
+end
+
+local boundary_discovery_states = {
+  failed = true,
+  timed_out = true,
+  unavailable = true,
+}
+
+local function validate_boundary_outcome(outcome)
+  if outcome == nil then
+    return nil
+  end
+  assert(type(outcome) == "table", "boundary discovery outcome must be a table")
+  for field in pairs(outcome) do
+    assert(
+      field == "state" or field == "message",
+      "unsupported boundary discovery outcome field: " .. tostring(field)
+    )
+  end
+  assert(
+    boundary_discovery_states[outcome.state],
+    "unsupported boundary discovery state: " .. tostring(outcome.state)
+  )
+  assert(
+    outcome.message == nil or nonempty_string(outcome.message),
+    "boundary discovery message must be a non-empty string"
+  )
+  return vim.deepcopy(outcome)
+end
+
+---@param language string
+---@param path string
+---@param root? string
+---@param context table
+---@param callback fun(boundaries: table[]?, outcome: table?)
+---@return function?
+function M.discover_boundaries(language, path, root, context, callback)
+  assert(type(callback) == "function", "boundary discovery requires a callback")
+  local adapter = registry[language]
+  local discover = adapter and adapter.boundaries and adapter.boundaries.discover
+  if not discover then
+    return nil
+  end
+
+  local settled = false
+  local cancelled = false
+  local cancel_discovery = function() end
+  local function fail(message)
+    if settled or cancelled then
+      return
+    end
+    settled = true
+    callback(nil, {
+      state = "failed",
+      message = string.format(
+        "%s adapter boundary discovery failed: %s",
+        tostring(language),
+        tostring(message)
+      ),
+    })
+  end
+  local function done(value, outcome)
+    if settled or cancelled then
+      return
+    end
+    local ok, normalized, normalized_outcome = pcall(function()
+      local boundaries
+      if value ~= nil then
+        boundaries = validate_boundaries(value)
+      end
+      return boundaries, validate_boundary_outcome(outcome)
+    end)
+    if not ok then
+      fail(normalized)
+      return
+    end
+    settled = true
+    callback(normalized, normalized_outcome)
+  end
+
+  local ok, cancel_or_error = pcall(discover, path, root, vim.deepcopy(context), done)
+  if not ok then
+    fail(cancel_or_error)
+  elseif not settled and type(cancel_or_error) ~= "function" then
+    fail("callback must return a cancellation function")
+  elseif type(cancel_or_error) == "function" then
+    cancel_discovery = cancel_or_error
+  end
+
+  return function()
+    if settled or cancelled then
+      return
+    end
+    cancelled = true
+    pcall(cancel_discovery)
+  end
 end
 
 function M.configuration(language, bufnr, context, syntax_context)
@@ -537,31 +773,20 @@ function M.clear_cache()
   end
 end
 
-local builtin_languages = {
-  "go",
-  "nix",
-  "ocaml",
-  "ocaml_interface",
-  "rust",
-  "javascript",
-  "lua",
-  "python",
-  "tsx",
-  "typescript",
-}
+local builtin_languages = require("archlens.languages.builtins")
 
 for _, language in ipairs(builtin_languages) do
   ---@type ArchLensBuiltinAdapter
-  local builtin = require("archlens.adapters." .. language)
+  local builtin = require(language.adapter)
   assert(
     type(builtin) == "table" and type(builtin.spec) == "table",
-    string.format("built-in adapter must provide a spec: %s", language)
+    string.format("built-in adapter must provide a spec: %s", language.id)
   )
-  M.register(language, builtin.spec)
+  M.register(language.id, builtin.spec)
   if builtin.clear_cache then
     assert(
       type(builtin.clear_cache) == "function",
-      string.format("built-in adapter clear_cache must be a function: %s", language)
+      string.format("built-in adapter clear_cache must be a function: %s", language.id)
     )
     cache_clearers[#cache_clearers + 1] = builtin.clear_cache
   end

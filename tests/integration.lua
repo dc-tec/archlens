@@ -4,6 +4,7 @@ local ast_grep_command = assert(vim.env.ARCHLENS_AST_GREP, "ARCHLENS_AST_GREP is
 local graph = require("archlens.graph")
 local model = require("archlens.model")
 local test_paths = require("archlens.test_paths")
+local boundaries = require("archlens.boundaries")
 local treesitter = require("archlens.treesitter")
 
 local function assert_equal(actual, expected, message)
@@ -134,11 +135,73 @@ for _, case in ipairs(cases) do
   contexts[case.file] = context
 end
 
+local go_boundaries = contexts["main.go"].enclosing_boundaries
+assert(go_boundaries, "Go symbols should resolve their containing boundaries")
+assert_equal(#go_boundaries, 2, "Go symbols should resolve package and module boundaries")
+local go_boundary = go_boundaries[1]
+assert(go_boundary, "Go symbols should resolve their containing package boundary")
+assert_equal(
+  go_boundary.boundary_id,
+  "go-package:example.com/project",
+  "Go package boundaries should use the import path as stable identity"
+)
+assert_equal(go_boundary.kind_name, "Go package", "Go boundaries should retain language terms")
+assert_equal(go_boundary.name, "project", "root Go packages should use a compact label")
+assert_equal(go_boundary.boundary_level, "package", "the immediate Go boundary should be a package")
+local go_module = go_boundaries[2]
+assert_equal(
+  go_module.boundary_id,
+  "go-module:example.com/project",
+  "Go modules should use the declared module path as stable identity"
+)
+assert_equal(go_module.kind_name, "Go module", "Go module boundaries should retain build terms")
+assert_equal(go_module.boundary_level, "module", "the outer Go boundary should be a module")
+assert_equal(go_module.boundary_class, "build", "Go modules should be build boundaries")
+assert_equal(
+  go_boundary.enclosing_boundaries[1].boundary_id,
+  go_module.boundary_id,
+  "package focus should retain its immediate module parent"
+)
+
 local function resolve_fixture(file, filetype, position)
   vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/" .. file))
   vim.bo.filetype = filetype
   return assert(treesitter.resolve(0, position), file .. " did not resolve through Tree-sitter")
 end
+
+vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/main.go"))
+vim.bo.filetype = "go"
+local followed_go_boundary = boundaries.for_buffer(0, "package")
+assert(followed_go_boundary, "Go buffers should resolve a package boundary without a symbol")
+assert_equal(
+  followed_go_boundary.boundary_id,
+  go_boundary.boundary_id,
+  "buffer-level package resolution should retain stable boundary identity"
+)
+local refocused_go_boundary = treesitter.resolve(0, { line = 2, character = 5 }, go_boundary)
+assert_equal(
+  refocused_go_boundary.boundary_id,
+  go_boundary.boundary_id,
+  "boundary focus should not collapse back into its representative symbol"
+)
+assert_equal(refocused_go_boundary.is_boundary, true, "boundary focus should retain its scope")
+
+local refocused_go_module = treesitter.resolve(0, { line = 2, character = 5 }, go_module)
+assert_equal(
+  refocused_go_module.boundary_id,
+  go_module.boundary_id,
+  "module focus should not collapse back into its representative symbol"
+)
+assert_equal(refocused_go_module.is_boundary, true, "module focus should retain boundary scope")
+
+vim.cmd.edit(vim.fn.fnameescape(fixture_root .. "/go.mod"))
+vim.bo.filetype = "gomod"
+local opened_go_module = treesitter.resolve(0, { line = 0, character = 0 }, go_module)
+assert_equal(
+  opened_go_module.language,
+  "go",
+  "boundary focus should retain its adapter language when its representative has another filetype"
+)
 
 local go_interface = resolve_fixture("types.go", "go", { line = 2, character = 0 })
 assert_equal(go_interface.name, "Contract", "Go type-keyword focus should select the type spec")

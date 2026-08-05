@@ -12,8 +12,8 @@ end, { desc = "Explore relationships around the symbol under the cursor" })
 
 vim.api.nvim_create_user_command("ArchLensRefresh", function()
   archlens.refresh()
-end, { desc = "Refresh the current ArchLens" })
+end, { desc = "Refresh the current ArchLens focus" })
 
 vim.api.nvim_create_user_command("ArchLensClose", function()
   archlens.close()
-end, { desc = "Close the current ArchLens" })
+end, { desc = "Close the ArchLens pane" })

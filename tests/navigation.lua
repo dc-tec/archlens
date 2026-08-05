@@ -60,14 +60,48 @@ local function run()
   local beta_syntax = context("Beta", 3, nil)
   local alpha_semantic = context("Alpha", 0, 1)
   local beta_semantic = context("Beta", 3, 1)
+  local function package_context(name, id, buffer)
+    local package_uri = vim.uri_from_bufnr(buffer)
+    return {
+      name = name,
+      kind = vim.lsp.protocol.SymbolKind.Package,
+      kind_name = "Lua package",
+      root_dir = vim.fs.dirname(vim.api.nvim_buf_get_name(buffer)),
+      path = vim.api.nvim_buf_get_name(buffer),
+      path_label = name,
+      line = 1,
+      location = {
+        uri = package_uri,
+        range = {
+          start = { line = 0, character = 0 },
+          ["end"] = { line = 0, character = 0 },
+        },
+      },
+      language = "lua",
+      is_boundary = true,
+      boundary_id = id,
+      boundary_class = "language",
+      boundary_level = "package",
+      enclosing_boundaries = {},
+    }
+  end
+  local packages_by_buffer = {
+    [source_buffer] = package_context("package-a", "lua-package:a", source_buffer),
+  }
   local resolve_calls = {}
   local cancellations = 0
   local provider_cancellations = 0
+  local provider_contexts = {}
   local rendered = {}
   local active_session
   local sessions_by_tab = {}
   local provider_hooks
   local hold_provider = false
+  local boundary_discovery_enabled = false
+  local boundary_discovery_requests = {}
+  local boundary_refreshes = 0
+  local adapter_cache_clears = 0
+  local provider_cache_clears = 0
 
   package.loaded["archlens.lsp"] = {
     note_attach = function() end,
@@ -90,12 +124,51 @@ local function run()
       return vim.deepcopy(position.line < 3 and alpha_syntax or beta_syntax)
     end,
   }
+  local function boundary_for_buffer(buffer, level)
+    equal(level, "package", "package follow should request its original boundary level")
+    return vim.deepcopy(packages_by_buffer[buffer])
+  end
+  package.loaded["archlens.boundaries"] = {
+    supports_discovery = function()
+      return boundary_discovery_enabled
+    end,
+    discover = function(current, _, callback)
+      local request = {
+        context = vim.deepcopy(current),
+        callback = callback,
+        cancelled = false,
+      }
+      boundary_discovery_requests[#boundary_discovery_requests + 1] = request
+      return function()
+        request.cancelled = true
+      end
+    end,
+    refresh = function(current, _, callback)
+      boundary_refreshes = boundary_refreshes + 1
+      adapter_cache_clears = adapter_cache_clears + 1
+      local refreshed = vim.deepcopy(current)
+      refreshed.enclosing_boundaries = { vim.deepcopy(packages_by_buffer[source_buffer]) }
+      callback(refreshed)
+      return function() end
+    end,
+    clear_cache = function()
+      adapter_cache_clears = adapter_cache_clears + 1
+    end,
+    for_buffer = boundary_for_buffer,
+    resolve_buffer = function(buffer, level, _, callback)
+      callback(boundary_for_buffer(buffer, level))
+      return function() end
+    end,
+  }
   package.loaded["archlens.providers"] = {
-    clear_cache = function() end,
+    clear_cache = function()
+      provider_cache_clears = provider_cache_clears + 1
+    end,
     local_pending = function()
       return {}
     end,
     run = function(current, _, _, hooks)
+      provider_contexts[#provider_contexts + 1] = vim.deepcopy(current)
       provider_hooks = hooks
       local snapshot = graph.new(current)
       if hold_provider then
@@ -145,6 +218,46 @@ local function run()
   vim.api.nvim_exec_autocmds("CursorMoved", { buffer = source_buffer })
   vim.wait(20)
   equal(#resolve_calls, 1, "pinned mode should ignore cursor events")
+
+  boundary_discovery_enabled = true
+  local providers_before_discovery = #provider_contexts
+  archlens.show_here()
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(alpha_semantic))
+  equal(#boundary_discovery_requests, 1, "symbol resolution should start boundary discovery")
+  equal(
+    #provider_contexts,
+    providers_before_discovery + 1,
+    "symbol analysis should remain available while boundaries are discovered"
+  )
+  local enriched_alpha = vim.deepcopy(alpha_semantic)
+  enriched_alpha.enclosing_boundaries = { vim.deepcopy(packages_by_buffer[source_buffer]) }
+  boundary_discovery_requests[1].callback(enriched_alpha)
+  equal(
+    active_session.current.enclosing_boundaries[1].boundary_id,
+    packages_by_buffer[source_buffer].boundary_id,
+    "completed boundary discovery should refresh the active symbol context"
+  )
+  equal(
+    #provider_contexts,
+    providers_before_discovery + 2,
+    "discovered boundaries should restart analysis for the enriched context"
+  )
+  boundary_discovery_enabled = false
+
+  local previous_adapter_clears = adapter_cache_clears
+  local previous_provider_clears = provider_cache_clears
+  packages_by_buffer[source_buffer] =
+    package_context("package-refreshed", "lua-package:refreshed", source_buffer)
+  archlens.refresh()
+  equal(boundary_refreshes, 1, "refresh should re-resolve the current boundary chain")
+  equal(
+    active_session.current.enclosing_boundaries[1].boundary_id,
+    "lua-package:refreshed",
+    "refresh should replace the stale boundary context"
+  )
+  equal(adapter_cache_clears, previous_adapter_clears + 1, "refresh should clear adapter caches")
+  equal(provider_cache_clears, previous_provider_clears + 1, "refresh should clear provider caches")
+  packages_by_buffer[source_buffer] = package_context("package-a", "lua-package:a", source_buffer)
 
   hold_provider = true
   archlens.show_here()
@@ -331,6 +444,125 @@ local function run()
   archlens.toggle_follow()
   archlens.back()
   equal(active_session.cursor_follow, false, "back should return to pinned mode")
+
+  local package_a = packages_by_buffer[source_buffer]
+  archlens.focus({ context = package_a, location = package_a.location })
+  equal(active_session.current.boundary_id, package_a.boundary_id, "package focus should activate")
+  local history_before_package_follow = active_session.model.navigation.back_count
+  local resolves_before_package_follow = #resolve_calls
+  local providers_before_package_follow = #provider_contexts
+  archlens.toggle_follow()
+  vim.wait(20)
+  equal(active_session.follow_scope, "package", "following should preserve package focus")
+  equal(
+    active_session.model.navigation.back_count,
+    history_before_package_follow,
+    "enabling follow should preserve navigation history"
+  )
+  equal(
+    #resolve_calls,
+    resolves_before_package_follow,
+    "package follow should not start symbol resolution"
+  )
+  equal(
+    #provider_contexts,
+    providers_before_package_follow,
+    "enabling follow within the focused package should not restart analysis"
+  )
+  assert(
+    vim.tbl_contains(
+      require("archlens.render").build(rendered[#rendered], { width = 56 }).lines,
+      "Following package at source cursor · gs symbol"
+    ),
+    "the pane should identify package-follow mode"
+  )
+
+  vim.api.nvim_win_set_cursor(source_window, { 4, 1 })
+  vim.api.nvim_exec_autocmds("CursorMoved", { buffer = source_buffer })
+  vim.wait(20)
+  equal(
+    #provider_contexts,
+    providers_before_package_follow,
+    "movement inside one package should not restart package analysis"
+  )
+
+  archlens.focus_source_symbol()
+  equal(active_session.follow_scope, "symbol", "source-symbol focus should change follow scope")
+  equal(active_session.cursor_follow, true, "source-symbol focus should keep active following")
+  equal(#resolve_calls, resolves_before_package_follow + 1, "source-symbol focus should resolve")
+  equal(active_session.current.name, "Beta", "source-symbol focus should update immediately")
+  equal(
+    active_session.model.navigation.back_count,
+    history_before_package_follow + 1,
+    "source-symbol focus should retain the boundary in history"
+  )
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(beta_semantic))
+  archlens.back()
+  equal(active_session.cursor_follow, false, "back should pin the restored package")
+  equal(
+    active_session.current.boundary_id,
+    package_a.boundary_id,
+    "back should restore the package followed before source-symbol focus"
+  )
+
+  local resolves_before_pinned_symbol = #resolve_calls
+  archlens.focus_source_symbol()
+  equal(active_session.cursor_follow, false, "source-symbol focus should preserve pinned mode")
+  equal(
+    #resolve_calls,
+    resolves_before_pinned_symbol + 1,
+    "pinned source-symbol focus should resolve"
+  )
+  equal(active_session.current.name, "Beta", "pinned source-symbol focus should update immediately")
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(beta_semantic))
+  archlens.back()
+  equal(
+    active_session.current.boundary_id,
+    package_a.boundary_id,
+    "back should restore the package after pinned source-symbol focus"
+  )
+
+  archlens.toggle_follow()
+  vim.wait(20)
+  equal(active_session.follow_scope, "package", "restored package should resume package following")
+  local resolves_before_cross_package = #resolve_calls
+  local providers_before_cross_package = #provider_contexts
+
+  local package_b_buffer = vim.api.nvim_create_buf(false, true)
+  local package_b_path = vim.fn.tempname() .. ".lua"
+  vim.api.nvim_buf_set_name(package_b_buffer, package_b_path)
+  vim.bo[package_b_buffer].filetype = "lua"
+  vim.api.nvim_buf_set_lines(package_b_buffer, 0, -1, false, { "local package_b = true" })
+  local package_b = package_context("package-b", "lua-package:b", package_b_buffer)
+  packages_by_buffer[package_b_buffer] = package_b
+  vim.api.nvim_win_set_buf(source_window, package_b_buffer)
+  vim.api.nvim_exec_autocmds("BufEnter", { buffer = package_b_buffer })
+  vim.wait(20)
+  equal(
+    #provider_contexts,
+    providers_before_cross_package + 1,
+    "crossing a package boundary should start one package analysis"
+  )
+  equal(
+    active_session.current.boundary_id,
+    package_b.boundary_id,
+    "package follow should refresh navigation to the source package"
+  )
+  equal(
+    #resolve_calls,
+    resolves_before_cross_package,
+    "cross-package follow should remain independent from symbol resolution"
+  )
+  vim.api.nvim_buf_set_lines(package_b_buffer, 0, -1, false, { "local package_b = false" })
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = package_b_buffer })
+  vim.wait(20)
+  equal(
+    #provider_contexts,
+    providers_before_cross_package + 2,
+    "editing the followed package should refresh its analysis"
+  )
+  archlens.toggle_follow()
+  vim.api.nvim_win_set_buf(source_window, source_buffer)
 
   archlens.toggle_follow()
   vim.cmd("vsplit")

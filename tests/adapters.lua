@@ -1,5 +1,10 @@
 local adapters = require("archlens.adapters")
 local ast_grep = require("archlens.ast_grep")
+local fixture_module = assert(
+  vim.api.nvim_get_runtime_file("tests/fixtures/project/go.mod", false)[1],
+  "Go fixture module is unavailable"
+)
+local fixture_root = vim.fs.dirname(fixture_module)
 
 local function equal(actual, expected, message)
   assert(vim.deep_equal(actual, expected), message or vim.inspect({ actual, expected }))
@@ -119,6 +124,168 @@ equal(
   "import adapter reads should be defensive copies"
 )
 equal(adapters.imports_for_filetype("unknown"), nil)
+equal(adapters.supports_boundaries("go"), true)
+equal(adapters.supports_boundaries("rust"), false)
+local go_fixture = vim.fs.joinpath(fixture_root, "main.go")
+local go_boundaries, go_boundary_error =
+  adapters.resolve_boundaries("go", go_fixture, vim.fs.dirname(go_fixture), {})
+assert(go_boundaries, "Go boundary resolution failed: " .. tostring(go_boundary_error))
+local go_boundary = go_boundaries[1]
+equal(go_boundary.id, "go-package:example.com/project")
+equal(go_boundary.class, "language")
+equal(go_boundary.level, "package")
+equal(go_boundary.kind_name, "Go package")
+equal(go_boundary.name, "project")
+equal(go_boundary.import_keys, { "go-package:example.com/project" })
+local go_module = go_boundaries[2]
+equal(go_module.id, "go-module:example.com/project")
+equal(go_module.class, "build")
+equal(go_module.level, "module")
+equal(go_module.kind_name, "Go module")
+equal(go_module.name, "example.com/project")
+equal(go_module.representative_path, vim.fs.joinpath(fixture_root, "go.mod"))
+
+local quoted_module_root = vim.fn.tempname()
+vim.fn.mkdir(quoted_module_root, "p")
+vim.fn.writefile({ 'module "example.test/quoted"' }, vim.fs.joinpath(quoted_module_root, "go.mod"))
+local quoted_module_source = vim.fs.joinpath(quoted_module_root, "main.go")
+vim.fn.writefile({ "package quoted" }, quoted_module_source)
+local quoted_boundaries =
+  assert(adapters.resolve_boundaries("go", quoted_module_source, quoted_module_root, {}))
+equal(
+  quoted_boundaries[1].id,
+  "go-package:example.test/quoted",
+  "quoted go.mod module paths should form canonical package IDs"
+)
+equal(
+  quoted_boundaries[2].id,
+  "go-module:example.test/quoted",
+  "quoted go.mod module paths should form canonical module IDs"
+)
+local boundaries = require("archlens.boundaries")
+local quoted_contexts = boundaries.contexts({
+  language = "go",
+  root_dir = quoted_module_root,
+  path = quoted_module_source,
+}, quoted_boundaries)
+vim.fn.writefile(
+  { 'module "example.test/refreshed"' },
+  vim.fs.joinpath(quoted_module_root, "go.mod")
+)
+local refreshed_quoted_package
+boundaries.refresh(quoted_contexts[1], {}, function(value)
+  refreshed_quoted_package = value
+end)
+equal(
+  refreshed_quoted_package.boundary_id,
+  "go-package:example.test/refreshed",
+  "refresh should invalidate go.mod caches and replace a focused package identity"
+)
+
+local workspace_root = vim.fn.tempname()
+local workspace_module = vim.fs.joinpath(workspace_root, "app")
+vim.fn.mkdir(workspace_module, "p")
+vim.fn.writefile({ "go 1.26.5", "use ./app" }, vim.fs.joinpath(workspace_root, "go.work"))
+vim.fn.writefile({ "module example.test/app" }, vim.fs.joinpath(workspace_module, "go.mod"))
+local workspace_source = vim.fs.joinpath(workspace_module, "main.go")
+vim.fn.writefile({ "package main" }, workspace_source)
+local previous_gowork = vim.env.GOWORK
+vim.env.GOWORK = "auto"
+local workspace_boundaries =
+  assert(adapters.resolve_boundaries("go", workspace_source, workspace_module, {}))
+vim.env.GOWORK = previous_gowork
+equal(#workspace_boundaries, 3, "a used Go module should expose its explicit workspace")
+local go_workspace = workspace_boundaries[3]
+equal(go_workspace.level, "workspace")
+equal(go_workspace.class, "build")
+equal(go_workspace.kind_name, "Go workspace")
+equal(go_workspace.path, workspace_root)
+equal(go_workspace.representative_path, vim.fs.joinpath(workspace_root, "go.work"))
+equal(go_workspace.evidence.method, "go.work/use")
+local workspace_contexts = boundaries.contexts({
+  language = "go",
+  root_dir = workspace_module,
+  path = workspace_source,
+}, workspace_boundaries)
+equal(workspace_contexts[1].boundary_level, "package")
+equal(workspace_contexts[1].enclosing_boundaries[1].boundary_level, "module")
+equal(workspace_contexts[2].enclosing_boundaries[1].boundary_level, "workspace")
+equal(adapters.resolve_boundaries("rust", go_fixture, fixture_root, {}), nil)
+
+local discovered
+local discovery_outcome
+local discovery_done
+local discovery_cancelled = 0
+local discovery_cache_cleared = 0
+adapters.register("rust_shaped_boundary", {
+  boundaries = {
+    resolve = function()
+      return nil
+    end,
+    discover = function(_, _, _, done)
+      discovery_done = done
+      return function()
+        discovery_cancelled = discovery_cancelled + 1
+      end
+    end,
+    clear_cache = function()
+      discovery_cache_cleared = discovery_cache_cleared + 1
+    end,
+  },
+})
+equal(adapters.supports_boundaries("rust_shaped_boundary"), true)
+equal(adapters.supports_boundary_discovery("rust_shaped_boundary"), true)
+local cancel_discovery = assert(
+  adapters.discover_boundaries(
+    "rust_shaped_boundary",
+    "/workspace/src/lib.rs",
+    "/workspace",
+    {},
+    function(value, outcome)
+      discovered = value
+      discovery_outcome = outcome
+    end
+  )
+)
+assert(discovery_done, "asynchronous adapters should receive a completion callback")
+discovery_done({
+  {
+    id = "cargo-target:fixture/lib",
+    class = "build",
+    level = "target",
+    kind_name = "Rust crate",
+    name = "fixture",
+    path = "/workspace/src",
+    representative_path = "/workspace/src/lib.rs",
+    symbol_kind = vim.lsp.protocol.SymbolKind.Module,
+  },
+  {
+    id = "cargo-package:fixture",
+    class = "build",
+    level = "package",
+    kind_name = "Cargo package",
+    name = "fixture",
+    path = "/workspace",
+    representative_path = "/workspace/Cargo.toml",
+  },
+  {
+    id = "cargo-workspace:/workspace",
+    class = "build",
+    level = "workspace",
+    kind_name = "Cargo workspace",
+    name = "workspace",
+    path = "/workspace",
+    representative_path = "/workspace/Cargo.toml",
+  },
+})
+equal(discovery_outcome, nil)
+equal(discovered[1].level, "target", "boundary levels should be extension-defined")
+equal(discovered[1].symbol_kind, vim.lsp.protocol.SymbolKind.Module)
+cancel_discovery()
+equal(discovery_cancelled, 0, "completed discovery should not invoke late cancellation")
+adapters.clear_cache()
+equal(discovery_cache_cleared, 1, "registered boundary caches should clear on refresh")
+
 equal(adapters.get("rust").treesitter.symbol_types.impl_item, "Implementation")
 equal(adapters.get("rust").treesitter.symbol_types.field_declaration, "Field")
 equal(adapters.get("rust").treesitter.symbol_types.function_signature_item, "Method")
@@ -184,6 +351,17 @@ equal(
 )
 equal(adapters.section_presentation(go_interface, { id = "children" }, {}), {
   label = "Members",
+})
+local go_package = {
+  is_boundary = true,
+  boundary_level = "package",
+  language = "go",
+}
+equal(adapters.section_presentation(go_package, { id = "module_imports" }, {}), {
+  label = "Package dependencies",
+})
+equal(adapters.section_presentation(go_package, { id = "module_importers" }, {}), {
+  label = "Package dependents",
 })
 equal(
   adapters.row_presentation(go_interface, { id = "implementations" }, {
@@ -413,6 +591,21 @@ local invalid_static_specs = {
     error = "ast-grep adapter unsupported_note must be a non-empty string",
   },
   {
+    id = "invalid_boundary_field",
+    spec = { boundaries = { resolve = function() end, fallback = "directory" } },
+    error = "unsupported boundaries adapter field: fallback",
+  },
+  {
+    id = "invalid_boundary_resolver",
+    spec = { boundaries = { resolve = true } },
+    error = "boundaries adapters require resolve or discover",
+  },
+  {
+    id = "invalid_boundary_discovery",
+    spec = { boundaries = { discover = true } },
+    error = "boundaries adapters require resolve or discover",
+  },
+  {
     id = "invalid_presentation_field",
     spec = { presentation = { group = function() end } },
     error = "unsupported adapter presentation field: group",
@@ -432,6 +625,31 @@ for _, invalid in ipairs(invalid_static_specs) do
     string.format("%s should report %q, got %s", invalid.id, invalid.error, tostring(err))
   )
 end
+
+adapters.register("broken_boundary", {
+  boundaries = {
+    resolve = function()
+      return {
+        {
+          id = "broken:value",
+          name = "broken",
+          kind_name = "Broken package",
+          level = "package",
+          path = "/workspace/broken",
+          class = "language",
+          representative_path = 42,
+        },
+      }
+    end,
+  },
+})
+local _, boundary_error =
+  adapters.resolve_boundaries("broken_boundary", "/workspace/broken/source", "/workspace", {})
+assert(
+  boundary_error
+    and boundary_error:find("boundary representative_path must be a non-empty string", 1, true),
+  "invalid boundary descriptors should use the adapter diagnostic path"
+)
 
 adapters.register("broken_hooks", {
   configuration = function()

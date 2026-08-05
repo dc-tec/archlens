@@ -2,7 +2,8 @@ local relations = require("archlens.relations")
 
 local M = {}
 
----@alias ArchLensGraphScope "symbol"|"file"|"module"|"configuration"
+---@alias ArchLensGraphScope "symbol"|"file"|"module"|"boundary"|"configuration"
+---@alias ArchLensVisibilityScope "project"|"external"|"vendored"|"generated"|"excluded"
 ---@alias ArchLensNoteSeverity "info"|"warn"|"error"
 ---@alias ArchLensProviderState "cancelled"|"completed"|"failed"|"queued"|"retrying"|"running"|"timed_out"|"unavailable"
 
@@ -47,6 +48,7 @@ local M = {}
 ---@field path_label? string
 ---@field line? integer
 ---@field position_encoding? string
+---@field visibility_scope? ArchLensVisibilityScope
 
 ---@class ArchLensGraphEdge
 ---@field id string
@@ -73,10 +75,19 @@ local M = {}
 ---@field focus? ArchLensGraphNode
 
 local valid_scopes = {
+  boundary = true,
   configuration = true,
   file = true,
   module = true,
   symbol = true,
+}
+
+local valid_visibility_scopes = {
+  excluded = true,
+  external = true,
+  generated = true,
+  project = true,
+  vendored = true,
 }
 
 local valid_provider_states = {
@@ -204,6 +215,10 @@ function M.node(fields)
   node.scope = scope_for(node)
   assert(valid_scopes[node.scope], "unsupported graph node scope: " .. tostring(node.scope))
   assert(
+    node.visibility_scope == nil or valid_visibility_scopes[node.visibility_scope],
+    "unsupported graph node visibility scope: " .. tostring(node.visibility_scope)
+  )
+  assert(
     node.location or (type(node.id) == "string" and node.id ~= ""),
     "graph nodes require a location or id"
   )
@@ -221,6 +236,7 @@ end
 function M.node_from_context(context, overrides)
   assert(type(context) == "table", "graph context nodes require a context")
   return M.node(vim.tbl_extend("force", {
+    id = context.boundary_id,
     name = context.name,
     detail = context.detail,
     kind = context.kind,
@@ -455,7 +471,7 @@ function M.add_edge(target, edge)
   if target.focus then
     local focus = M.focus_node(edge)
     local relation = relations.get(edge.kind)
-    if relation.anchor == "file" then
+    if relation.anchor == "file" and target.focus.scope ~= "boundary" then
       assert(
         focus
           and focus.scope == "file"

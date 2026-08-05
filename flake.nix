@@ -1,5 +1,5 @@
 {
-  description = "Human-first architectural relationship lens for Neovim";
+  description = "Contextual code relationships for Neovim";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -47,7 +47,7 @@
             version = "0.2.0-dev";
             src = archlensSource;
             meta = {
-              description = "Human-first architectural relationship lens for Neovim";
+              description = "Contextual code relationships for Neovim";
               homepage = "https://github.com/dc-tec/archlens.nvim";
               license = lib.licenses.asl20;
               platforms = [ system ];
@@ -129,6 +129,9 @@
                 -l ${./tests/adapters.lua}
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/boundaries.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
                 -l ${./tests/relations.lua}
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
@@ -154,6 +157,15 @@
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
                 -l ${./tests/import_index.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/languages/go/packages.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/languages/go/modules.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/languages/go/workspace.lua}
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
                 -l ${./tests/containers.lua}

@@ -22,6 +22,9 @@ local recently_attached = true
 local retry_window
 local multi_client = false
 local clock = 0
+local supports_imports = false
+local go_relationship_calls = 0
+local import_index_calls = { dependencies = 0, dependents = 0 }
 
 package.loaded["archlens.lsp"] = {
   relationship_contexts = function(primary)
@@ -65,13 +68,47 @@ package.loaded["archlens.imports"] = {
   end,
 }
 package.loaded["archlens.import_index"] = {
+  dependencies = function(_, _, _, callback)
+    import_index_calls.dependencies = import_index_calls.dependencies + 1
+    callback(graph.delta())
+    return function() end
+  end,
+  dependents = function(_, _, _, callback)
+    import_index_calls.dependents = import_index_calls.dependents + 1
+    callback(graph.delta())
+    return function() end
+  end,
   relationships = function()
     error("module dependents should be disabled")
   end,
 }
+package.loaded["archlens.languages.go.packages"] = {
+  supports = function(current)
+    return current.is_boundary == true
+      and current.boundary_level == "package"
+      and current.language == "go"
+  end,
+  relationships = function(_, _, _, callback)
+    go_relationship_calls = go_relationship_calls + 1
+    callback(graph.delta())
+    return function() end
+  end,
+  clear_cache = function() end,
+}
+package.loaded["archlens.languages.go.modules"] = {
+  supports = function(current)
+    return current.is_boundary == true
+      and current.boundary_level == "module"
+      and current.language == "go"
+  end,
+  relationships = function()
+    error("Go module analysis should be disabled")
+  end,
+  clear_cache = function() end,
+}
 package.loaded["archlens.treesitter"] = {
   supports_imports = function()
-    return false
+    return supports_imports
   end,
 }
 package.loaded["archlens.providers"] = nil
@@ -208,6 +245,22 @@ providers.register("custom", {
   enabled = function(_, _, current_config)
     return current_config.providers.custom.enabled
   end,
+  tools = function(buffer, current_config)
+    if buffer.language ~= "rust" then
+      return {}
+    end
+    local options = current_config.providers.custom or {}
+    return {
+      {
+        id = "cargo",
+        label = "Cargo",
+        command = options.command or "cargo",
+        enabled = options.enabled ~= false,
+        unavailable_message = "Rust package relationships will be unavailable.",
+        version_label = "Cargo",
+      },
+    }
+  end,
   start = function(_, _, current_config, done, report)
     custom_started = custom_started + 1
     local options = current_config.providers.custom or {}
@@ -238,21 +291,156 @@ providers.register("broken", {
   start = function()
     error("provider unavailable")
   end,
+  tools = function(buffer)
+    if buffer.language == "broken" then
+      return { { id = "invalid" } }
+    end
+    return {}
+  end,
 })
 local provider_ids = vim.tbl_map(function(provider)
   return provider.id
 end, providers.ordered())
 equal(
   provider_ids,
-  { "lsp", "imports", "custom", "broken", "importers", "ast_grep" },
+  { "lsp", "go", "imports", "custom", "broken", "importers", "ast_grep" },
   "custom providers should participate in stable orchestration order"
+)
+local rust_tools, rust_tool_issues = providers.tools({ language = "rust" }, {
+  providers = { custom = { enabled = true, command = "/tools/cargo" } },
+  imports = { enabled = true },
+})
+equal(rust_tool_issues, {}, "valid provider tool declarations should not report issues")
+equal(rust_tools, {
+  {
+    id = "cargo",
+    provider_id = "custom",
+    label = "Cargo",
+    command = "/tools/cargo",
+    enabled = true,
+    version_args = { "--version" },
+    unavailable_message = "Rust package relationships will be unavailable.",
+    version_label = "Cargo",
+  },
+}, "provider tools should support non-Go build integrations")
+local invalid_tools, invalid_tool_issues = providers.tools({ language = "broken" }, config)
+equal(invalid_tools, {}, "invalid provider tool declarations must not leak partial state")
+assert(
+  invalid_tool_issues[1]
+    and invalid_tool_issues[1].provider_id == "broken"
+    and invalid_tool_issues[1].message:find("label must be a non-empty string", 1, true),
+  "invalid provider tool declarations should identify their provider and contract failure"
 )
 equal(providers.local_pending(config), {
   { id = "lsp", label = "LSP" },
   { id = "custom", label = "Custom relationships" },
 }, "queued custom providers should be visible before semantic focus resolves")
+local registered = {}
+for _, provider in ipairs(providers.ordered()) do
+  registered[provider.id] = provider
+end
+supports_imports = true
+config.imports = {
+  enabled = true,
+  show_on_symbols = false,
+  inbound = { enabled = true },
+}
+local boundary_symbol = vim.deepcopy(context)
+boundary_symbol.enclosing_boundaries = { { boundary_id = "go-package:example.test/project" } }
+equal(
+  registered.imports.enabled(boundary_symbol, bufnr, config),
+  false,
+  "symbols with a real boundary should omit repeated package dependencies by default"
+)
+equal(
+  registered.importers.enabled(boundary_symbol, bufnr, config),
+  false,
+  "symbols with a real boundary should omit repeated package dependents by default"
+)
+config.imports.show_on_symbols = true
+equal(registered.imports.enabled(boundary_symbol, bufnr, config), true)
+equal(registered.importers.enabled(boundary_symbol, bufnr, config), true)
+config.imports.show_on_symbols = false
+local boundary_context = vim.deepcopy(context)
+boundary_context.is_boundary = true
+boundary_context.module_context = true
+boundary_context.boundary_level = "package"
+boundary_context.boundary_keys = { "go-package:example.test/project" }
+boundary_context.language = "go"
+config.providers.custom = { enabled = false }
+equal(registered.go.enabled(boundary_context, bufnr, config), true)
+equal(
+  registered.imports.enabled(boundary_context, bufnr, config),
+  true,
+  "generic package dependencies should remain independently applicable"
+)
+equal(
+  registered.importers.enabled(boundary_context, bufnr, config),
+  true,
+  "generic package dependents should remain independently applicable"
+)
+local go_boundary_updates = run_provider(boundary_context)
+equal(
+  vim.tbl_map(function(run)
+    return run.id
+  end, go_boundary_updates[#go_boundary_updates].provider_runs),
+  { "go" },
+  "an active build provider should replace the generic package fallbacks"
+)
+equal(go_relationship_calls, 1, "the replacing Go provider should run once")
+equal(
+  import_index_calls,
+  { dependencies = 0, dependents = 0 },
+  "replaced generic package providers must not run independently"
+)
+config.providers.go = { enabled = false }
+equal(registered.go.enabled(boundary_context, bufnr, config), false)
+equal(registered.imports.enabled(boundary_context, bufnr, config), true)
+equal(registered.importers.enabled(boundary_context, bufnr, config), true)
+local fallback_updates = run_provider(boundary_context)
+equal(
+  vim.tbl_map(function(run)
+    return run.id
+  end, fallback_updates[#fallback_updates].provider_runs),
+  { "imports", "importers" },
+  "generic package providers should run when the build provider is disabled"
+)
+equal(
+  import_index_calls,
+  { dependencies = 1, dependents = 1 },
+  "each generic package fallback should run once"
+)
+config.providers.go = nil
+local module_boundary = vim.deepcopy(boundary_context)
+module_boundary.boundary_level = "module"
+module_boundary.boundary_keys = {}
+equal(registered.go.enabled(module_boundary, bufnr, config), true)
+equal(registered.imports.enabled(module_boundary, bufnr, config), false)
+equal(registered.importers.enabled(module_boundary, bufnr, config), false)
+supports_imports = false
+config.imports = { enabled = false, inbound = { enabled = false } }
 local duplicate_ok = pcall(providers.register, "custom", {})
 assert(not duplicate_ok, "provider IDs should be unique")
+local invalid_tools_ok = pcall(providers.register, "invalid_tools", {
+  order = 18,
+  label = "Invalid tools",
+  enabled = function()
+    return false
+  end,
+  tools = {},
+  start = function() end,
+})
+assert(not invalid_tools_ok, "provider tools must be declared by a function")
+local invalid_replacements_ok = pcall(providers.register, "invalid_replacements", {
+  order = 18,
+  label = "Invalid replacements",
+  enabled = function()
+    return false
+  end,
+  replaces = { "imports", "imports" },
+  start = function() end,
+})
+assert(not invalid_replacements_ok, "provider replacement IDs should be unique")
 
 config.providers.custom = { enabled = true }
 local syntax_context = vim.deepcopy(context)

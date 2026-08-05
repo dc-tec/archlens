@@ -26,8 +26,9 @@ COMMANDS                                                   *archlens-commands*
                        pane is open, refresh it for the current cursor symbol.
 
                                                         *:ArchLensRefresh*
-:ArchLensRefresh       Refresh the current focus and rebuild cached module
-                       relationships. ArchLens preserves manual section state.
+:ArchLensRefresh       Refresh the current focus, rediscover its enclosing
+                       boundaries, and rebuild its relationships. ArchLens
+                       preserves manual section state.
 
                                                         *:ArchLensClose*
 :ArchLensClose         Close the ArchLens pane.
@@ -47,7 +48,10 @@ The following mappings apply only to the ArchLens pane:
 
 <CR>            Open a relationship or toggle a section or context group.
 f               Focus a relationship and add the current symbol to history.
-F               Toggle source-cursor following. Pinned mode is the default.
+F               Toggle source-cursor following at the current symbol or
+                boundary scope. Pinned mode is the default.
+gs              Focus the symbol at the source cursor. Active boundary
+                following switches to symbol scope.
 <BS>, h         Return to the previous focus.
 <Tab>           Move to the next actionable row.
 <S-Tab>         Move to the previous actionable row.
@@ -105,6 +109,31 @@ Press `F` to follow the symbol under the cursor in the tracked source window.
 ArchLens debounces cursor movement, ignores repeated positions within the same
 symbol, and does not add automatic focus changes to history. Manual focus and
 back navigation return to pinned mode.
+
+BOUNDARY CONTEXT ~
+
+When an adapter resolves real language or build boundaries, the focus
+hierarchy shows only the immediate enclosing boundary instead of the raw
+source path.
+Press `f` on the boundary to move outward one level, `<CR>` to open its
+representative file, or `?` to inspect its stable identity, parent, and
+evidence.
+
+Go package, module, and workspace contexts are the first supported boundary
+chain. The Go adapter derives package identity from the nearest `go.mod`
+module path and the source directory. Module identity uses the declared module
+path.
+An effective `go.work` contributes a workspace only when its `use` directives
+include the current module. Symbol focus shows its package, package focus
+reveals its module, and module focus reveals its workspace. A package focus
+shows project-local production dependencies and dependents for the active
+build configuration. It classifies test-only relationships separately. Module
+focus aggregates production edges between active workspace modules. Workspace
+focus shows bounded, explicit member modules. External targets remain
+summarized; ArchLens does not synthesize package rows for them.
+
+ArchLens does not treat directories as packages when a language adapter cannot
+provide an authoritative boundary.
 
 RELATIONSHIP EVIDENCE ~
 
@@ -170,10 +199,19 @@ CURSOR FOLLOWING ~
 
 `cursor_follow.enabled` (boolean, default `false`)
     Whether |:ArchLensHere| starts in source-cursor-following mode. The `F`
-    pane mapping changes the mode for the current pane.
+    pane mapping changes the mode for the current pane. Follow mode preserves
+    the current focus scope: symbol views follow symbols, while package and
+    module views refresh when the cursor crosses that kind of boundary. The
+    `gs` mapping focuses the symbol at the source cursor, changes active
+    boundary following to symbol scope, and retains the boundary in history.
 
 `cursor_follow.debounce_ms` (integer, default `150`)
     Delay after the latest source cursor movement, in milliseconds.
+
+`boundaries.timeout_ms` (integer, default `8000`)
+    Maximum time for asynchronous language or build boundary discovery. The
+    current symbol remains usable while discovery runs. A timeout cancels the
+    adapter work and is reported in analysis details.
 
                                                     *archlens-config-sections*
 SECTION POLICY ~
@@ -202,8 +240,9 @@ Built-in relationship IDs are: >
 
     children              supertypes             subtypes
     implementations       incoming               outgoing
-    module_imports        module_importers       configuration_consumers
-    test_references       references             test_structural
+    workspace_members     module_imports          module_importers
+    test_dependencies     test_dependents         configuration_consumers
+    test_references       references              test_structural
     structural            siblings
 <
 Extensions can register additional IDs. See |archlens-providers|.
@@ -227,6 +266,11 @@ MODULE ANALYSIS ~
 `imports.enabled` (boolean, default `true`)
     Whether to analyze outbound module dependencies.
 
+`imports.show_on_symbols` (boolean, default `false`)
+    Whether to retain file-level module dependency and dependent sections on a
+    symbol that already exposes a real enclosing boundary. Boundary focus is
+    available regardless of this option.
+
 `imports.timeout_ms` (integer, default `5000`)
     Time limit for outbound module analysis, in milliseconds.
 
@@ -240,20 +284,23 @@ MODULE ANALYSIS ~
     Maximum number of concurrent definition requests for import sites.
 
 `imports.inbound.enabled` (boolean, default `true`)
-    Whether to analyze reverse module relationships.
+    Whether to build the project import index used for reverse module and
+    package relationships.
 
 `imports.inbound.command` (string, default `"rg"`)
     ripgrep executable used to enumerate candidate files.
 
 `imports.inbound.timeout_ms` (integer, default `8000`)
-    Time limit for the reverse module scan, in milliseconds.
+    Time limit for the project relationship scan, in milliseconds.
 
 `imports.inbound.max_index_files` (integer, default `1000`)
-    Maximum number of visible candidate files to parse into the in-memory
+    Maximum number of visible project source files to parse into the in-memory
     index.
 
 `imports.inbound.max_candidate_files` (integer, default `2000`)
-    Maximum number of paths to accept from ripgrep before filtering.
+    Maximum number of source paths to accept after cheap path exclusions such
+    as vendor, generated, and configured prefixes. Header-based generated-file
+    checks still happen before parsing.
 
 `imports.inbound.max_file_bytes` (integer, default `1048576`)
     Maximum size of a candidate file to parse for imports, in bytes.
@@ -262,7 +309,7 @@ MODULE ANALYSIS ~
     Number of candidate files to parse in each scheduled batch.
 
 `imports.inbound.max_importers` (integer, default `24`)
-    Maximum number of module dependents to return for the focused file.
+    Maximum number of dependents to return for the focused file or package.
 
                                                          *archlens-config-lsp*
 LSP ANALYSIS ~
@@ -352,7 +399,8 @@ Run the health check from a source buffer: >vim
 
 The report shows the selected project root, Tree-sitter adapter and parser,
 attached language-server capabilities, ast-grep availability, and ripgrep
-availability for reverse module analysis.
+availability for reverse module analysis. For Go buffers it also reports the
+Go tool used for build-aware package analysis.
 
 Missing optional sources reduce the available relationships but do not
 prevent the pane from opening. To inspect provider-specific runtime failures,
@@ -362,7 +410,8 @@ press `?` on the pane's `Analysis` or `Results` line.
 LANGUAGE ADAPTERS                                          *archlens-adapters*
 
 Language adapters define Tree-sitter symbols, project root markers, module
-analysis, relationship presentation, and ast-grep behavior.
+analysis, language and build boundaries, relationship presentation, and
+ast-grep behavior.
 
 Register an adapter before you open ArchLens: >lua
 
@@ -376,6 +425,30 @@ Register an adapter before you open ArchLens: >lua
       ast_grep = { language = "zig" },
     })
 <
+
+The optional `boundaries.resolve(path, root, context)` hook returns `nil` when
+no authoritative boundary exists. Otherwise, return a non-empty list from the
+innermost boundary outward, such as target, package, then workspace. The list
+order defines the hierarchy. The `level` field is an opaque lowercase
+identifier rather than a fixed universal taxonomy.
+
+Each entry provides a stable `id`, concise `name`, `kind_name`, `path`,
+`level`, and a `class` of `"language"` or `"build"`. It may also return
+`representative_path`, import-matching `import_keys`, an LSP `symbol_kind`,
+and an evidence record.
+
+If boundary discovery requires a build tool, implement
+`boundaries.discover(path, root, context, done)`. ArchLens keeps the source
+symbol usable until `done(boundaries, outcome)` completes. Discovery must
+return a cancellation function. ArchLens cancels it after
+`boundaries.timeout_ms`.
+Implement `boundaries.clear_cache()` when manual refresh must invalidate
+adapter state. The synchronous resolver remains useful for inexpensive or
+cached identities.
+
+ArchLens uses these identities for progressive focus, navigation, and
+boundary-level aggregation. It does not treat a directory as a package when
+an adapter cannot provide an authoritative identity.
 
 The optional `presentation.section(context, relation, row)` and
 `presentation.row(context, relation, row)` hooks adapt relationship labels and
@@ -391,9 +464,8 @@ failure in `Results` details. Presentation falls back to canonical labels and
 rows. Module analysis keeps unaffected relationships and omits results that
 depend on the failed callback.
 
-`lua/archlens/graph.lua` defines the focused relationship graph.
-`lua/archlens/relations.lua` registers relationship names, directions, and
-ordering.
+Use `require("archlens.graph")` to create graph deltas. Register relationship
+names, directions, and ordering through `require("archlens.relations")`.
 
 ==============================================================================
 PROVIDER EXTENSIONS                                       *archlens-providers*
@@ -426,6 +498,67 @@ or retrying state: >lua
 
 Store provider-specific settings under `providers.<id>`. Register relationship
 types with `require("archlens.relations").register()` before returning edges.
+
+Providers that require an executable can expose it to `:checkhealth archlens`
+with `tools(buffer, config)`. Return requirements only when they apply to the
+source buffer so health output remains focused as languages are added: >lua
+
+    tools = function(buffer, config)
+      if buffer.language ~= "rust" then
+        return {}
+      end
+      local options = config.providers.workspace or {}
+      return {
+        {
+          id = "cargo",
+          label = "Cargo",
+          command = options.command or "cargo",
+          enabled = options.enabled ~= false,
+          version_args = { "--version" },
+          unavailable_message = "Workspace relationships are unavailable.",
+          version_label = "Cargo",
+        },
+      }
+    end
+<
+Tool IDs are scoped to their provider. ArchLens validates declarations, runs
+the bounded version check, and reports declaration failures without breaking
+health checks for other providers.
+
+A build-aware provider can conditionally replace later fallback providers by
+returning their IDs from `replaces(context, bufnr, config)`. For example, a
+package provider that is authoritative for active dependencies can replace
+`{ "imports", "importers" }`. Replacement applies only while the provider is
+enabled, and its `order` must be lower than every replaced provider. The
+replacing provider then owns the complete behavior, including useful
+source-derived results when its build tool is unavailable.
+
+The built-in Go package provider accepts these settings under
+`providers.go`: >lua
+
+    providers = {
+      go = {
+        enabled = true,
+        command = "go",
+        timeout_ms = 8000,
+        max_modules = 64,
+        max_packages = 1000,
+        max_output_bytes = 2097152,
+      },
+    }
+<
+It uses `go list` as the authority for active production package edges and
+separate internal or external test-only package edges. Packages already used
+by production code are not duplicated under test relationships. Tree-sitter
+locations are merged from the matching active Go, cgo, or `_test.go` files.
+When the command is unavailable, fails, or reaches its bound, the provider
+retains the Tree-sitter package result, classifies Go test import sites
+separately, and reports the fallback. Package focus scans the focused module.
+Module focus aggregates production package imports that cross between active
+Go workspace modules. Workspace focus uses `go list -m` to expose its bounded
+member modules, including explicit members outside the workspace directory.
+Neither view turns the complete external requirement list into architecture
+rows.
 
 The optional `report` callback accepts `"running"` or `"retrying"`. Retry
 metadata can include `retry_delay_ms` and a short `message`. ArchLens records

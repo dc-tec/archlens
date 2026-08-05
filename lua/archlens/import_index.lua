@@ -1,4 +1,5 @@
 local adapters = require("archlens.adapters")
+local boundaries = require("archlens.boundaries")
 local graph = require("archlens.graph")
 local model = require("archlens.model")
 local scope = require("archlens.scope")
@@ -185,6 +186,33 @@ local function add_site(index, key, path, site, language)
   importer.sites[#importer.sites + 1] = vim.deepcopy(site)
 end
 
+local function add_member(index, key, path, language)
+  index.members[key] = index.members[key] or {}
+  index.members[key][path] = {
+    path = path,
+    language = language,
+  }
+  index.member_keys[path] = index.member_keys[path] or {}
+  index.member_keys[path][key] = true
+end
+
+local function add_forward_site(index, key, path, site, language)
+  index.forward[path] = index.forward[path] or {}
+  local dependency = index.forward[path][key]
+  if not dependency then
+    dependency = {
+      key = key,
+      path = path,
+      language = language,
+      sites = {},
+      provider = site.resolution_provider or "Tree-sitter",
+      method = site.resolution_method or "adapter/moduleTarget",
+    }
+    index.forward[path][key] = dependency
+  end
+  dependency.sites[#dependency.sites + 1] = vim.deepcopy(site)
+end
+
 local function visible_files(root, paths, by_extension, filters, options)
   local files = {}
   local oversized = 0
@@ -332,8 +360,13 @@ local function enumerate(root, specs, _, filters, options, callback)
     return function() end
   end
   local globs = language_globs(specs)
-  local base = { command, "--files", "--hidden", "--glob", "!.git/**" }
+  local exclusions = scope.exclusion_globs(filters)
+  local base = { command, "--files", "--hidden", "--sort", "path" }
   for _, glob in ipairs(globs) do
+    vim.list_extend(base, { "--glob", glob })
+  end
+  vim.list_extend(base, { "--glob", "!.git/**" })
+  for _, glob in ipairs(exclusions) do
     vim.list_extend(base, { "--glob", glob })
   end
   local cancelled = false
@@ -354,7 +387,7 @@ local function enumerate(root, specs, _, filters, options, callback)
         return
       end
 
-      local extra = { command, "--files", "--hidden", "--no-ignore", "--glob", "!.git/**" }
+      local extra = { command, "--files", "--hidden", "--no-ignore", "--sort", "path" }
       local category_globs = {}
       if filters.include_vendored == true then
         vim.list_extend(category_globs, {
@@ -379,6 +412,10 @@ local function enumerate(root, specs, _, filters, options, callback)
         })
       end
       for _, glob in ipairs(category_globs) do
+        vim.list_extend(extra, { "--glob", glob })
+      end
+      vim.list_extend(extra, { "--glob", "!.git/**" })
+      for _, glob in ipairs(exclusions) do
         vim.list_extend(extra, { "--glob", glob })
       end
       cancel_current = run_rg(
@@ -437,6 +474,9 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
   local index = {
     root = root,
     ready = false,
+    forward = {},
+    member_keys = {},
+    members = {},
     reverse = {},
     notes = {},
     note_records = {},
@@ -473,7 +513,7 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
     finish({
       state = "timed_out",
       message = string.format(
-        "Project module scan stopped after %d ms; module-dependent results may be incomplete.",
+        "Project relationship scan stopped after %d ms; results may be incomplete.",
         options.timeout_ms
       ),
     })
@@ -506,10 +546,10 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         add_index_note(
           index,
           string.format(
-            "Project module discovery reached the %d-candidate limit; module-dependent results may be incomplete.",
+            "Project source discovery reached the %d-file limit; relationships may be incomplete.",
             options.max_candidate_files
           ),
-          "module scan limited",
+          "project index incomplete",
           "warn"
         )
       end
@@ -517,11 +557,11 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         add_index_note(
           index,
           string.format(
-            "%d module source candidate%s not examined by the discovery limit.",
+            "%d project source candidate%s not examined by the discovery limit.",
             unexamined,
             unexamined == 1 and " was" or "s were"
           ),
-          "module scan limited",
+          "project index incomplete",
           "warn"
         )
       end
@@ -529,11 +569,11 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         add_index_note(
           index,
           string.format(
-            "%d module source file%s omitted by the project module scan limit.",
+            "%d project source file%s omitted by the project index limit.",
             omitted,
             omitted == 1 and "" or "s"
           ),
-          "module scan limited",
+          "project index incomplete",
           "warn"
         )
       end
@@ -541,11 +581,11 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         add_index_note(
           index,
           string.format(
-            "%d oversized module source file%s skipped.",
+            "%d oversized project source file%s skipped.",
             oversized,
             oversized == 1 and "" or "s"
           ),
-          "module scan limited",
+          "project index incomplete",
           "warn"
         )
       end
@@ -560,6 +600,16 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
         local last = math.min(#files, cursor + options.batch_size - 1)
         for file_index = cursor, last do
           local file = files[file_index]
+          if adapters.supports_boundaries(file.spec.language) then
+            local member_keys, member_key_error, member_key_failure =
+              target_keys(file.spec.language, file.spec.imports, file.path, root)
+            if member_key_failure and member_key_error then
+              adapter_errors[member_key_error] = true
+            end
+            for _, key in ipairs(member_keys) do
+              add_member(index, key, file.path, file.spec.language)
+            end
+          end
           local sites, parse_error = import_sites(file.path, file.spec)
           if parse_error then
             parse_errors = parse_errors + 1
@@ -572,6 +622,7 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
             end
             for _, key in ipairs(keys) do
               add_site(index, key, file.path, site, file.spec.language)
+              add_forward_site(index, key, file.path, site, file.spec.language)
             end
           end
         end
@@ -583,11 +634,11 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
             add_index_note(
               index,
               string.format(
-                "%d module source file%s could not be parsed.",
+                "%d project source file%s could not be parsed.",
                 parse_errors,
                 parse_errors == 1 and "" or "s"
               ),
-              "module scan incomplete",
+              "project index incomplete",
               "warn"
             )
           end
@@ -610,6 +661,311 @@ local function build_index(cache_key, root, specs, by_extension, filters, option
     end
   )
   return index
+end
+
+local function copy_index_notes(result, index)
+  for note_index, note in ipairs(index.notes) do
+    graph.add_note(result, note, index.note_records[note_index])
+  end
+end
+
+local function site_occurrences(sites)
+  local grouped = {}
+  for _, site in ipairs(sites or {}) do
+    local uri = site.location and site.location.uri
+    local range = site.location and site.location.range
+    if uri and range then
+      grouped[uri] = grouped[uri] or {}
+      grouped[uri][#grouped[uri] + 1] = vim.deepcopy(range)
+    end
+  end
+  local uris = vim.tbl_keys(grouped)
+  table.sort(uris)
+  local occurrences = {}
+  for _, uri in ipairs(uris) do
+    table.sort(grouped[uri], function(left, right)
+      return graph.location_key({ uri = uri, range = left })
+        < graph.location_key({ uri = uri, range = right })
+    end)
+    occurrences[#occurrences + 1] = { uri = uri, ranges = grouped[uri] }
+  end
+  return occurrences
+end
+
+local function boundary_context(index, context, key, issues)
+  local members = index.members[key] or {}
+  local paths = vim.tbl_keys(members)
+  table.sort(paths)
+  local member = paths[1] and members[paths[1]] or nil
+  if not member then
+    return nil
+  end
+  local resolved, err =
+    adapters.resolve_boundaries(member.language, member.path, context.root_dir, context)
+  if err then
+    issues[err] = true
+    return nil
+  end
+  if not resolved then
+    return nil
+  end
+  local contexts = boundaries.contexts({
+    root_dir = context.root_dir,
+    path = member.path,
+    language = member.language,
+  }, resolved)
+  for index, boundary in ipairs(resolved) do
+    if boundary.id == key or vim.tbl_contains(boundary.import_keys or {}, key) then
+      return contexts[index]
+    end
+  end
+  return nil
+end
+
+local function add_boundary_issues(result, issues)
+  local messages = vim.tbl_keys(issues)
+  table.sort(messages)
+  for _, message in ipairs(messages) do
+    graph.add_note(result, message, {
+      summary = "boundary resolution failed",
+      severity = "error",
+    })
+  end
+end
+
+local function boundary_dependencies(index, context, keys, options)
+  local result = graph.delta()
+  copy_index_notes(result, index)
+  local dependencies = {}
+  local own_keys = {}
+  for _, key in ipairs(keys) do
+    own_keys[key] = true
+  end
+  for _, key in ipairs(keys) do
+    for path in pairs(index.members[key] or {}) do
+      for dependency_key, dependency in pairs(index.forward[path] or {}) do
+        if not own_keys[dependency_key] then
+          local target = dependencies[dependency_key]
+          if not target then
+            target = { records = {}, sites = {} }
+            dependencies[dependency_key] = target
+          end
+          target.records[#target.records + 1] = dependency
+          vim.list_extend(target.sites, vim.deepcopy(dependency.sites))
+        end
+      end
+    end
+  end
+
+  local dependency_keys = vim.tbl_keys(dependencies)
+  table.sort(dependency_keys)
+  local visible = {}
+  local issues = {}
+  local unavailable = 0
+  for _, key in ipairs(dependency_keys) do
+    local target_context = boundary_context(index, context, key, issues)
+    if target_context then
+      visible[#visible + 1] = { key = key, context = target_context }
+    elseif not index.members[key] then
+      unavailable = unavailable + 1
+    end
+  end
+  local max_imports = math.max(1, math.floor(tonumber(options.max_imports) or 24))
+  local omitted = math.max(0, #visible - max_imports)
+  while #visible > max_imports do
+    table.remove(visible)
+  end
+
+  local source = graph.node_from_context(context)
+  for _, target in ipairs(visible) do
+    local dependency = dependencies[target.key]
+    local record = dependency.records[1]
+    graph.add_edge(
+      result,
+      graph.edge("module_imports", source, graph.node_from_context(target.context), {
+        provider = record.provider,
+        method = record.method,
+        class = "semantic",
+      }, { occurrences = site_occurrences(dependency.sites) })
+    )
+  end
+  if #visible > 0 then
+    graph.add_contributor(result, "syntax", "Tree-sitter")
+  end
+  if omitted > 0 then
+    graph.add_note(
+      result,
+      string.format(
+        "%d package dependenc%s omitted by the dependency limit.",
+        omitted,
+        omitted == 1 and "y was" or "ies were"
+      ),
+      { summary = "package results limited", severity = "warn" }
+    )
+  end
+  if unavailable > 0 then
+    graph.add_note(
+      result,
+      string.format(
+        "%d dependency target%s outside the visible project boundary index %s hidden.",
+        unavailable,
+        unavailable == 1 and "" or "s",
+        unavailable == 1 and "was" or "were"
+      ),
+      {
+        summary = string.format(
+          "%d external package%s hidden",
+          unavailable,
+          unavailable == 1 and "" or "s"
+        ),
+        severity = "info",
+      }
+    )
+  end
+  add_boundary_issues(result, issues)
+  return result
+end
+
+local function boundary_dependents(index, context, keys, options)
+  local result = graph.delta()
+  copy_index_notes(result, index)
+  local grouped = {}
+  local own_keys = {}
+  for _, key in ipairs(keys) do
+    own_keys[key] = true
+  end
+  for _, key in ipairs(keys) do
+    for path, importer in pairs(index.reverse[key] or {}) do
+      for source_key in pairs(index.member_keys[path] or {}) do
+        if not own_keys[source_key] then
+          local dependent = grouped[source_key]
+          if not dependent then
+            dependent = { importers = {}, sites = {} }
+            grouped[source_key] = dependent
+          end
+          dependent.importers[#dependent.importers + 1] = importer
+          vim.list_extend(dependent.sites, vim.deepcopy(importer.sites))
+        end
+      end
+    end
+  end
+
+  local dependent_keys = vim.tbl_keys(grouped)
+  table.sort(dependent_keys)
+  local visible = {}
+  local issues = {}
+  for _, key in ipairs(dependent_keys) do
+    local source_context = boundary_context(index, context, key, issues)
+    if source_context then
+      visible[#visible + 1] = { key = key, context = source_context }
+    end
+  end
+  local max_importers = math.max(1, math.floor(tonumber(options.max_importers) or 24))
+  local omitted = math.max(0, #visible - max_importers)
+  while #visible > max_importers do
+    table.remove(visible)
+  end
+
+  local target = graph.node_from_context(context)
+  for _, source in ipairs(visible) do
+    local dependent = grouped[source.key]
+    local importer = dependent.importers[1]
+    graph.add_edge(
+      result,
+      graph.edge("module_importers", graph.node_from_context(source.context), target, {
+        provider = importer.provider,
+        method = importer.method,
+        class = "semantic",
+      }, { occurrences = site_occurrences(dependent.sites) })
+    )
+  end
+  if #visible > 0 then
+    graph.add_contributor(result, "syntax", "Tree-sitter")
+  end
+  if omitted > 0 then
+    graph.add_note(
+      result,
+      string.format(
+        "%d package dependent%s omitted by the dependent limit.",
+        omitted,
+        omitted == 1 and " was" or "s were"
+      ),
+      { summary = "package results limited", severity = "warn" }
+    )
+  end
+  add_boundary_issues(result, issues)
+  return result
+end
+
+local function boundary_query(context, bufnr, options, callback, materialize_boundary)
+  options = options or {}
+  local target_path = context.path
+    or (context.location and context.location.uri and context.location.uri:match("^file:") and normalized(
+      vim.uri_to_fname(context.location.uri)
+    ))
+    or nil
+  local root = normalized(context.root_dir)
+  if not target_path or not root or not vim.uv.fs_stat(root) then
+    callback(graph.delta())
+    return function() end
+  end
+
+  local filetype = options.filetype or context.import_filetype or vim.bo[bufnr].filetype
+  local specs, by_extension = scan_specs(filetype, target_path)
+  if #specs == 0 then
+    callback(graph.delta())
+    return function() end
+  end
+  options = vim.tbl_extend("force", {
+    command = "rg",
+    timeout_ms = 8000,
+    max_index_files = 1000,
+    max_candidate_files = 2000,
+    max_file_bytes = 1024 * 1024,
+    batch_size = 16,
+    max_importers = 24,
+    max_imports = 24,
+  }, options)
+  for _, field in ipairs({
+    "timeout_ms",
+    "max_index_files",
+    "max_candidate_files",
+    "max_file_bytes",
+    "batch_size",
+    "max_importers",
+    "max_imports",
+  }) do
+    options[field] = math.max(1, math.floor(tonumber(options[field]) or 1))
+  end
+  local keys = vim.deepcopy(context.boundary_keys or {})
+  if #keys == 0 then
+    callback(graph.delta())
+    return function() end
+  end
+  local filters = options.filters or {}
+  local cache_key = key_for(root, specs, filters, options)
+  local index = indexes[cache_key]
+    or build_index(cache_key, root, specs, by_extension, filters, options)
+  local function publish(value)
+    callback(materialize_boundary(value, context, keys, options), value.outcome)
+  end
+  if index.ready then
+    publish(index)
+    return function() end
+  end
+  local subscriber = { callback = publish, cancelled = false }
+  index.subscribers[#index.subscribers + 1] = subscriber
+  return function()
+    subscriber.cancelled = true
+  end
+end
+
+function M.dependencies(context, bufnr, options, callback)
+  return boundary_query(context, bufnr, options, callback, boundary_dependencies)
+end
+
+function M.dependents(context, bufnr, options, callback)
+  return boundary_query(context, bufnr, options, callback, boundary_dependents)
 end
 
 local function importer_edge(context, target_path, importer, anchor_label)

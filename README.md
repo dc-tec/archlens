@@ -45,14 +45,15 @@ analysis sources:
 | LSP                                              | An attached language server     | Semantic calls, references, implementations, and type hierarchies |
 | [ast-grep](https://ast-grep.github.io/)          | `ast-grep` on Neovim's `PATH`   | Project-wide structural matches                                   |
 | [ripgrep](https://github.com/BurntSushi/ripgrep) | `rg` on Neovim's `PATH`         | Reverse module lookup                                             |
+| Go tool                                          | `go` on Neovim's `PATH`         | Build-aware Go package dependencies and dependents                |
 
 If a source is unavailable, ArchLens omits its relationships and continues with
 the remaining sources.
 
 Run `:checkhealth archlens` from a source buffer to inspect the selected
 project root, Tree-sitter parser and adapter, attached LSP capabilities,
-ast-grep, and ripgrep. To inspect a provider failure, open the pane and press
-`?` on the `Analysis` or `Results` line.
+ast-grep, ripgrep, and the Go tool where applicable. To inspect a provider
+failure, open the pane and press `?` on the `Analysis` or `Results` line.
 
 ### Built-in language support
 
@@ -64,7 +65,7 @@ Built-in adapters provide the following additional analysis:
 
 | Language                 | Built-in analysis                                                                                             |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| Go                       | Tree-sitter symbols and modules, ast-grep matches, and Go interface presentation                              |
+| Go                       | Tree-sitter symbols and imports, build-aware package/module relationships, package/module/workspace boundaries, ast-grep matches, and Go interface presentation |
 | Rust                     | Tree-sitter symbols and modules, ast-grep matches, and Rust implementation presentation                       |
 | Nix                      | Tree-sitter bindings and module imports, plus ast-grep matches                                                |
 | OCaml (`.ml` and `.mli`) | Tree-sitter symbols, module relationships, and member presentation; ast-grep does not provide an OCaml parser |
@@ -186,7 +187,8 @@ The following keys are available in the pane:
 | --------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `<CR>`                | Open a relationship, or toggle a section or context group                                                   |
 | `f`                   | Focus the selected relationship and add the current symbol to navigation history                            |
-| `F`                   | Toggle source-cursor following; pinned exploration is the default                                           |
+| `F`                   | Toggle source-cursor following at the current symbol or boundary scope; pinned exploration is the default    |
+| `gs`                  | Focus the symbol at the source cursor; active boundary following switches to symbol following               |
 | `<BS>` or `h`         | Return to the previous focus                                                                                |
 | `<Tab>` and `<S-Tab>` | Move between actionable rows                                                                                |
 | `]s` and `[s`         | Move between sections                                                                                       |
@@ -227,8 +229,28 @@ to 32 previous focuses.
 
 Press `F` to follow the symbol under the cursor in the tracked source window.
 ArchLens debounces cursor movement, ignores repeated positions within the same
-symbol, and does not add automatic changes to navigation history. Press `f`,
-`<BS>`, or `h` to return to pinned exploration.
+symbol, and does not add automatic changes to navigation history. Enabling
+follow preserves existing history. Press `f`, `<BS>`, or `h` to return to
+pinned exploration.
+
+### Move between symbol, package, module, and workspace context
+
+When a language adapter resolves real language or build boundaries, the focus
+hierarchy shows only the immediate enclosing boundary instead of repeating the
+source path. Press `f` on it to move outward one level, `<CR>` to open its
+representative file, or `?` to inspect its identity, parent, and evidence.
+
+Go package, module, and workspace contexts are the first supported boundary
+chain. Package identity combines the nearest `go.mod` module path with the
+source directory; module identity uses the declared module path. An effective
+`go.work` contributes a workspace only when its `use` directives include the
+current module. Symbol focus shows its package, package focus reveals its
+module, and module focus reveals the workspace without crowding lower-level
+views. Press `gs` from any boundary view to focus the symbol at the current
+source cursor. If boundary following is active, `gs` changes it to symbol
+following; `<BS>` or `h` restores and pins the boundary view.
+ArchLens does not infer packages from directories for languages without
+adapter-provided boundaries.
 
 ### Evaluate relationship evidence
 
@@ -252,10 +274,27 @@ interfaces, and concrete implementations.
 
 ![ArchLens exploring Go type relationships and following the source cursor](docs/assets/archlens-demo.gif)
 
-Module dependencies come from bounded import sites in the focused file. Module
-dependents come from a bounded in-memory project scan. ArchLens caches the scan
-while you navigate and rebuilds it when you refresh the pane. The scan does not
-write an index to disk or start language servers for scanned files.
+For an ordinary symbol without a supported boundary, ArchLens derives module
+relationships from the focused file and a bounded project search. A Go package
+view instead uses the active Go build configuration to show production
+dependencies and dependents. Imports used only by tests appear separately
+under `Test dependencies` and `Test dependents`.
+
+If Go build information is unavailable or incomplete, ArchLens retains
+syntax-derived package relationships and explains the limitation. It summarizes
+external dependencies instead of creating package rows for code outside the
+project.
+
+Package analysis covers the focused module. A module view summarizes production
+relationships between active modules in the Go workspace. A workspace view
+shows its active member modules, including explicit members outside the
+workspace directory. These views do not repeat the complete package graph or
+list every external requirement.
+
+ArchLens performs package analysis on demand. It does not write an index to disk
+or start additional language servers. By default, symbol views hide file-level
+module sections when an enclosing boundary is available. Set
+`imports.show_on_symbols = true` to retain those sections.
 
 ![ArchLens relationship evidence for a Rust reference](docs/assets/relationship-details.png)
 
@@ -294,7 +333,12 @@ require("archlens").setup({
 ```
 
 Set `cursor_follow.enabled` to `true` to start `:ArchLensHere` in follow
-mode. The `F` mapping changes the mode for the current pane.
+mode. The `F` mapping changes the mode for the current pane. Follow mode
+preserves the current focus scope: symbols follow the symbol under the cursor,
+while package and module views refresh only when the cursor crosses that kind
+of boundary. From a boundary view, `gs` focuses the symbol at the source cursor
+and changes active following to symbol scope. The previous boundary remains in
+navigation history.
 
 The `sections` table controls initial collapse state, visibility, ordering, and
 row limits. ArchLens preserves manual expansion state when it refreshes the
@@ -307,20 +351,18 @@ during the cold-start window. Set `lsp.cold_start_retry.enabled` to `false` to
 disable it.
 
 Each provider has separate time, input, and output bounds. Use `imports` and
-`imports.inbound` to bound module analysis, `lsp.max_results` and
+`imports.inbound` to bound module analysis, `providers.go` to bound Go build
+analysis, `lsp.max_results` and
 `lsp.max_occurrences` to bound semantic responses, `grouping` to bound context
 group detection, and `ast_grep.max_results` and
 `ast_grep.max_output_bytes` to bound structural search.
 
 ## Add language support
 
-[`lua/archlens/adapters.lua`](lua/archlens/adapters.lua) manages the language
-adapter registry. Built-in adapters are in
-[`lua/archlens/adapters/`](lua/archlens/adapters/).
-
-An adapter maps Neovim filetypes to a canonical language. It can define
-Tree-sitter symbols, project root markers, module analysis, an ast-grep
-language and query, and relationship presentation.
+Register language adapters through `require("archlens.adapters")`. An adapter
+maps Neovim filetypes to a canonical language. It can define
+Tree-sitter symbols, project root markers, module analysis, language and build
+boundaries, an ast-grep language and query, and relationship presentation.
 
 Register an adapter before you open ArchLens:
 
@@ -335,6 +377,29 @@ require("archlens.adapters").register("zig", {
   ast_grep = { language = "zig" },
 })
 ```
+
+The optional `boundaries.resolve(path, root, context)` hook returns `nil` when
+no authoritative boundary exists. Otherwise, return a non-empty list from the
+innermost boundary outward, such as target, package, then workspace. The list
+order defines the hierarchy. The `level` field is an opaque lowercase
+identifier rather than a fixed universal taxonomy.
+
+Each entry provides a stable `id`, concise `name`, `kind_name`, `path`, `level`,
+and `class` (`"language"` or `"build"`). Entries can also provide
+`representative_path`, import-matching `import_keys`, an LSP `symbol_kind`, and
+an evidence record.
+
+If boundary discovery requires a build tool, implement
+`boundaries.discover(path, root, context, done)`. ArchLens keeps the source
+symbol usable until `done(boundaries, outcome)` completes. Discovery must
+return a cancellation function. ArchLens cancels it after
+`boundaries.timeout_ms`.
+Implement `boundaries.clear_cache()` when manual refresh must invalidate
+adapter state. The synchronous resolver remains useful for inexpensive or
+cached identities.
+
+ArchLens uses these contracts for progressive focus, navigation, and
+boundary-level aggregation. It does not infer a boundary from directory layout.
 
 The optional `presentation.section(context, relation, row)` and
 `presentation.row(context, relation, row)` hooks can adapt labels and concise
@@ -379,8 +444,45 @@ require("archlens.providers").register("ownership", {
 ```
 
 Register relationship types through
-[`lua/archlens/relations.lua`](lua/archlens/relations.lua). Store
-provider-specific options under `providers.<id>`.
+`require("archlens.relations").register()`. Store provider-specific options
+under `providers.<id>`.
+
+Providers that depend on an executable can expose it to
+`:checkhealth archlens` with `tools(buffer, config)`. Return requirements only
+when they apply to the source buffer so health output stays focused as more
+languages are added:
+
+```lua
+tools = function(buffer, config)
+  if buffer.language ~= "rust" then
+    return {}
+  end
+  local options = config.providers.workspace or {}
+  return {
+    {
+      id = "cargo",
+      label = "Cargo",
+      command = options.command or "cargo",
+      enabled = options.enabled ~= false,
+      version_args = { "--version" },
+      unavailable_message = "Workspace relationships are unavailable.",
+      version_label = "Cargo",
+    },
+  }
+end
+```
+
+Tool IDs are scoped to their provider. ArchLens validates each declaration,
+runs the bounded version check, and reports declaration failures without
+breaking health checks for other providers.
+
+A build-aware provider can conditionally replace later fallback providers for
+a focus by returning their IDs from `replaces(context, bufnr, config)`. For
+example, a package provider that is authoritative for active dependencies can
+replace `{ "imports", "importers" }`. Replacement is applied only while the
+provider is enabled, and the replacing provider must have a lower `order` than
+each fallback. It then owns the complete behavior, including retaining useful
+source-derived results when its build tool is unavailable.
 
 The optional `report` callback accepts `"running"` or `"retrying"`. A retry
 can include `retry_delay_ms` and a short `message`. ArchLens records queued,
@@ -408,10 +510,9 @@ symbol.
 
 ## Develop ArchLens
 
-Relationship providers exchange graph deltas defined in
-[`lua/archlens/graph.lua`](lua/archlens/graph.lua). Relationship names,
-ordering, and directions are registered in
-[`lua/archlens/relations.lua`](lua/archlens/relations.lua).
+Relationship providers create graph deltas with `require("archlens.graph")`.
+Register relationship names, ordering, and directions through
+`require("archlens.relations")`.
 
 Run the package, unit, integration, formatting, and Lua static-analysis checks:
 

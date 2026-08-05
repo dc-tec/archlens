@@ -104,39 +104,7 @@ local function command_args(command, context, language, root, options)
   for _, glob in ipairs(options.globs or M.default_globs) do
     vim.list_extend(args, { "--globs", glob })
   end
-  local filters = options.filters or {}
-  local filter_globs = {}
-  if not filters.include_vendored then
-    vim.list_extend(filter_globs, {
-      "!**/vendor/**",
-      "!**/node_modules/**",
-      "!**/.venv/**",
-      "!**/venv/**",
-      "!**/_opam/**",
-    })
-  end
-  if not filters.include_generated then
-    vim.list_extend(filter_globs, {
-      "!**/.direnv/**",
-      "!**/_build/**",
-      "!**/generated/**",
-      "!**/target/**",
-      "!**/zz_generated.*",
-      "!**/zz_generated_*",
-      "!**/*_generated.*",
-      "!**/*_generated_*",
-      "!**/*.generated.*",
-      "!**/*.generated_*",
-      "!**/*.gen.*",
-      "!**/*.pb.go",
-    })
-  end
-  for _, prefix in ipairs(filters.exclude or {}) do
-    if type(prefix) == "string" and prefix ~= "" then
-      filter_globs[#filter_globs + 1] = "!" .. prefix:gsub("^%./", ""):gsub("/$", "") .. "/**"
-    end
-  end
-  for _, glob in ipairs(filter_globs) do
+  for _, glob in ipairs(scope.exclusion_globs(options.filters)) do
     vim.list_extend(args, { "--globs", glob })
   end
   args[#args + 1] = root

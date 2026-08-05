@@ -1,4 +1,5 @@
 local adapters = require("archlens.adapters")
+local providers = require("archlens.providers")
 
 local M = {}
 
@@ -152,7 +153,7 @@ local function first_line(text)
   return text ~= "" and text:match("[^\r\n]+") or nil
 end
 
-local function inspect_executable(command)
+local function inspect_executable(command, version_args)
   if vim.fn.executable(command) ~= 1 then
     return { command = command, available = false }
   end
@@ -161,7 +162,9 @@ local function inspect_executable(command)
   if executable == "" then
     executable = command
   end
-  local start_ok, process = pcall(vim.system, { executable, "--version" }, { text = true })
+  local invocation = { executable }
+  vim.list_extend(invocation, version_args or { "--version" })
+  local start_ok, process = pcall(vim.system, invocation, { text = true })
   if not start_ok then
     return {
       command = command,
@@ -227,6 +230,23 @@ local function inspect_ripgrep(command, enabled, filetype, path)
   return vim.tbl_extend("force", inspect_executable(command), { enabled = true, supported = true })
 end
 
+local function inspect_provider_tools(buffer, config)
+  local requirements, issues = providers.tools(buffer, config)
+  local inspected = {}
+  for _, requirement in ipairs(requirements) do
+    local state = vim.deepcopy(requirement)
+    if state.enabled then
+      state = vim.tbl_extend(
+        "force",
+        state,
+        inspect_executable(requirement.command, requirement.version_args)
+      )
+    end
+    inspected[#inspected + 1] = state
+  end
+  return { tools = inspected, issues = issues }
+end
+
 local function inspect()
   local bufnr = context_buffer()
   local buffer = inspect_buffer(bufnr)
@@ -247,6 +267,7 @@ local function inspect()
       buffer.filetype,
       buffer.name
     ),
+    provider_tools = inspect_provider_tools(buffer, configured),
   }
 end
 
@@ -450,6 +471,51 @@ function M._diagnose(state)
     end
   end
 
+  local provider_tools = state.provider_tools or { tools = {}, issues = {} }
+  for _, tool_state in ipairs(provider_tools.tools or {}) do
+    local tool = { title = "ArchLens " .. tool_state.label, items = {} }
+    sections[#sections + 1] = tool
+    if tool_state.enabled == false then
+      tool.items[#tool.items + 1] = item(
+        "info",
+        tool_state.disabled_message
+          or string.format("%s is disabled by the ArchLens configuration.", tool_state.label)
+      )
+    elseif not tool_state.available then
+      local suffix = tool_state.unavailable_message and "; " .. tool_state.unavailable_message
+        or "."
+      tool.items[#tool.items + 1] =
+        item("warn", string.format("%s is unavailable%s", tool_state.command, suffix))
+    else
+      tool.items[#tool.items + 1] =
+        item("ok", "Executable: " .. (tool_state.path or tool_state.command))
+      if tool_state.version then
+        tool.items[#tool.items + 1] = item("ok", "Version: " .. tool_state.version)
+      else
+        tool.items[#tool.items + 1] = item(
+          "warn",
+          string.format(
+            "The %s version could not be determined%s",
+            tool_state.version_label or tool_state.label,
+            tool_state.error and ": " .. tool_state.error or "."
+          )
+        )
+      end
+    end
+  end
+
+  local tool_issues = provider_tools.issues or {}
+  if #tool_issues > 0 then
+    local provider_health = { title = "ArchLens provider tools", items = {} }
+    sections[#sections + 1] = provider_health
+    for _, issue in ipairs(tool_issues) do
+      provider_health.items[#provider_health.items + 1] = item(
+        "error",
+        string.format("%s provider tool declaration failed: %s", issue.provider_id, issue.message)
+      )
+    end
+  end
+
   return sections
 end
 
@@ -470,5 +536,6 @@ M._context_buffer = context_buffer
 M._inspect_buffer = inspect_buffer
 M._inspect_treesitter = inspect_treesitter
 M._inspect_ripgrep = inspect_ripgrep
+M._inspect_provider_tools = inspect_provider_tools
 
 return M

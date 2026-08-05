@@ -17,6 +17,9 @@ local defaults = {
     enabled = false,
     debounce_ms = 150,
   },
+  boundaries = {
+    timeout_ms = 8000,
+  },
   providers = {},
   filters = {
     include_generated = false,
@@ -25,6 +28,7 @@ local defaults = {
   },
   imports = {
     enabled = true,
+    show_on_symbols = false,
     timeout_ms = 5000,
     max_imports = 24,
     max_sites = 96,
@@ -214,6 +218,7 @@ local function validate(options)
     sections = true,
     include_external = true,
     cursor_follow = true,
+    boundaries = true,
     providers = true,
     filters = true,
     imports = true,
@@ -225,6 +230,7 @@ local function validate(options)
   for _, key in ipairs({
     "sections",
     "cursor_follow",
+    "boundaries",
     "providers",
     "filters",
     "imports",
@@ -239,6 +245,11 @@ local function validate(options)
   validate_integer(options.max_items, "max_items", 1, "positive")
   validate_boolean(options.include_external, "include_external")
   validate_cursor_follow(options.cursor_follow)
+
+  if type(options.boundaries) == "table" then
+    validate_known_keys(options.boundaries, "boundaries", { timeout_ms = true })
+    validate_integer(options.boundaries.timeout_ms, "boundaries.timeout_ms", 0, "non-negative")
+  end
 
   if type(options.sections) == "table" then
     validate_known_keys(options.sections, "sections", {
@@ -268,6 +279,7 @@ local function validate(options)
   if type(options.imports) == "table" then
     validate_known_keys(options.imports, "imports", {
       enabled = true,
+      show_on_symbols = true,
       timeout_ms = true,
       max_imports = true,
       max_sites = true,
@@ -275,6 +287,7 @@ local function validate(options)
       inbound = true,
     })
     validate_boolean(options.imports.enabled, "imports.enabled")
+    validate_boolean(options.imports.show_on_symbols, "imports.show_on_symbols")
     validate_integer(options.imports.timeout_ms, "imports.timeout_ms", 0, "non-negative")
     for _, field in ipairs({ "max_imports", "max_sites", "concurrency" }) do
       validate_integer(options.imports[field], "imports." .. field, 1, "positive")

@@ -1054,13 +1054,142 @@ local function run()
     children = {},
     siblings = {},
   }
+  local go_module_boundary = {
+    name = "example.com/workspace",
+    kind = vim.lsp.protocol.SymbolKind.Module,
+    kind_name = "Go module",
+    scope = "boundary",
+    root_dir = context.root_dir,
+    location = {
+      uri = "file:///workspace/go.mod",
+      range = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 0 } },
+    },
+    path = "/workspace/go.mod",
+    path_label = "go.mod",
+    language = "go",
+    is_boundary = true,
+    module_context = true,
+    preserve_file_identity = true,
+    enclosing_boundaries = {},
+    boundary_id = "go-module:example.com/workspace",
+    boundary_class = "build",
+    boundary_level = "module",
+    boundary_path = "/workspace",
+    boundary_keys = {},
+    boundary_evidence = {
+      provider = "Go adapter",
+      method = "go.mod/module",
+      class = "semantic",
+    },
+  }
+  context.enclosing_boundaries = {
+    {
+      name = "internal/controller",
+      kind = vim.lsp.protocol.SymbolKind.Package,
+      kind_name = "Go package",
+      scope = "boundary",
+      root_dir = context.root_dir,
+      location = {
+        uri = context.location.uri,
+        range = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 0 } },
+      },
+      path = context.path,
+      path_label = context.path_label,
+      language = "go",
+      is_boundary = true,
+      module_context = true,
+      preserve_file_identity = true,
+      enclosing_boundaries = { go_module_boundary },
+      boundary_id = "go-package:example.com/workspace/internal/controller",
+      boundary_class = "language",
+      boundary_level = "package",
+      boundary_path = "/workspace/internal/controller",
+      boundary_keys = { "go-package:example.com/workspace/internal/controller" },
+      boundary_evidence = {
+        provider = "Go adapter",
+        method = "go.mod/package",
+        class = "semantic",
+      },
+    },
+  }
 
   mapped.sections[1].rows[2] = vim.deepcopy(mapped.sections[1].rows[1])
   mapped.sections[1].rows[2].id = "second"
   mapped.sections[1].rows[2].name = "Write"
   local rendered = render.build(mapped, { width = 56, max_items = 1 })
+  assert(
+    contains(rendered.lines, "└─ internal/controller  Go package"),
+    "the immediate language boundary should replace the raw source path"
+  )
+  assert(
+    not contains(rendered.lines, "└─ example.com/workspace  Go module"),
+    "symbol focus should keep outer build boundaries out of the compact hierarchy"
+  )
   assert(contains(rendered.lines, "└─ Reconcile  Method"), "focus hierarchy should render")
+  assert(
+    contains(rendered.lines, "reconcile.go:11"),
+    "boundary context should shorten the file label"
+  )
   assert(contains(rendered.lines, "… 1 more"), "bounded sections should expose omitted rows")
+  local package_model = vim.deepcopy(mapped)
+  package_model.focus = context.enclosing_boundaries[1]
+  package_model.sections = {}
+  local package_rendered = render.build(package_model, { width = 56 })
+  assert(
+    contains(package_rendered.lines, "└─ example.com/workspace  Go module"),
+    "package focus should reveal its immediate module parent"
+  )
+  assert(
+    contains(package_rendered.lines, "   └─ internal/controller  Go package"),
+    "package focus should remain visible below its module"
+  )
+  local package_context = context.enclosing_boundaries[1]
+  local package_graph = graph.new(package_context)
+  local dependency_boundary = vim.tbl_extend("force", vim.deepcopy(package_context), {
+    name = "internal/storage",
+    boundary_id = "go-package:example.com/workspace/internal/storage",
+    boundary_path = "/workspace/internal/storage",
+    boundary_keys = { "go-package:example.com/workspace/internal/storage" },
+    location = {
+      uri = "file:///workspace/internal/storage/read.go",
+      range = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 0 } },
+    },
+  })
+  graph.add_edge(
+    package_graph,
+    graph.edge(
+      "module_imports",
+      package_graph.focus,
+      graph.node_from_context(dependency_boundary),
+      { provider = "Go tool", method = "go list/Imports", class = "semantic" }
+    )
+  )
+  dependency_boundary.location.uri = "file:///workspace/internal/storage/write.go"
+  graph.add_edge(
+    package_graph,
+    graph.edge(
+      "module_imports",
+      package_graph.focus,
+      graph.node_from_context(dependency_boundary),
+      { provider = "Tree-sitter", method = "adapter/moduleTarget", class = "semantic" }
+    )
+  )
+  local package_relationships = model.build(package_context, package_graph, {})
+  assert_equal(
+    #package_relationships.sections[1].rows,
+    1,
+    "a stable boundary identity should deduplicate provider-specific representative files"
+  )
+  assert_equal(
+    package_relationships.sections[1].rows[1].id,
+    "module_imports:go-package:example.com/workspace/internal/storage",
+    "boundary rows should keep a stable navigation identity"
+  )
+  assert_equal(
+    package_relationships.sections[1].rows[1].evidence.provider,
+    "Go tool+Tree-sitter",
+    "deduplicated boundary rows should retain evidence from every provider"
+  )
   local collapsed = render.build(mapped, {
     width = 56,
     max_items = 2,

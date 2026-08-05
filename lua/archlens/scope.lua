@@ -16,6 +16,29 @@ local generated_segments = {
   target = true,
 }
 
+local vendored_globs = {
+  "!**/vendor/**",
+  "!**/node_modules/**",
+  "!**/.venv/**",
+  "!**/venv/**",
+  "!**/_opam/**",
+}
+
+local generated_globs = {
+  "!**/.direnv/**",
+  "!**/_build/**",
+  "!**/generated/**",
+  "!**/target/**",
+  "!**/zz_generated.*",
+  "!**/zz_generated_*",
+  "!**/*_generated.*",
+  "!**/*_generated_*",
+  "!**/*.generated.*",
+  "!**/*.generated_*",
+  "!**/*.gen.*",
+  "!**/*.pb.go",
+}
+
 local function normalized(path)
   return path and vim.fs.normalize(path) or nil
 end
@@ -92,6 +115,25 @@ end
 
 function M.clear_cache()
   header_cache = {}
+end
+
+function M.exclusion_globs(filters)
+  filters = filters or {}
+  local globs = {}
+  if filters.include_vendored ~= true then
+    vim.list_extend(globs, vendored_globs)
+  end
+  if filters.include_generated ~= true then
+    vim.list_extend(globs, generated_globs)
+  end
+  for _, prefix in ipairs(filters.exclude or {}) do
+    if type(prefix) == "string" and prefix ~= "" then
+      prefix = vim.fs.normalize(prefix):gsub("^%./", ""):gsub("/$", "")
+      globs[#globs + 1] = "!" .. prefix
+      globs[#globs + 1] = "!" .. prefix .. "/**"
+    end
+  end
+  return vim.deepcopy(globs)
 end
 
 local function excluded(relative_path, prefixes)

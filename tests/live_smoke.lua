@@ -112,7 +112,20 @@ local function run()
       "focusing the selected relationship timed out\n"
         .. table.concat(vim.api.nvim_buf_get_lines(map_buffer, 0, -1, false), "\n")
     )
-
+    local focused_text = table.concat(vim.api.nvim_buf_get_lines(map_buffer, 0, -1, false), "\n")
+    for expected_section in
+      vim.gsplit(
+        vim.env.ARCHLENS_SMOKE_FOCUS_EXPECT_SECTIONS or "",
+        ",",
+        { plain = true, trimempty = true }
+      )
+    do
+      expected_section = vim.trim(expected_section)
+      assert(
+        focused_text:find(expected_section, 1, true),
+        "expected focused section is missing: " .. expected_section .. "\n" .. focused_text
+      )
+    end
     local back_keys = vim.api.nvim_replace_termcodes("<BS>", true, false, true)
     vim.api.nvim_feedkeys(back_keys, "mx", false)
     local restored = vim.wait(15000, function()

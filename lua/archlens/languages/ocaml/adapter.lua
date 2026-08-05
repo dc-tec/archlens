@@ -1,4 +1,4 @@
-local common = require("archlens.adapters.common")
+local common = require("archlens.adapter_support")
 
 local M = {}
 

@@ -166,11 +166,11 @@ settings are documented in [language support](docs/languages.md).
 
 ## Documentation
 
-- [User guide](docs/guide.md) — installation, navigation, evidence, and troubleshooting
-- [Language support](docs/languages.md) — Go, Rust, Nix, OCaml, and structural adapters
-- [Extension development](docs/extensions.md) — language adapters and project providers
-- `:help archlens` — complete in-editor reference
-- [Roadmap](ROADMAP.md) — current direction and possible future work
+- [User guide](docs/guide.md): installation, navigation, evidence, and troubleshooting
+- [Language support](docs/languages.md): Go, Rust, Nix, OCaml, and structural adapters
+- [Extension development](docs/extensions.md): language adapters and project providers
+- `:help archlens`: complete in-editor reference
+- [Roadmap](ROADMAP.md): current direction and possible future work
 
 ## Contributing
 

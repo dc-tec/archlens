@@ -21,6 +21,13 @@ Notable user-facing changes to ArchLens are recorded here.
 - Isolate built-in build integrations behind the provider registry so another
   language does not require Go-specific core behavior.
 
+### Fixed
+
+- Re-resolve package, module, and workspace identities on refresh after build
+  metadata changes.
+- Retain test-only Go packages as dependents and canonicalize quoted `go.mod`
+  module paths before forming boundary IDs.
+
 ## [0.1.1] - 2026-08-05
 
 ### Fixed

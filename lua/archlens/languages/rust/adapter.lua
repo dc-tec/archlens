@@ -1,4 +1,5 @@
 local common = require("archlens.adapter_support")
+local cargo = require("archlens.languages.rust.cargo")
 
 local function section_presentation(context, relation)
   local member = common.member_section(context, relation)
@@ -7,6 +8,19 @@ local function section_presentation(context, relation)
   end
   if context.kind == vim.lsp.protocol.SymbolKind.Interface and relation.id == "implementations" then
     return { label = "Implemented by" }
+  end
+  if context.is_boundary and context.boundary_level == "package" then
+    if relation.id == "module_imports" then
+      return { label = "Package dependencies" }
+    elseif relation.id == "module_importers" then
+      return { label = "Package dependents" }
+    end
+  elseif
+    context.is_boundary
+    and context.boundary_level == "workspace"
+    and relation.id == "workspace_members"
+  then
+    return { label = "Workspace packages" }
   end
 end
 
@@ -114,6 +128,10 @@ end
 
 return {
   spec = {
+    boundaries = {
+      discover = cargo.discover,
+      clear_cache = cargo.clear_cache,
+    },
     configuration = configuration,
     presentation = {
       row = row_presentation,

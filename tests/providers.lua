@@ -24,6 +24,7 @@ local multi_client = false
 local clock = 0
 local supports_imports = false
 local go_relationship_calls = 0
+local rust_relationship_calls = 0
 local import_index_calls = { dependencies = 0, dependents = 0 }
 
 package.loaded["archlens.lsp"] = {
@@ -103,6 +104,23 @@ package.loaded["archlens.languages.go.modules"] = {
   end,
   relationships = function()
     error("Go module analysis should be disabled")
+  end,
+  clear_cache = function() end,
+}
+package.loaded["archlens.languages.rust.cargo"] = {
+  supports = function(current)
+    return current.is_boundary == true
+      and (current.boundary_level == "package" or current.boundary_level == "workspace")
+      and current.language == "rust"
+  end,
+  discover = function(_, _, _, done)
+    done(nil)
+    return function() end
+  end,
+  relationships = function(_, _, _, callback)
+    rust_relationship_calls = rust_relationship_calls + 1
+    callback(graph.delta())
+    return function() end
   end,
   clear_cache = function() end,
 }
@@ -303,7 +321,7 @@ local provider_ids = vim.tbl_map(function(provider)
 end, providers.ordered())
 equal(
   provider_ids,
-  { "lsp", "go", "imports", "custom", "broken", "importers", "ast_grep" },
+  { "lsp", "go", "rust", "imports", "custom", "broken", "importers", "ast_grep" },
   "custom providers should participate in stable orchestration order"
 )
 local rust_tools, rust_tool_issues = providers.tools({ language = "rust" }, {
@@ -312,6 +330,17 @@ local rust_tools, rust_tool_issues = providers.tools({ language = "rust" }, {
 })
 equal(rust_tool_issues, {}, "valid provider tool declarations should not report issues")
 equal(rust_tools, {
+  {
+    id = "cargo",
+    provider_id = "rust",
+    label = "Cargo",
+    command = "cargo",
+    enabled = true,
+    version_args = { "--version" },
+    disabled_message = "Cargo package and workspace analysis is disabled by the ArchLens configuration.",
+    unavailable_message = "Cargo package and workspace relationships are unavailable.",
+    version_label = "Cargo",
+  },
   {
     id = "cargo",
     provider_id = "custom",
@@ -392,6 +421,23 @@ equal(
   import_index_calls,
   { dependencies = 0, dependents = 0 },
   "replaced generic package providers must not run independently"
+)
+local rust_boundary_context = vim.deepcopy(boundary_context)
+rust_boundary_context.boundary_keys = { "cargo-package:/tmp/Cargo.toml" }
+rust_boundary_context.language = "rust"
+local rust_boundary_updates = run_provider(rust_boundary_context)
+equal(
+  vim.tbl_map(function(run)
+    return run.id
+  end, rust_boundary_updates[#rust_boundary_updates].provider_runs),
+  { "rust" },
+  "the Cargo provider should replace incompatible generic package scans"
+)
+equal(rust_relationship_calls, 1, "the Cargo package provider should run once")
+equal(
+  import_index_calls,
+  { dependencies = 0, dependents = 0 },
+  "Cargo package focus must not start generic import-index providers"
 )
 config.providers.go = { enabled = false }
 equal(registered.go.enabled(boundary_context, bufnr, config), false)

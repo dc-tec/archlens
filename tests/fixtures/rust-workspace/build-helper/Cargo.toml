@@ -1,0 +1,4 @@
+[package]
+name = "archlens-build-helper"
+edition.workspace = true
+version.workspace = true

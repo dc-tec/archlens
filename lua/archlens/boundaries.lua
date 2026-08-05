@@ -2,6 +2,11 @@ local adapters = require("archlens.adapters")
 
 local M = {}
 
+---@class ArchLensBoundaryDiscoveryOptions
+---@field timeout_ms? integer
+---@field adapter? table
+---@field adapters? table<string, table>
+
 local function zero_range()
   return {
     start = { line = 0, character = 0 },
@@ -108,7 +113,7 @@ function M.supports_discovery(context)
 end
 
 ---@param context table
----@param options? { timeout_ms?: integer }
+---@param options? ArchLensBoundaryDiscoveryOptions
 ---@param callback fun(context: table, outcome: table?)
 ---@return function?
 function M.discover(context, options, callback)
@@ -160,8 +165,18 @@ function M.discover(context, options, callback)
     callback(enriched, outcome)
   end
 
-  local cancel =
-    adapters.discover_boundaries(context.language, path, context.root_dir, context, finish)
+  local adapter_options = options and options.adapter or nil
+  if options and options.adapters then
+    adapter_options = options.adapters[context.language] or adapter_options
+  end
+  local cancel = adapters.discover_boundaries(
+    context.language,
+    path,
+    context.root_dir,
+    context,
+    finish,
+    adapter_options
+  )
   if type(cancel) ~= "function" then
     return nil
   end
@@ -236,7 +251,7 @@ function M.clear_cache()
 end
 
 ---@param context table
----@param options? { timeout_ms?: integer }
+---@param options? ArchLensBoundaryDiscoveryOptions
 ---@param callback fun(context: table?, outcome: table?)
 ---@return function
 function M.refresh(context, options, callback)
@@ -323,7 +338,7 @@ end
 
 ---@param bufnr integer
 ---@param level string
----@param options? { timeout_ms?: integer }
+---@param options? ArchLensBoundaryDiscoveryOptions
 ---@param callback fun(context: table?, outcome: table?)
 ---@return function
 function M.resolve_buffer(bufnr, level, options, callback)

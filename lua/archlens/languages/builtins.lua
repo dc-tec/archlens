@@ -7,7 +7,11 @@ return {
   { id = "nix", adapter = "archlens.languages.nix.adapter" },
   { id = "ocaml", adapter = "archlens.languages.ocaml.adapter" },
   { id = "ocaml_interface", adapter = "archlens.languages.ocaml.interface" },
-  { id = "rust", adapter = "archlens.languages.rust.adapter" },
+  {
+    id = "rust",
+    adapter = "archlens.languages.rust.adapter",
+    providers = { "archlens.languages.rust.providers.cargo" },
+  },
   { id = "javascript", adapter = "archlens.languages.javascript.adapter" },
   { id = "lua", adapter = "archlens.languages.lua.adapter" },
   { id = "python", adapter = "archlens.languages.python.adapter" },

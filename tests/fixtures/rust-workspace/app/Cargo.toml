@@ -1,0 +1,19 @@
+[package]
+name = "archlens-app"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+archlens-core = { path = "../core" }
+archlens-external = { path = "../external-helper" }
+renamed-core = { package = "archlens-renamed", path = "../renamed" }
+archlens-optional = { path = "../optional-helper", optional = true }
+
+[build-dependencies]
+archlens-build-helper = { path = "../build-helper" }
+
+[dev-dependencies]
+archlens-dev-helper = { path = "../dev-helper" }
+
+[features]
+optional = ["dep:archlens-optional"]

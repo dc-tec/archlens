@@ -587,8 +587,9 @@ end
 ---@param root? string
 ---@param context table
 ---@param callback fun(boundaries: table[]?, outcome: table?)
+---@param options? table
 ---@return function?
-function M.discover_boundaries(language, path, root, context, callback)
+function M.discover_boundaries(language, path, root, context, callback, options)
   assert(type(callback) == "function", "boundary discovery requires a callback")
   local adapter = registry[language]
   local discover = adapter and adapter.boundaries and adapter.boundaries.discover
@@ -632,7 +633,8 @@ function M.discover_boundaries(language, path, root, context, callback)
     callback(normalized, normalized_outcome)
   end
 
-  local ok, cancel_or_error = pcall(discover, path, root, vim.deepcopy(context), done)
+  local ok, cancel_or_error =
+    pcall(discover, path, root, vim.deepcopy(context), done, vim.deepcopy(options or {}))
   if not ok then
     fail(cancel_or_error)
   elseif not settled and type(cancel_or_error) ~= "function" then

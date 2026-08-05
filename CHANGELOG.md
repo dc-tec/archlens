@@ -12,6 +12,8 @@ Notable user-facing changes to ArchLens are recorded here.
   separate test-only relationships and workspace member modules.
 - Add language-neutral extension points for build-boundary discovery and
   build-tool health checks.
+- Follow Rust symbols into Cargo package and workspace boundaries, with bounded
+  normal, build, and dev dependency relationships from offline metadata.
 
 ### Changed
 

@@ -46,14 +46,16 @@ analysis sources:
 | [ast-grep](https://ast-grep.github.io/)          | `ast-grep` on Neovim's `PATH`   | Project-wide structural matches                                   |
 | [ripgrep](https://github.com/BurntSushi/ripgrep) | `rg` on Neovim's `PATH`         | Reverse module lookup                                             |
 | Go tool                                          | `go` on Neovim's `PATH`         | Build-aware Go package dependencies and dependents                |
+| Cargo                                            | `cargo` on Neovim's `PATH`      | Rust package dependencies, dependents, and workspace membership   |
 
 If a source is unavailable, ArchLens omits its relationships and continues with
 the remaining sources.
 
 Run `:checkhealth archlens` from a source buffer to inspect the selected
 project root, Tree-sitter parser and adapter, attached LSP capabilities,
-ast-grep, ripgrep, and the Go tool where applicable. To inspect a provider
-failure, open the pane and press `?` on the `Analysis` or `Results` line.
+ast-grep, ripgrep, and the Go or Cargo tool where applicable. To inspect a
+provider failure, open the pane and press `?` on the `Analysis` or `Results`
+line.
 
 ### Built-in language support
 
@@ -66,7 +68,7 @@ Built-in adapters provide the following additional analysis:
 | Language                 | Built-in analysis                                                                                             |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------- |
 | Go                       | Tree-sitter symbols and imports, build-aware package/module relationships, package/module/workspace boundaries, ast-grep matches, and Go interface presentation |
-| Rust                     | Tree-sitter symbols and modules, ast-grep matches, and Rust implementation presentation                       |
+| Rust                     | Tree-sitter symbols and modules, Cargo package/workspace boundaries and dependency kinds, ast-grep matches, and Rust implementation presentation |
 | Nix                      | Tree-sitter bindings and module imports, plus ast-grep matches                                                |
 | OCaml (`.ml` and `.mli`) | Tree-sitter symbols, module relationships, and member presentation; ast-grep does not provide an OCaml parser |
 | JavaScript and JSX       | ast-grep matches                                                                                              |
@@ -240,15 +242,23 @@ hierarchy shows only the immediate enclosing boundary instead of repeating the
 source path. Press `f` on it to move outward one level, `<CR>` to open its
 representative file, or `?` to inspect its identity, parent, and evidence.
 
-Go package, module, and workspace contexts are the first supported boundary
-chain. Package identity combines the nearest `go.mod` module path with the
-source directory; module identity uses the declared module path. An effective
-`go.work` contributes a workspace only when its `use` directives include the
-current module. Symbol focus shows its package, package focus reveals its
-module, and module focus reveals the workspace without crowding lower-level
-views. Press `gs` from any boundary view to focus the symbol at the current
-source cursor. If boundary following is active, `gs` changes it to symbol
-following; `<BS>` or `h` restores and pins the boundary view.
+Go provides a package, module, and workspace chain. Package identity combines
+the nearest `go.mod` module path with the source directory; module identity
+uses the declared module path. An effective `go.work` contributes a workspace
+only when its `use` directives include the current module.
+
+Rust provides Cargo package and workspace boundaries identified by normalized
+manifest and workspace-root paths from `cargo metadata`. A workspace boundary
+is shown only when it adds a meaningful outer context. Exact Cargo target
+source paths can establish package ownership outside the manifest directory.
+ArchLens deliberately does not infer a crate-target boundary from the source
+directory layout.
+
+Symbol focus shows its nearest boundary and each boundary focus reveals the
+next outer level without crowding lower-level views. Press `gs` from any
+boundary view to focus the symbol at the current source cursor. If boundary
+following is active, `gs` changes it to symbol following; `<BS>` or `h`
+restores and pins the boundary view.
 ArchLens does not infer packages from directories for languages without
 adapter-provided boundaries.
 
@@ -290,6 +300,18 @@ relationships between active modules in the Go workspace. A workspace view
 shows its active member modules, including explicit members outside the
 workspace directory. These views do not repeat the complete package graph or
 list every external requirement.
+
+A Rust package view uses Cargo metadata to distinguish normal, build, and dev
+dependencies and dependents. A Cargo workspace view lists its member packages.
+When a `Cargo.lock` is present, ArchLens requests the resolved graph with
+`--locked` and honors configured feature and target options. Metadata runs
+offline by default. If the resolved graph is unavailable locally, or no lock
+file exists, ArchLens uses `--no-deps`, includes non-optional dependency
+declarations whose packages are present in that metadata, and reports that
+features, target filters, optional dependencies, or packages outside the
+workspace may be unresolved. The package and output limits remain shared
+across all dependency kinds. Without `providers.rust.filter_platform`, Cargo's
+resolved metadata may include dependencies for multiple targets.
 
 ArchLens performs package analysis on demand. It does not write an index to disk
 or start additional language servers. By default, symbol views hide file-level
@@ -352,7 +374,7 @@ disable it.
 
 Each provider has separate time, input, and output bounds. Use `imports` and
 `imports.inbound` to bound module analysis, `providers.go` to bound Go build
-analysis, `lsp.max_results` and
+analysis, `providers.rust` to bound Cargo analysis, `lsp.max_results` and
 `lsp.max_occurrences` to bound semantic responses, `grouping` to bound context
 group detection, and `ast_grep.max_results` and
 `ast_grep.max_output_bytes` to bound structural search.
@@ -390,7 +412,8 @@ and `class` (`"language"` or `"build"`). Entries can also provide
 an evidence record.
 
 If boundary discovery requires a build tool, implement
-`boundaries.discover(path, root, context, done)`. ArchLens keeps the source
+`boundaries.discover(path, root, context, done, options)`. ArchLens passes the
+matching `providers.<language>` settings as `options` and keeps the source
 symbol usable until `done(boundaries, outcome)` completes. Discovery must
 return a cancellation function. ArchLens cancels it after
 `boundaries.timeout_ms`.

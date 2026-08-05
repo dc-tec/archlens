@@ -39,6 +39,11 @@ local function run()
     debounce_ms = 150,
   }, "cursor following should be opt-in and debounced by default")
   assert_equal(
+    second.boundaries,
+    { timeout_ms = 8000 },
+    "asynchronous boundary discovery should have a bounded default"
+  )
+  assert_equal(
     second.providers,
     {},
     "custom providers should have an empty configuration namespace"
@@ -175,6 +180,10 @@ local function run()
     {
       options = { cursor_follow = { debounce_ms = -1 } },
       message = "cursor_follow.debounce_ms must be a non-negative integer",
+    },
+    {
+      options = { boundaries = { timeout_ms = -1 } },
+      message = "boundaries.timeout_ms must be a non-negative integer",
     },
     {
       options = { width = "wide" },

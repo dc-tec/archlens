@@ -97,6 +97,8 @@ local function run()
   local sessions_by_tab = {}
   local provider_hooks
   local hold_provider = false
+  local boundary_discovery_enabled = false
+  local boundary_discovery_requests = {}
 
   package.loaded["archlens.lsp"] = {
     note_attach = function() end,
@@ -119,10 +121,29 @@ local function run()
       return vim.deepcopy(position.line < 3 and alpha_syntax or beta_syntax)
     end,
   }
+  local function boundary_for_buffer(buffer, level)
+    equal(level, "package", "package follow should request its original boundary level")
+    return vim.deepcopy(packages_by_buffer[buffer])
+  end
   package.loaded["archlens.boundaries"] = {
-    for_buffer = function(buffer, level)
-      equal(level, "package", "package follow should request its original boundary level")
-      return vim.deepcopy(packages_by_buffer[buffer])
+    supports_discovery = function()
+      return boundary_discovery_enabled
+    end,
+    discover = function(current, _, callback)
+      local request = {
+        context = vim.deepcopy(current),
+        callback = callback,
+        cancelled = false,
+      }
+      boundary_discovery_requests[#boundary_discovery_requests + 1] = request
+      return function()
+        request.cancelled = true
+      end
+    end,
+    for_buffer = boundary_for_buffer,
+    resolve_buffer = function(buffer, level, _, callback)
+      callback(boundary_for_buffer(buffer, level))
+      return function() end
     end,
   }
   package.loaded["archlens.providers"] = {
@@ -181,6 +202,31 @@ local function run()
   vim.api.nvim_exec_autocmds("CursorMoved", { buffer = source_buffer })
   vim.wait(20)
   equal(#resolve_calls, 1, "pinned mode should ignore cursor events")
+
+  boundary_discovery_enabled = true
+  local providers_before_discovery = #provider_contexts
+  archlens.show_here()
+  resolve_calls[#resolve_calls].callback(vim.deepcopy(alpha_semantic))
+  equal(#boundary_discovery_requests, 1, "symbol resolution should start boundary discovery")
+  equal(
+    #provider_contexts,
+    providers_before_discovery + 1,
+    "symbol analysis should remain available while boundaries are discovered"
+  )
+  local enriched_alpha = vim.deepcopy(alpha_semantic)
+  enriched_alpha.enclosing_boundaries = { vim.deepcopy(packages_by_buffer[source_buffer]) }
+  boundary_discovery_requests[1].callback(enriched_alpha)
+  equal(
+    active_session.current.enclosing_boundaries[1].boundary_id,
+    packages_by_buffer[source_buffer].boundary_id,
+    "completed boundary discovery should refresh the active symbol context"
+  )
+  equal(
+    #provider_contexts,
+    providers_before_discovery + 2,
+    "discovered boundaries should restart analysis for the enriched context"
+  )
+  boundary_discovery_enabled = false
 
   hold_provider = true
   archlens.show_here()

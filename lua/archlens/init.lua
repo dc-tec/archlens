@@ -44,6 +44,7 @@ local config = config_module.new()
 ---@field performance? ArchLensPerformanceRun
 ---@field cursor_follow boolean
 ---@field follow_timer? any
+---@field follow_boundary_cancel? function
 ---@field follow_token integer
 ---@field follow_identity? string
 ---@field follow_scope? string
@@ -91,6 +92,11 @@ end
 
 local function cancel_follow_timer(session)
   session.follow_token = (session.follow_token or 0) + 1
+  local boundary_cancel = session.follow_boundary_cancel
+  session.follow_boundary_cancel = nil
+  if boundary_cancel then
+    pcall(boundary_cancel)
+  end
   local timer = session.follow_timer
   session.follow_timer = nil
   if timer and not timer:is_closing() then
@@ -233,6 +239,29 @@ local function load_context(session, context, generation)
   })
 end
 
+local function discover_context_boundaries(session, context, generation)
+  if
+    (context.enclosing_boundaries and #context.enclosing_boundaries > 0)
+    or not boundaries.supports_discovery(context)
+  then
+    return
+  end
+  local cancel = boundaries.discover(context, config.boundaries, function(enriched, outcome)
+    if not is_current(session, generation) then
+      return
+    end
+    if
+      not outcome
+      and (not enriched.enclosing_boundaries or #enriched.enclosing_boundaries == 0)
+    then
+      return
+    end
+    local next_generation = begin_run(session, true)
+    load_context(session, enriched, next_generation)
+  end)
+  register_cancel(session, cancel)
+end
+
 local function capture_source(session)
   local window = vim.api.nvim_get_current_win()
   if view.is_map_window(session, window) then
@@ -278,6 +307,7 @@ local function resolve_at(session, buffer, position, opts)
       return
     end
     load_context(session, context, generation)
+    discover_context_boundaries(session, context, generation)
   end
 
   local cancel_resolve = function() end
@@ -466,34 +496,53 @@ end
 
 local function follow_boundary(session, buffer, scope)
   session.source_buffer = buffer
-  local context = boundaries.for_buffer(buffer, scope)
-  local identity = context and context.boundary_id
-    or table.concat({ "missing", scope, vim.uri_from_bufnr(buffer) }, "\0")
-  local force = session.follow_dirty == true
-  session.follow_dirty = false
-  if identity == session.follow_identity and not force then
-    return
-  end
-  if
-    session.follow_identity == nil
-    and not force
-    and context
-    and same_context(context, session.current)
-  then
-    session.follow_identity = identity
-    return
-  end
+  local token = session.follow_token
+  local settled = false
+  local cancel = boundaries.resolve_buffer(
+    buffer,
+    scope,
+    config.boundaries,
+    function(context, outcome)
+      settled = true
+      if session.follow_token ~= token then
+        return
+      end
+      session.follow_boundary_cancel = nil
+      local identity = context and context.boundary_id
+        or table.concat({ "missing", scope, vim.uri_from_bufnr(buffer) }, "\0")
+      local force = session.follow_dirty == true
+      session.follow_dirty = false
+      if identity == session.follow_identity and not force then
+        return
+      end
+      if
+        session.follow_identity == nil
+        and not force
+        and context
+        and same_context(context, session.current)
+      then
+        session.follow_identity = identity
+        return
+      end
 
-  session.follow_identity = identity
-  local generation = begin_run(session)
-  if not context then
-    render(
-      session,
-      model.error(string.format("No %s boundary could be resolved at the source cursor.", scope))
-    )
-    return
+      session.follow_identity = identity
+      local generation = begin_run(session)
+      if not context then
+        render(
+          session,
+          model.error(
+            outcome and outcome.message
+              or string.format("No %s boundary could be resolved at the source cursor.", scope)
+          )
+        )
+        return
+      end
+      load_context(session, context, generation)
+    end
+  )
+  if not settled then
+    session.follow_boundary_cancel = cancel
   end
-  load_context(session, context, generation)
 end
 
 local function follow_source_cursor(session, allow_background)

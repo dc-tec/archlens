@@ -31,7 +31,9 @@ function M.context(source, boundary, enclosing_boundaries)
   return {
     id = boundary.id,
     name = boundary.name,
-    kind = symbol_kinds[boundary.level] or vim.lsp.protocol.SymbolKind.Namespace,
+    kind = boundary.symbol_kind
+      or symbol_kinds[boundary.level]
+      or vim.lsp.protocol.SymbolKind.Namespace,
     kind_name = boundary.kind_name,
     scope = "boundary",
     root_dir = source.root_dir,
@@ -95,10 +97,101 @@ function M.attach(context)
   return context
 end
 
----@param bufnr integer
----@param level string
----@return table?
-function M.for_buffer(bufnr, level)
+---@param context table
+---@return boolean
+function M.supports_discovery(context)
+  return context ~= nil
+    and context.language ~= nil
+    and adapters.supports_boundary_discovery(context.language)
+end
+
+---@param context table
+---@param options? { timeout_ms?: integer }
+---@param callback fun(context: table, outcome: table?)
+---@return function?
+function M.discover(context, options, callback)
+  assert(type(context) == "table", "boundary discovery requires a context")
+  assert(type(callback) == "function", "boundary discovery requires a callback")
+  if context.enclosing_boundaries and #context.enclosing_boundaries > 0 then
+    callback(vim.deepcopy(context))
+    return function() end
+  end
+  if not M.supports_discovery(context) then
+    return nil
+  end
+
+  local path = context.path
+    or (context.location and context.location.uri and context.location.uri:match("^file:") and vim.uri_to_fname(
+      context.location.uri
+    ))
+    or nil
+  if not path then
+    return nil
+  end
+  path = vim.fs.normalize(path)
+  local timeout_ms = math.max(0, math.floor(tonumber(options and options.timeout_ms) or 8000))
+  local completed = false
+  local cancelled = false
+  local timer
+  local cancel_adapter = function() end
+
+  local function stop_timer()
+    if timer and not timer:is_closing() then
+      timer:stop()
+      timer:close()
+    end
+    timer = nil
+  end
+  local function finish(resolved, outcome)
+    if completed or cancelled then
+      return
+    end
+    completed = true
+    stop_timer()
+    local enriched = vim.deepcopy(context)
+    if resolved then
+      enriched.enclosing_boundaries = M.contexts(enriched, resolved)
+    end
+    if outcome and outcome.message then
+      add_issue(enriched, outcome.message)
+    end
+    callback(enriched, outcome)
+  end
+
+  local cancel =
+    adapters.discover_boundaries(context.language, path, context.root_dir, context, finish)
+  if type(cancel) ~= "function" then
+    return nil
+  end
+  cancel_adapter = cancel
+  if not completed then
+    timer = vim.defer_fn(function()
+      if completed or cancelled then
+        return
+      end
+      pcall(cancel_adapter)
+      finish(nil, {
+        state = "timed_out",
+        message = string.format(
+          "%s boundary discovery exceeded %d ms and was stopped.",
+          context.language,
+          timeout_ms
+        ),
+      })
+    end, timeout_ms)
+  end
+
+  return function()
+    if completed or cancelled then
+      return
+    end
+    cancelled = true
+    stop_timer()
+    pcall(cancel_adapter)
+  end
+end
+
+local function source_for_buffer(bufnr)
   local path = vim.api.nvim_buf_get_name(bufnr)
   if path == "" then
     return nil
@@ -110,19 +203,56 @@ function M.for_buffer(bufnr, level)
   if not adapters.supports_boundaries(language) then
     return nil
   end
-
-  local root_dir = vim.fs.root(path, adapters.root_markers(filetype, path)) or vim.fs.dirname(path)
-  local source = M.attach({
+  return {
     language = language,
     path = path,
-    root_dir = root_dir,
-  })
+    root_dir = vim.fs.root(path, adapters.root_markers(filetype, path)) or vim.fs.dirname(path),
+  }
+end
+
+---@param bufnr integer
+---@param level string
+---@return table?
+function M.for_buffer(bufnr, level)
+  local source = source_for_buffer(bufnr)
+  if not source then
+    return nil
+  end
+  source = M.attach(source)
   for _, boundary in ipairs(source.enclosing_boundaries or {}) do
     if boundary.boundary_level == level then
       return boundary
     end
   end
   return nil
+end
+
+---@param bufnr integer
+---@param level string
+---@param options? { timeout_ms?: integer }
+---@param callback fun(context: table?, outcome: table?)
+---@return function
+function M.resolve_buffer(bufnr, level, options, callback)
+  assert(type(callback) == "function", "boundary buffer resolution requires a callback")
+  local current = M.for_buffer(bufnr, level)
+  if current then
+    callback(current)
+    return function() end
+  end
+  local source = source_for_buffer(bufnr)
+  if not source or not M.supports_discovery(source) then
+    callback(nil)
+    return function() end
+  end
+  return M.discover(source, options, function(enriched, outcome)
+    for _, boundary in ipairs(enriched.enclosing_boundaries or {}) do
+      if boundary.boundary_level == level then
+        callback(boundary, outcome)
+        return
+      end
+    end
+    callback(nil, outcome)
+  end) or function() end
 end
 
 return M

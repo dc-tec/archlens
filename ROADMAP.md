@@ -55,7 +55,10 @@ Next steps may include:
   architectural style
 
 Each step should keep boundary resolution in language adapters, retain evidence
-for the identity, and preserve bounded on-demand analysis.
+for the identity, and preserve bounded on-demand analysis. Boundary chains use
+adapter-defined levels rather than assuming every ecosystem shares Go's
+package, module, and workspace vocabulary. Build tools may discover those
+chains asynchronously while the local symbol view remains usable.
 
 ## Longer-term direction
 

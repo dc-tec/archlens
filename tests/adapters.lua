@@ -174,6 +174,81 @@ equal(workspace_contexts[1].boundary_level, "package")
 equal(workspace_contexts[1].enclosing_boundaries[1].boundary_level, "module")
 equal(workspace_contexts[2].enclosing_boundaries[1].boundary_level, "workspace")
 equal(adapters.resolve_boundaries("rust", go_fixture, fixture_root, {}), nil)
+
+local discovered
+local discovery_outcome
+local discovery_done
+local discovery_cancelled = 0
+local discovery_cache_cleared = 0
+adapters.register("rust_shaped_boundary", {
+  boundaries = {
+    resolve = function()
+      return nil
+    end,
+    discover = function(_, _, _, done)
+      discovery_done = done
+      return function()
+        discovery_cancelled = discovery_cancelled + 1
+      end
+    end,
+    clear_cache = function()
+      discovery_cache_cleared = discovery_cache_cleared + 1
+    end,
+  },
+})
+equal(adapters.supports_boundaries("rust_shaped_boundary"), true)
+equal(adapters.supports_boundary_discovery("rust_shaped_boundary"), true)
+local cancel_discovery = assert(
+  adapters.discover_boundaries(
+    "rust_shaped_boundary",
+    "/workspace/src/lib.rs",
+    "/workspace",
+    {},
+    function(value, outcome)
+      discovered = value
+      discovery_outcome = outcome
+    end
+  )
+)
+assert(discovery_done, "asynchronous adapters should receive a completion callback")
+discovery_done({
+  {
+    id = "cargo-target:fixture/lib",
+    class = "build",
+    level = "target",
+    kind_name = "Rust crate",
+    name = "fixture",
+    path = "/workspace/src",
+    representative_path = "/workspace/src/lib.rs",
+    symbol_kind = vim.lsp.protocol.SymbolKind.Module,
+  },
+  {
+    id = "cargo-package:fixture",
+    class = "build",
+    level = "package",
+    kind_name = "Cargo package",
+    name = "fixture",
+    path = "/workspace",
+    representative_path = "/workspace/Cargo.toml",
+  },
+  {
+    id = "cargo-workspace:/workspace",
+    class = "build",
+    level = "workspace",
+    kind_name = "Cargo workspace",
+    name = "workspace",
+    path = "/workspace",
+    representative_path = "/workspace/Cargo.toml",
+  },
+})
+equal(discovery_outcome, nil)
+equal(discovered[1].level, "target", "boundary levels should be extension-defined")
+equal(discovered[1].symbol_kind, vim.lsp.protocol.SymbolKind.Module)
+cancel_discovery()
+equal(discovery_cancelled, 0, "completed discovery should not invoke late cancellation")
+adapters.clear_cache()
+equal(discovery_cache_cleared, 1, "registered boundary caches should clear on refresh")
+
 equal(adapters.get("rust").treesitter.symbol_types.impl_item, "Implementation")
 equal(adapters.get("rust").treesitter.symbol_types.field_declaration, "Field")
 equal(adapters.get("rust").treesitter.symbol_types.function_signature_item, "Method")
@@ -486,7 +561,12 @@ local invalid_static_specs = {
   {
     id = "invalid_boundary_resolver",
     spec = { boundaries = { resolve = true } },
-    error = "boundaries adapters require a resolve function",
+    error = "boundaries adapters require resolve or discover",
+  },
+  {
+    id = "invalid_boundary_discovery",
+    spec = { boundaries = { discover = true } },
+    error = "boundaries adapters require resolve or discover",
   },
   {
     id = "invalid_presentation_field",

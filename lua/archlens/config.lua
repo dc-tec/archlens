@@ -17,6 +17,9 @@ local defaults = {
     enabled = false,
     debounce_ms = 150,
   },
+  boundaries = {
+    timeout_ms = 8000,
+  },
   providers = {},
   filters = {
     include_generated = false,
@@ -215,6 +218,7 @@ local function validate(options)
     sections = true,
     include_external = true,
     cursor_follow = true,
+    boundaries = true,
     providers = true,
     filters = true,
     imports = true,
@@ -226,6 +230,7 @@ local function validate(options)
   for _, key in ipairs({
     "sections",
     "cursor_follow",
+    "boundaries",
     "providers",
     "filters",
     "imports",
@@ -240,6 +245,11 @@ local function validate(options)
   validate_integer(options.max_items, "max_items", 1, "positive")
   validate_boolean(options.include_external, "include_external")
   validate_cursor_follow(options.cursor_follow)
+
+  if type(options.boundaries) == "table" then
+    validate_known_keys(options.boundaries, "boundaries", { timeout_ms = true })
+    validate_integer(options.boundaries.timeout_ms, "boundaries.timeout_ms", 0, "non-negative")
+  end
 
   if type(options.sections) == "table" then
     validate_known_keys(options.sections, "sections", {

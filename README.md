@@ -398,12 +398,22 @@ require("archlens.adapters").register("zig", {
 
 The optional `boundaries.resolve(path, root, context)` hook returns `nil` when
 no authoritative boundary exists. Otherwise it returns a non-empty inside-out
-list, such as package then module. Each entry provides a stable `id`, concise
-`name`, `kind_name`, `path`, `level` (`"package"`, `"module"`, or
-`"workspace"`), and `class` (`"language"` or `"build"`). Entries can also
-provide `representative_path`, import-matching `import_keys`, and an evidence
-record. ArchLens uses this contract for progressive focus, navigation, and
-boundary-level aggregation; it does not substitute a directory heuristic.
+list, such as target, package, then workspace. The adapter-defined list order
+is the hierarchy; `level` is an opaque lowercase identifier rather than a
+fixed universal taxonomy. Each entry provides a stable `id`, concise `name`,
+`kind_name`, `path`, `level`, and `class` (`"language"` or `"build"`). Entries
+can also provide `representative_path`, import-matching `import_keys`, an LSP
+`symbol_kind`, and an evidence record.
+
+Adapters that require a build tool can additionally implement
+`boundaries.discover(path, root, context, done)`. ArchLens keeps the source
+symbol usable while discovery runs, then refreshes its boundary hierarchy when
+`done(boundaries, outcome)` completes. Discovery must return a cancellation
+function and is bounded by `boundaries.timeout_ms`. An optional
+`boundaries.clear_cache()` hook participates in manual refresh. The synchronous
+resolver remains useful for cheap or cached identities. ArchLens uses these
+contracts for progressive focus, navigation, and boundary-level aggregation;
+it does not substitute a directory heuristic.
 
 The optional `presentation.section(context, relation, row)` and
 `presentation.row(context, relation, row)` hooks can adapt labels and concise

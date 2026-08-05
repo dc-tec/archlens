@@ -44,6 +44,24 @@ local function contains(lines, text)
   return false
 end
 
+local function go_tool(fields)
+  local defaults = {
+    id = "go",
+    provider_id = "go",
+    label = "Go tool",
+    command = "go",
+    enabled = true,
+    version_args = { "--version" },
+    disabled_message = "Go build-aware package analysis is disabled by the ArchLens configuration.",
+    unavailable_message = "Go package relationships will fall back to Tree-sitter evidence.",
+    version_label = "Go",
+  }
+  return {
+    tools = { vim.tbl_extend("force", defaults, fields or {}) },
+    issues = {},
+  }
+end
+
 local function run()
   local health = require("archlens.health")
 
@@ -82,13 +100,12 @@ local function run()
       available = true,
       version = "ripgrep 15.1.0",
     },
-    go = {
+    provider_tools = go_tool({
       command = "go",
       path = "/tools/go",
-      supported = true,
       available = true,
       version = "go version go1.26.5 linux/amd64",
-    },
+    }),
   })
   diagnostic(section(healthy, "ArchLens runtime"), "ok", "Neovim 0.12.4")
   diagnostic(section(healthy, "ArchLens context"), "ok", "Project root: /workspace")
@@ -104,6 +121,41 @@ local function run()
   diagnostic(section(healthy, "ArchLens Go tool"), "ok", "Executable: /tools/go")
   diagnostic(section(healthy, "ArchLens Go tool"), "ok", "go1.26.5")
 
+  local generic_tool = health._diagnose({
+    version = { major = 0, minor = 12, patch = 4 },
+    provider_tools = {
+      tools = {
+        {
+          id = "cargo",
+          provider_id = "rust",
+          label = "Cargo",
+          command = "cargo",
+          enabled = true,
+          version_args = { "--version" },
+          path = "/tools/cargo",
+          available = true,
+          version = "cargo 1.92.0",
+        },
+      },
+      issues = {},
+    },
+  })
+  diagnostic(section(generic_tool, "ArchLens Cargo"), "ok", "Executable: /tools/cargo")
+  diagnostic(section(generic_tool, "ArchLens Cargo"), "ok", "cargo 1.92.0")
+
+  local invalid_tool = health._diagnose({
+    version = { major = 0, minor = 12, patch = 4 },
+    provider_tools = {
+      tools = {},
+      issues = { { provider_id = "rust", message = "tool command must be a string" } },
+    },
+  })
+  diagnostic(
+    section(invalid_tool, "ArchLens provider tools"),
+    "error",
+    "rust provider tool declaration failed"
+  )
+
   local degraded = health._diagnose({
     version = { major = 0, minor = 11, patch = 3 },
     buffer = {
@@ -118,7 +170,7 @@ local function run()
     lsp = { clients = {} },
     ast_grep = { command = "ast-grep", available = false },
     ripgrep = { command = "rg", supported = true, available = false },
-    go = { command = "go", supported = true, available = false },
+    provider_tools = go_tool({ available = false }),
   })
   diagnostic(section(degraded, "ArchLens runtime"), "error", "requires Neovim 0.12")
   diagnostic(section(degraded, "ArchLens context"), "warn", "project scope falls back")
@@ -136,7 +188,7 @@ local function run()
     lsp = { clients = {} },
     ast_grep = { command = "/custom/ast-grep", enabled = false },
     ripgrep = { command = "/custom/rg", enabled = false },
-    go = { command = "/custom/go", enabled = false },
+    provider_tools = go_tool({ command = "/custom/go", enabled = false }),
   })
   diagnostic(
     section(disabled, "ArchLens ast-grep"),
@@ -165,11 +217,15 @@ local function run()
       note = "ast-grep has no OCaml parser; semantic references remain available.",
     },
     ripgrep = { command = "rg", enabled = true, supported = false },
-    go = { command = "go", enabled = true, supported = false },
+    provider_tools = { tools = {}, issues = {} },
   })
   diagnostic(section(unsupported, "ArchLens ast-grep"), "info", "no OCaml parser")
   diagnostic(section(unsupported, "ArchLens ripgrep"), "warn", "reverse module adapter")
-  diagnostic(section(unsupported, "ArchLens Go tool"), "info", "does not apply")
+  local has_go_section = false
+  for _, candidate in ipairs(unsupported) do
+    has_go_section = has_go_section or candidate.title == "ArchLens Go tool"
+  end
+  assert(not has_go_section, "irrelevant provider tools should not crowd the health report")
 
   local invalid = health._diagnose({
     version = { major = 0, minor = 12, patch = 4 },
@@ -188,12 +244,12 @@ local function run()
       available = true,
       error = "version lookup timed out",
     },
-    go = {
+    provider_tools = go_tool({
       command = "go",
       path = "/tools/go",
       available = true,
       error = "version lookup timed out",
-    },
+    }),
   })
   diagnostic(section(invalid, "ArchLens context"), "error", "No source buffer")
   diagnostic(section(invalid, "ArchLens Tree-sitter"), "error", "adapter exploded")
@@ -220,7 +276,7 @@ local function run()
     lsp = { clients = {} },
     ast_grep = { command = "ast-grep", supported = false },
     ripgrep = { command = "rg", supported = false },
-    go = { command = "go", supported = false },
+    provider_tools = { tools = {}, issues = {} },
   })
   diagnostic(
     section(query_mismatch, "ArchLens Tree-sitter"),

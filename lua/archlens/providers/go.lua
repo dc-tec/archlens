@@ -24,6 +24,24 @@ return {
         and options.enabled ~= false
         and config.imports.enabled
     end,
+    tools = function(buffer, config)
+      if buffer.language ~= "go" then
+        return {}
+      end
+      local options = (config.providers and config.providers.go) or {}
+      local import_config = config.imports or {}
+      return {
+        {
+          id = "go",
+          label = "Go tool",
+          command = options.command or "go",
+          enabled = options.enabled ~= false and import_config.enabled ~= false,
+          disabled_message = "Go build-aware package analysis is disabled by the ArchLens configuration.",
+          unavailable_message = "Go package relationships will fall back to Tree-sitter evidence.",
+          version_label = "Go",
+        },
+      }
+    end,
     start = function(context, source_buffer, config, done)
       local options = {
         build = config.providers.go or {},

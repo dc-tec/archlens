@@ -245,6 +245,22 @@ providers.register("custom", {
   enabled = function(_, _, current_config)
     return current_config.providers.custom.enabled
   end,
+  tools = function(buffer, current_config)
+    if buffer.language ~= "rust" then
+      return {}
+    end
+    local options = current_config.providers.custom or {}
+    return {
+      {
+        id = "cargo",
+        label = "Cargo",
+        command = options.command or "cargo",
+        enabled = options.enabled ~= false,
+        unavailable_message = "Rust package relationships will be unavailable.",
+        version_label = "Cargo",
+      },
+    }
+  end,
   start = function(_, _, current_config, done, report)
     custom_started = custom_started + 1
     local options = current_config.providers.custom or {}
@@ -275,6 +291,12 @@ providers.register("broken", {
   start = function()
     error("provider unavailable")
   end,
+  tools = function(buffer)
+    if buffer.language == "broken" then
+      return { { id = "invalid" } }
+    end
+    return {}
+  end,
 })
 local provider_ids = vim.tbl_map(function(provider)
   return provider.id
@@ -283,6 +305,31 @@ equal(
   provider_ids,
   { "lsp", "go", "imports", "custom", "broken", "importers", "ast_grep" },
   "custom providers should participate in stable orchestration order"
+)
+local rust_tools, rust_tool_issues = providers.tools({ language = "rust" }, {
+  providers = { custom = { enabled = true, command = "/tools/cargo" } },
+  imports = { enabled = true },
+})
+equal(rust_tool_issues, {}, "valid provider tool declarations should not report issues")
+equal(rust_tools, {
+  {
+    id = "cargo",
+    provider_id = "custom",
+    label = "Cargo",
+    command = "/tools/cargo",
+    enabled = true,
+    version_args = { "--version" },
+    unavailable_message = "Rust package relationships will be unavailable.",
+    version_label = "Cargo",
+  },
+}, "provider tools should support non-Go build integrations")
+local invalid_tools, invalid_tool_issues = providers.tools({ language = "broken" }, config)
+equal(invalid_tools, {}, "invalid provider tool declarations must not leak partial state")
+assert(
+  invalid_tool_issues[1]
+    and invalid_tool_issues[1].provider_id == "broken"
+    and invalid_tool_issues[1].message:find("label must be a non-empty string", 1, true),
+  "invalid provider tool declarations should identify their provider and contract failure"
 )
 equal(providers.local_pending(config), {
   { id = "lsp", label = "LSP" },
@@ -374,6 +421,16 @@ supports_imports = false
 config.imports = { enabled = false, inbound = { enabled = false } }
 local duplicate_ok = pcall(providers.register, "custom", {})
 assert(not duplicate_ok, "provider IDs should be unique")
+local invalid_tools_ok = pcall(providers.register, "invalid_tools", {
+  order = 18,
+  label = "Invalid tools",
+  enabled = function()
+    return false
+  end,
+  tools = {},
+  start = function() end,
+})
+assert(not invalid_tools_ok, "provider tools must be declared by a function")
 local invalid_replacements_ok = pcall(providers.register, "invalid_replacements", {
   order = 18,
   label = "Invalid replacements",

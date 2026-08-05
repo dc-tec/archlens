@@ -27,6 +27,22 @@ local M = {}
 ---@field queued_label? string
 ---@field replaces? string[]|function
 ---@field clear_cache? function
+---@field tools? function
+
+---@class ArchLensProviderTool
+---@field id string
+---@field provider_id string
+---@field label string
+---@field command string
+---@field enabled boolean
+---@field version_args string[]
+---@field disabled_message? string
+---@field unavailable_message? string
+---@field version_label? string
+
+---@class ArchLensProviderToolIssue
+---@field provider_id string
+---@field message string
 
 ---@class ArchLensProvider: ArchLensProviderSpec
 ---@field id string
@@ -50,6 +66,7 @@ local allowed_provider_fields = {
   queued_label = true,
   replaces = true,
   start = true,
+  tools = true,
 }
 
 local function nonempty_string(value)
@@ -183,6 +200,9 @@ local function normalize_provider(id, spec)
   if normalized.clear_cache ~= nil then
     assert(type(normalized.clear_cache) == "function", "provider clear_cache must be a function")
   end
+  if normalized.tools ~= nil then
+    assert(type(normalized.tools) == "function", "provider tools must be a function")
+  end
   return normalized
 end
 
@@ -209,6 +229,101 @@ function M.ordered()
     return left.id < right.id
   end)
   return providers
+end
+
+local function normalize_provider_tool(provider_id, spec)
+  assert(type(spec) == "table", "provider tool must be a table")
+  local normalized = vim.deepcopy(spec)
+  local allowed_fields = {
+    command = true,
+    disabled_message = true,
+    enabled = true,
+    id = true,
+    label = true,
+    unavailable_message = true,
+    version_args = true,
+    version_label = true,
+  }
+  for key in pairs(normalized) do
+    assert(allowed_fields[key], "unsupported provider tool field: " .. tostring(key))
+  end
+  assert(
+    nonempty_string(normalized.id) and normalized.id:match("^[%l][%l%d_%-]*$"),
+    "provider tool id must be a lowercase identifier"
+  )
+  assert(nonempty_string(normalized.label), "provider tool label must be a non-empty string")
+  assert(nonempty_string(normalized.command), "provider tool command must be a non-empty string")
+  if normalized.enabled ~= nil then
+    assert(type(normalized.enabled) == "boolean", "provider tool enabled must be a boolean")
+  end
+  normalized.enabled = normalized.enabled ~= false
+  if normalized.version_args ~= nil then
+    assert(
+      type(normalized.version_args) == "table" and vim.islist(normalized.version_args),
+      "provider tool version_args must be a list"
+    )
+    for index, argument in ipairs(normalized.version_args) do
+      assert(
+        nonempty_string(argument),
+        string.format("provider tool version_args[%d] must be a non-empty string", index)
+      )
+    end
+  else
+    normalized.version_args = { "--version" }
+  end
+  for _, field in ipairs({ "disabled_message", "unavailable_message", "version_label" }) do
+    assert(
+      normalized[field] == nil or nonempty_string(normalized[field]),
+      "provider tool " .. field .. " must be a non-empty string"
+    )
+  end
+  normalized.provider_id = provider_id
+  return normalized
+end
+
+---@param buffer table
+---@param config table
+---@return ArchLensProviderTool[], ArchLensProviderToolIssue[]
+function M.tools(buffer, config)
+  local tools = {}
+  local issues = {}
+  for _, provider in ipairs(M.ordered()) do
+    if provider.tools then
+      local called, definitions = pcall(provider.tools, buffer, config)
+      local declaration_error
+      if not called then
+        declaration_error = tostring(definitions)
+      elseif type(definitions) ~= "table" or not vim.islist(definitions) then
+        declaration_error = "provider tools must return a list"
+      else
+        local seen = {}
+        local provider_tools = {}
+        for _, definition in ipairs(definitions) do
+          local valid, normalized = pcall(normalize_provider_tool, provider.id, definition)
+          if not valid then
+            declaration_error = tostring(normalized)
+            break
+          end
+          if seen[normalized.id] then
+            declaration_error = "provider tools contain duplicate id: " .. normalized.id
+            break
+          end
+          seen[normalized.id] = true
+          provider_tools[#provider_tools + 1] = normalized
+        end
+        if not declaration_error then
+          vim.list_extend(tools, provider_tools)
+        end
+      end
+      if declaration_error then
+        issues[#issues + 1] = {
+          provider_id = provider.id,
+          message = declaration_error,
+        }
+      end
+    end
+  end
+  return tools, issues
 end
 
 local function provider_options(options, config)

@@ -461,6 +461,35 @@ Register relationship types through
 [`lua/archlens/relations.lua`](lua/archlens/relations.lua). Store
 provider-specific options under `providers.<id>`.
 
+Providers that depend on an executable can expose it to
+`:checkhealth archlens` with `tools(buffer, config)`. Return requirements only
+when they apply to the source buffer so health output stays focused as more
+languages are added:
+
+```lua
+tools = function(buffer, config)
+  if buffer.language ~= "rust" then
+    return {}
+  end
+  local options = config.providers.workspace or {}
+  return {
+    {
+      id = "cargo",
+      label = "Cargo",
+      command = options.command or "cargo",
+      enabled = options.enabled ~= false,
+      version_args = { "--version" },
+      unavailable_message = "Workspace relationships will be unavailable.",
+      version_label = "Cargo",
+    },
+  }
+end
+```
+
+Tool IDs are scoped to their provider. ArchLens validates each declaration,
+runs the bounded version check, and reports declaration failures without
+breaking health checks for other providers.
+
 A build-aware provider can conditionally replace later fallback providers for
 a focus by returning their IDs from `replaces(context, bufnr, config)`. For
 example, a package provider that is authoritative for active dependencies can

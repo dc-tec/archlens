@@ -58,7 +58,10 @@ Each step should keep boundary resolution in language adapters, retain evidence
 for the identity, and preserve bounded on-demand analysis. Boundary chains use
 adapter-defined levels rather than assuming every ecosystem shares Go's
 package, module, and workspace vocabulary. Build tools may discover those
-chains asynchronously while the local symbol view remains usable.
+chains asynchronously while the local symbol view remains usable. Built-in
+build integrations are isolated provider modules, and provider-declared tool
+requirements keep health reporting language-neutral and relevant to the
+current buffer.
 
 ## Longer-term direction
 
@@ -85,7 +88,7 @@ Future work may include:
 - Stable provider, relation, adapter, and graph interfaces
 - Compatibility and deprecation guidance
 - Tested examples for language adapters and project-specific providers
-- Consistent health reporting and evidence requirements for extensions
+- Consistent evidence requirements for extensions
 
 ## Possible future work
 

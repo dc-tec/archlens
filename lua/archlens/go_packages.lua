@@ -2,6 +2,7 @@ local adapters = require("archlens.adapters")
 local boundaries = require("archlens.boundaries")
 local graph = require("archlens.graph")
 local import_index = require("archlens.import_index")
+local test_paths = require("archlens.test_paths")
 
 local M = {}
 local scans = {}
@@ -117,7 +118,19 @@ local function package_files(package)
     end
   end
   table.sort(files)
-  return files, seen
+  local test_files = {}
+  local test_seen = {}
+  for _, field in ipairs({ "TestGoFiles", "XTestGoFiles" }) do
+    for _, name in ipairs(package[field] or {}) do
+      local path = vim.fs.normalize(vim.fs.joinpath(package.Dir, name))
+      if not test_seen[path] then
+        test_seen[path] = true
+        test_files[#test_files + 1] = path
+      end
+    end
+  end
+  table.sort(test_files)
+  return files, seen, test_files, test_seen
 end
 
 local function build_index(packages, maximum)
@@ -136,7 +149,8 @@ local function build_index(packages, maximum)
       and package.Dir ~= ""
     then
       package.Dir = normalized(package.Dir)
-      package.files, package.active_files = package_files(package)
+      package.files, package.active_files, package.test_files, package.active_test_files =
+        package_files(package)
       index.packages[#index.packages + 1] = package
       index.by_import[package.ImportPath] = package
       if package.Error or #(package.DepsErrors or {}) > 0 then
@@ -364,14 +378,22 @@ local function mapped_import(package, import_path)
   return (package.ImportMap or {})[import_path] or import_path
 end
 
-local function add_build_edge(result, kind, source_context, target_context)
+local function add_build_edge(result, kind, source_context, target_context, methods)
+  methods = type(methods) == "table" and methods or { methods or "go list/Imports" }
   local source = graph.node_from_context(source_context)
   local target = graph.node_from_context(target_context)
   local edge = graph.edge(kind, source, target, {
     provider = "Go tool",
-    method = "go list/Imports",
+    method = methods[1],
     class = "semantic",
   })
+  for method_index = 2, #methods do
+    edge.evidence_records[#edge.evidence_records + 1] = {
+      provider = "Go tool",
+      method = methods[method_index],
+      class = "semantic",
+    }
+  end
   graph.add_edge(result, edge)
   return edge
 end
@@ -384,14 +406,14 @@ local function occurrence_count(occurrences)
   return count
 end
 
-local function active_occurrences(edge, package)
+local function matching_occurrences(edge, files)
   local occurrences = {}
   for _, occurrence in ipairs(edge.occurrences or {}) do
     local path = occurrence.uri
         and occurrence.uri:match("^file:")
         and normalized(vim.uri_to_fname(occurrence.uri))
       or nil
-    if path and package.active_files[path] then
+    if path and files[path] then
       occurrences[#occurrences + 1] = vim.deepcopy(occurrence)
     end
   end
@@ -403,14 +425,14 @@ local function related_id(edge)
   return node and node.id or nil
 end
 
-local function merge_syntax_evidence(edges, syntax_delta, packages_by_boundary)
+local function merge_syntax_evidence(edges, syntax_delta, build_kind, files_by_edge)
   local merged = false
   for _, syntax_edge in ipairs(syntax_delta.edges or {}) do
-    local key = syntax_edge.kind .. "\0" .. tostring(related_id(syntax_edge))
+    local key = build_kind .. "\0" .. tostring(related_id(syntax_edge))
     local build_edge = edges[key]
-    local package = packages_by_boundary[related_id(syntax_edge)]
-    if build_edge and package then
-      local occurrences = active_occurrences(syntax_edge, package)
+    local files = files_by_edge[key]
+    if build_edge and files then
+      local occurrences = matching_occurrences(syntax_edge, files)
       if occurrence_count(occurrences) > 0 then
         build_edge.evidence_records = graph.merge_evidence(
           graph.evidence_records(build_edge),
@@ -447,21 +469,63 @@ local function build_relationships(context, index, dependencies, dependents, opt
   end
 
   local dependency_paths = {}
+  local production_dependencies = {}
   for _, import_path in ipairs(focus_package.Imports or {}) do
     import_path = mapped_import(focus_package, import_path)
     if index.by_import[import_path] and import_path ~= focus_key then
-      dependency_paths[#dependency_paths + 1] = import_path
+      if not production_dependencies[import_path] then
+        production_dependencies[import_path] = true
+        dependency_paths[#dependency_paths + 1] = import_path
+      end
     end
   end
   table.sort(dependency_paths)
 
+  local test_dependency_methods = {}
+  for _, field in ipairs({ "TestImports", "XTestImports" }) do
+    for _, import_path in ipairs(focus_package[field] or {}) do
+      import_path = mapped_import(focus_package, import_path)
+      if
+        index.by_import[import_path]
+        and import_path ~= focus_key
+        and not production_dependencies[import_path]
+      then
+        test_dependency_methods[import_path] = test_dependency_methods[import_path] or {}
+        local method = "go list/" .. field
+        if not vim.tbl_contains(test_dependency_methods[import_path], method) then
+          test_dependency_methods[import_path][#test_dependency_methods[import_path] + 1] = method
+        end
+      end
+    end
+  end
+  local test_dependency_paths = vim.tbl_keys(test_dependency_methods)
+  table.sort(test_dependency_paths)
+
   local dependent_packages = {}
+  local test_dependent_methods = {}
   for _, candidate in ipairs(index.packages) do
     if candidate.ImportPath ~= focus_key then
+      local production = false
       for _, import_path in ipairs(candidate.Imports or {}) do
         if mapped_import(candidate, import_path) == focus_key then
           dependent_packages[#dependent_packages + 1] = candidate
+          production = true
           break
+        end
+      end
+      if not production then
+        for _, field in ipairs({ "TestImports", "XTestImports" }) do
+          for _, import_path in ipairs(candidate[field] or {}) do
+            if mapped_import(candidate, import_path) == focus_key then
+              local methods = test_dependent_methods[candidate.ImportPath] or {}
+              local method = "go list/" .. field
+              if not vim.tbl_contains(methods, method) then
+                methods[#methods + 1] = method
+              end
+              test_dependent_methods[candidate.ImportPath] = methods
+              break
+            end
+          end
         end
       end
     end
@@ -469,44 +533,92 @@ local function build_relationships(context, index, dependencies, dependents, opt
   table.sort(dependent_packages, function(left, right)
     return left.ImportPath < right.ImportPath
   end)
+  local test_dependent_paths = vim.tbl_keys(test_dependent_methods)
+  table.sort(test_dependent_paths)
 
   local max_imports = math.max(1, math.floor(tonumber(options.max_imports) or 24))
   local max_importers = math.max(1, math.floor(tonumber(options.max_importers) or 24))
-  local dependency_omitted = math.max(0, #dependency_paths - max_imports)
-  local dependent_omitted = math.max(0, #dependent_packages - max_importers)
+  local dependency_omitted = math.max(0, #dependency_paths + #test_dependency_paths - max_imports)
+  local dependent_omitted = math.max(0, #dependent_packages + #test_dependent_paths - max_importers)
   while #dependency_paths > max_imports do
     table.remove(dependency_paths)
+  end
+  while #test_dependency_paths > math.max(0, max_imports - #dependency_paths) do
+    table.remove(test_dependency_paths)
   end
   while #dependent_packages > max_importers do
     table.remove(dependent_packages)
   end
+  while #test_dependent_paths > math.max(0, max_importers - #dependent_packages) do
+    table.remove(test_dependent_paths)
+  end
 
   local edges = {}
-  local packages_by_boundary = {}
+  local files_by_edge = {}
   for _, import_path in ipairs(dependency_paths) do
     local package = index.by_import[import_path]
     local target = package_context(package, context)
     if target then
       local edge = add_build_edge(result, "module_imports", context, target)
-      edges[edge.kind .. "\0" .. target.boundary_id] = edge
-      packages_by_boundary[target.boundary_id] = focus_package
+      local key = edge.kind .. "\0" .. target.boundary_id
+      edges[key] = edge
+      files_by_edge[key] = focus_package.active_files
+    end
+  end
+  for _, import_path in ipairs(test_dependency_paths) do
+    local package = index.by_import[import_path]
+    local target = package_context(package, context)
+    if target then
+      local edge = add_build_edge(
+        result,
+        "test_dependencies",
+        context,
+        target,
+        test_dependency_methods[import_path]
+      )
+      local key = edge.kind .. "\0" .. target.boundary_id
+      edges[key] = edge
+      files_by_edge[key] = focus_package.active_test_files
     end
   end
   for _, package in ipairs(dependent_packages) do
     local source = package_context(package, context)
     if source then
       local edge = add_build_edge(result, "module_importers", source, context)
-      edges[edge.kind .. "\0" .. source.boundary_id] = edge
-      packages_by_boundary[source.boundary_id] = package
+      local key = edge.kind .. "\0" .. source.boundary_id
+      edges[key] = edge
+      files_by_edge[key] = package.active_files
+    end
+  end
+  for _, import_path in ipairs(test_dependent_paths) do
+    local package = index.by_import[import_path]
+    local source = package_context(package, context)
+    if source then
+      local edge = add_build_edge(
+        result,
+        "test_dependents",
+        source,
+        context,
+        test_dependent_methods[import_path]
+      )
+      local key = edge.kind .. "\0" .. source.boundary_id
+      edges[key] = edge
+      files_by_edge[key] = package.active_test_files
     end
   end
 
-  local dependency_syntax = merge_syntax_evidence(edges, dependencies, packages_by_boundary)
-  local dependent_syntax = merge_syntax_evidence(edges, dependents, packages_by_boundary)
+  local dependency_syntax =
+    merge_syntax_evidence(edges, dependencies, "module_imports", files_by_edge)
+  local test_dependency_syntax =
+    merge_syntax_evidence(edges, dependencies, "test_dependencies", files_by_edge)
+  local dependent_syntax =
+    merge_syntax_evidence(edges, dependents, "module_importers", files_by_edge)
+  local test_dependent_syntax =
+    merge_syntax_evidence(edges, dependents, "test_dependents", files_by_edge)
   copy_scan_notes(result, dependencies)
   copy_scan_notes(result, dependents)
   graph.add_contributor(result, "go_build", "Go tool")
-  if dependency_syntax or dependent_syntax then
+  if dependency_syntax or test_dependency_syntax or dependent_syntax or test_dependent_syntax then
     graph.add_contributor(result, "syntax", "Tree-sitter")
   end
   if index.omitted > 0 then
@@ -556,10 +668,65 @@ local function build_relationships(context, index, dependencies, dependents, opt
   return result
 end
 
-local function fallback_result(dependencies, dependents, outcome)
+local function reclassified_edge(edge, kind, occurrences)
+  local copy = vim.deepcopy(edge)
+  copy.kind = kind
+  copy.id = table.concat({ kind, copy.source.id, copy.target.id }, ":")
+  copy.occurrences = occurrences
+  return copy
+end
+
+local function classified_fallback(delta, context)
   local result = graph.delta()
-  graph.merge(result, dependencies)
-  graph.merge(result, dependents)
+  for _, edge in ipairs(delta.edges or {}) do
+    local test_kind = edge.kind == "module_imports" and "test_dependencies"
+      or edge.kind == "module_importers" and "test_dependents"
+      or nil
+    if not test_kind then
+      graph.add_edge(result, vim.deepcopy(edge))
+    else
+      local production_occurrences = {}
+      local test_occurrences = {}
+      for _, occurrence in ipairs(edge.occurrences or {}) do
+        local path = occurrence.uri
+            and occurrence.uri:match("^file:")
+            and normalized(vim.uri_to_fname(occurrence.uri))
+          or nil
+        local first_range = occurrence.ranges and occurrence.ranges[1]
+        local line = first_range and first_range.start and first_range.start.line or nil
+        local target = path
+            and test_paths.is_test("go", path, context.root_dir, line)
+            and test_occurrences
+          or production_occurrences
+        target[#target + 1] = vim.deepcopy(occurrence)
+      end
+      if #production_occurrences > 0 or #(edge.occurrences or {}) == 0 then
+        graph.add_edge(result, reclassified_edge(edge, edge.kind, production_occurrences))
+      elseif #test_occurrences > 0 then
+        graph.add_edge(result, reclassified_edge(edge, test_kind, test_occurrences))
+      end
+    end
+  end
+  for _, message in ipairs(delta.errors or {}) do
+    graph.add_error(result, message)
+  end
+  for note_index, note in ipairs(delta.notes or {}) do
+    local record = delta.note_records and delta.note_records[note_index]
+    graph.add_note(result, note, record)
+  end
+  for kind, count in pairs(delta.omitted or {}) do
+    graph.add_omitted(result, kind, count)
+  end
+  for _, contributor in ipairs(delta.contributors or {}) do
+    graph.add_contributor(result, contributor.id, contributor.label)
+  end
+  return result
+end
+
+local function fallback_result(context, dependencies, dependents, outcome)
+  local result = graph.delta()
+  graph.merge(result, classified_fallback(dependencies, context))
+  graph.merge(result, classified_fallback(dependents, context))
   if outcome and outcome.message then
     graph.add_note(result, outcome.message, {
       summary = "Go build analysis unavailable",
@@ -596,7 +763,7 @@ function M.relationships(context, bufnr, options, callback)
     local build_outcome = values.build_outcome
     if build_outcome or not values.build then
       callback(
-        fallback_result(values.dependencies, values.dependents, build_outcome),
+        fallback_result(context, values.dependencies, values.dependents, build_outcome),
         build_outcome
       )
       return
@@ -605,7 +772,7 @@ function M.relationships(context, bufnr, options, callback)
       build_relationships(context, values.build, values.dependencies, values.dependents, options)
     if not result then
       local outcome = { state = "failed", message = build_error }
-      callback(fallback_result(values.dependencies, values.dependents, outcome), outcome)
+      callback(fallback_result(context, values.dependencies, values.dependents, outcome), outcome)
       return
     end
     callback(result)

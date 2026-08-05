@@ -45,11 +45,13 @@ local paths = {
   focus = vim.fs.joinpath(directories.focus, "active.go"),
   focus_ignored = vim.fs.joinpath(directories.focus, "ignored.go"),
   focus_test = vim.fs.joinpath(directories.focus, "active_test.go"),
+  focus_xtest = vim.fs.joinpath(directories.focus, "external_test.go"),
   dependency = vim.fs.joinpath(directories.dependency, "dependency.go"),
   dependent = vim.fs.joinpath(directories.dependent, "dependent.go"),
   source_only = vim.fs.joinpath(directories.source_only, "source_only.go"),
   test_dependent = vim.fs.joinpath(directories.test_dependent, "base.go"),
   test_dependent_test = vim.fs.joinpath(directories.test_dependent, "base_test.go"),
+  test_dependent_xtest = vim.fs.joinpath(directories.test_dependent, "external_test.go"),
 }
 for _, path in pairs(paths) do
   vim.fn.writefile({ "package fixture" }, path)
@@ -127,7 +129,12 @@ graph.add_edge(
       method = "adapter/moduleTarget",
       class = "semantic",
     },
-    { occurrences = { occurrence(paths.focus_test, 6) } }
+    {
+      occurrences = {
+        occurrence(paths.focus_test, 6),
+        occurrence(paths.focus_xtest, 8),
+      },
+    }
   )
 )
 
@@ -157,7 +164,12 @@ graph.add_edge(
       method = "adapter/moduleTarget",
       class = "semantic",
     },
-    { occurrences = { occurrence(paths.test_dependent_test, 7) } }
+    {
+      occurrences = {
+        occurrence(paths.test_dependent_test, 7),
+        occurrence(paths.test_dependent_xtest, 9),
+      },
+    }
   )
 )
 
@@ -208,8 +220,10 @@ local packages = {
     GoFiles = { "active.go" },
     IgnoredGoFiles = { "ignored.go" },
     TestGoFiles = { "active_test.go" },
+    XTestGoFiles = { "external_test.go" },
     Imports = { dependency_import },
     TestImports = { source_only_import },
+    XTestImports = { dependency_import, source_only_import },
   },
   {
     Dir = directories.dependency,
@@ -242,8 +256,10 @@ local packages = {
     Module = module,
     GoFiles = { "base.go" },
     TestGoFiles = { "base_test.go" },
+    XTestGoFiles = { "external_test.go" },
     Imports = {},
     TestImports = { focus_import },
+    XTestImports = { focus_import },
   },
 }
 
@@ -262,7 +278,7 @@ vim.fn.writefile({
 }, fake_go)
 assert(vim.uv.fs_chmod(fake_go, 493))
 
-local function run(command, timeout_ms)
+local function run(command, timeout_ms, limits)
   local result
   local outcome
   go_packages.relationships(focus, 0, {
@@ -273,8 +289,8 @@ local function run(command, timeout_ms)
       max_output_bytes = 64 * 1024,
     },
     imports = {},
-    max_imports = 20,
-    max_importers = 20,
+    max_imports = limits and limits.max_imports or 20,
+    max_importers = limits and limits.max_importers or 20,
   }, function(value, terminal)
     result = value
     outcome = terminal
@@ -290,13 +306,15 @@ end
 
 local result, outcome = run(fake_go)
 equal(outcome, nil, "a successful go list scan should complete normally")
-equal(#result.edges, 2, "Go build truth should retain one dependency and one dependent")
+equal(#result.edges, 4, "Go build truth should separate production and test relationships")
 local by_kind = {}
 for _, edge in ipairs(result.edges) do
   by_kind[edge.kind] = edge
 end
 local outgoing = assert(by_kind.module_imports, "the build dependency edge is missing")
 local incoming = assert(by_kind.module_importers, "the build dependent edge is missing")
+local test_outgoing = assert(by_kind.test_dependencies, "the test dependency edge is missing")
+local test_incoming = assert(by_kind.test_dependents, "the test dependent edge is missing")
 equal(outgoing.target.id, dependency.boundary_id)
 equal(incoming.source.id, dependent.boundary_id)
 equal(outgoing.evidence_records, {
@@ -315,24 +333,77 @@ equal(
   { occurrence(paths.dependent, 5) },
   "dependent evidence should retain its active source import site"
 )
+equal(test_outgoing.target.id, source_only.boundary_id)
+equal(test_incoming.source.id, test_dependent.boundary_id)
+equal(test_outgoing.evidence_records, {
+  { provider = "Go tool", method = "go list/TestImports", class = "semantic" },
+  { provider = "Go tool", method = "go list/XTestImports", class = "semantic" },
+  { provider = "Tree-sitter", method = "adapter/moduleTarget", class = "semantic" },
+}, "internal and external test imports should contribute distinct evidence")
+equal(test_outgoing.occurrences, {
+  occurrence(paths.focus_test, 6),
+  occurrence(paths.focus_xtest, 8),
+}, "test dependencies should retain only their test import sites")
+equal(test_incoming.evidence_records, {
+  { provider = "Go tool", method = "go list/TestImports", class = "semantic" },
+  { provider = "Go tool", method = "go list/XTestImports", class = "semantic" },
+  { provider = "Tree-sitter", method = "adapter/moduleTarget", class = "semantic" },
+}, "test dependents should retain both Go test import classes")
+equal(test_incoming.occurrences, {
+  occurrence(paths.test_dependent_test, 7),
+  occurrence(paths.test_dependent_xtest, 9),
+}, "test dependents should retain only their test import sites")
 assert(not vim.iter(result.edges):any(function(edge)
-  local related = graph.related_node(edge)
-  return related
-    and (related.id == source_only.boundary_id or related.id == test_dependent.boundary_id)
-end), "Tree-sitter-only and test-only package relationships should be suppressed")
+  return edge.kind == "test_dependencies" and graph.related_node(edge).id == dependency.boundary_id
+end), "a production dependency must not be duplicated as a test dependency")
 equal(result.contributors, {
   { id = "go_build", label = "Go tool" },
   { id = "syntax", label = "Tree-sitter" },
 })
+local snapshot = graph.new(focus)
+graph.merge(snapshot, result)
+local mapped = require("archlens.model").build(focus, snapshot, {})
+equal(
+  vim.tbl_map(function(section)
+    return { id = section.id, label = section.label, rows = #section.rows }
+  end, mapped.sections),
+  {
+    { id = "module_imports", label = "Package dependencies", rows = 1 },
+    { id = "module_importers", label = "Package dependents", rows = 1 },
+    { id = "test_dependencies", label = "Test dependencies", rows = 1 },
+    { id = "test_dependents", label = "Test dependents", rows = 1 },
+  },
+  "package models should render production and test-only relationships separately"
+)
 
 local first_invocations = vim.fn.readfile(invocation_path)[1]
 equal(first_invocations, "x", "the initial relationship run should execute go list once")
 local cached = run(fake_go)
-equal(#cached.edges, 2, "cached build results should remain materializable")
+equal(#cached.edges, 4, "cached build results should remain materializable")
 equal(
   vim.fn.readfile(invocation_path)[1],
   "x",
   "repeated package navigation should reuse the Go package scan"
+)
+local limited = run(fake_go, nil, { max_imports = 1, max_importers = 1 })
+equal(#limited.edges, 2, "production relationships should consume shared limits first")
+assert(
+  vim.iter(limited.edges):all(function(edge)
+    return edge.kind == "module_imports" or edge.kind == "module_importers"
+  end),
+  "test-only relationships should not expand the existing package result bounds"
+)
+equal(
+  vim
+    .iter(limited.note_records)
+    :filter(function(note)
+      return note.summary == "package results limited"
+    end)
+    :fold(0, function(count)
+      return count + 1
+    end),
+  2,
+  "dependency and dependent limits should report omitted test-only rows"
 )
 go_packages.clear_cache(project)
 run(fake_go)
@@ -345,6 +416,25 @@ equal(
 local fallback, unavailable = run(vim.fs.joinpath(project, "missing-go"))
 equal(unavailable.state, "unavailable", "a missing Go command should use a typed outcome")
 equal(#fallback.edges, 4, "unavailable Go analysis should retain all Tree-sitter relationships")
+local fallback_by_kind = {}
+for _, edge in ipairs(fallback.edges) do
+  fallback_by_kind[edge.kind] = edge
+end
+equal(
+  fallback_by_kind.module_imports.occurrences,
+  { occurrence(paths.focus, 2), occurrence(paths.focus_ignored, 3) },
+  "fallback production dependencies should exclude test import sites"
+)
+equal(
+  fallback_by_kind.test_dependencies.occurrences,
+  { occurrence(paths.focus_test, 6), occurrence(paths.focus_xtest, 8) },
+  "fallback dependencies should classify Go test files"
+)
+equal(
+  fallback_by_kind.test_dependents.occurrences,
+  { occurrence(paths.test_dependent_test, 7), occurrence(paths.test_dependent_xtest, 9) },
+  "fallback dependents should classify Go test files"
+)
 assert(
   table.concat(fallback.notes, "\n"):find("Go build-aware package analysis was skipped", 1, true),
   "fallback results should explain why build-aware filtering was unavailable"

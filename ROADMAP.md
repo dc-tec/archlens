@@ -38,17 +38,19 @@ module.
 A symbol view shows only its immediate package in the existing focus hierarchy;
 focusing outward reveals its module and then workspace. Go package focus uses
 bounded `go list` output as the authority for active production edges and
-enriches those edges with exact Tree-sitter import sites. When build analysis
-is unavailable, the source-derived package view remains available. Module
-focus aggregates actual production package imports between active Go workspace
-modules, retaining one relationship per real module boundary rather than
-listing every external manifest requirement. Workspace focus exposes its
-bounded active member modules without repeating their dependency graph.
+separate test-only edges, and enriches both with exact Tree-sitter import sites
+from matching production or test files. When build analysis is unavailable,
+the source-derived package view remains available with `_test.go` relationships
+still classified separately. Module focus aggregates actual production package
+imports between active Go workspace modules, retaining one relationship per
+real module boundary rather than listing every external manifest requirement.
+Workspace focus exposes its bounded active member modules without repeating
+their dependency graph.
 
 Next steps may include:
 
 - Package or module identities for other ecosystems with authoritative metadata
-- Test and configuration relationships at boundary level
+- Configuration relationships at boundary level
 - Optional project-specific boundary annotations without assuming one
   architectural style
 

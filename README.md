@@ -279,11 +279,14 @@ from bounded import sites in the focused file and module dependents come from a
 bounded in-memory project scan. A Go package focus instead asks `go list` which
 project-local packages are active production dependencies and dependents for
 the current build. It merges exact Tree-sitter import sites from active Go and
-cgo files into those edges. Test-only, ignored, and syntax-only imports do not
-become production edges. If the Go tool is unavailable, fails, or exceeds its
-bound, ArchLens retains the Tree-sitter package view and explains the fallback.
-External dependency targets remain summarized rather than becoming synthetic
-package rows.
+cgo files into those edges. Imports used only by internal or external tests
+appear separately under `Test dependencies` and `Test dependents`; packages
+already connected through production code are not duplicated there. Ignored
+and syntax-only imports do not become build-authoritative edges. If the Go tool
+is unavailable, fails, or exceeds its bound, ArchLens retains the Tree-sitter
+package view, classifies `_test.go` import sites separately, and explains the
+fallback. External dependency targets remain summarized rather than becoming
+synthetic package rows.
 
 The Go scan currently covers the focused module. A `go.work` file is supported
 as build context, but other workspace modules are not yet aggregated into the

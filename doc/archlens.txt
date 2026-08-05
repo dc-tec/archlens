@@ -232,8 +232,9 @@ Built-in relationship IDs are: >
     children              supertypes             subtypes
     implementations       incoming               outgoing
     workspace_members     module_imports          module_importers
-    configuration_consumers test_references       references
-    test_structural       structural              siblings
+    test_dependencies     test_dependents         configuration_consumers
+    test_references       references              test_structural
+    structural            siblings
 <
 Extensions can register additional IDs. See |archlens-providers|.
 
@@ -498,14 +499,17 @@ The built-in Go package provider accepts these settings under `providers.go`: >l
     }
 <
 It uses `go list` as the authority for active production package edges and
-merges Tree-sitter locations from active Go and cgo files. When the command is
-unavailable, fails, or reaches its bound, the provider retains the Tree-sitter
-package result and reports the fallback. Package focus scans the focused
-module. Module focus aggregates production package imports that cross between
-active Go workspace modules. Workspace focus uses `go list -m` to expose its
-bounded member modules, including explicit members outside the workspace
-directory. Neither view turns the complete external requirement list into
-architecture rows.
+separate internal or external test-only package edges. Packages already used by
+production code are not duplicated under test relationships. Tree-sitter
+locations are merged from the matching active Go, cgo, or `_test.go` files.
+When the command is unavailable, fails, or reaches its bound, the provider
+retains the Tree-sitter package result, classifies Go test import sites
+separately, and reports the fallback. Package focus scans the focused module.
+Module focus aggregates production package imports that cross between active
+Go workspace modules. Workspace focus uses `go list -m` to expose its bounded
+member modules, including explicit members outside the workspace directory.
+Neither view turns the complete external requirement list into architecture
+rows.
 
 The optional `report` callback accepts `"running"` or `"retrying"`. Retry
 metadata can include `retry_delay_ms` and a short `message`. ArchLens records

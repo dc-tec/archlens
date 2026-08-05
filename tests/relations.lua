@@ -105,10 +105,34 @@ equal(relations.ordered(), {
     suppress_self = true,
   },
   {
+    id = "test_dependencies",
+    label = "Test dependencies",
+    marker = "⇢",
+    order = 47,
+    source = "semantic",
+    endpoint = "target",
+    sort = "name",
+    kind_name = "Test dependency",
+    anchor = "file",
+    suppress_self = true,
+  },
+  {
+    id = "test_dependents",
+    label = "Test dependents",
+    marker = "⇠",
+    order = 48,
+    source = "semantic",
+    endpoint = "source",
+    sort = "name",
+    kind_name = "Test dependent",
+    anchor = "file",
+    suppress_self = true,
+  },
+  {
     id = "configuration_consumers",
     label = "Configuration used at",
     marker = "↤",
-    order = 48,
+    order = 49,
     source = "semantic",
     endpoint = "source",
     sort = "location",
@@ -120,7 +144,7 @@ equal(relations.ordered(), {
     id = "test_references",
     label = "Referenced from tests",
     marker = "◇",
-    order = 49,
+    order = 50,
     source = "semantic",
     endpoint = "source",
     sort = "location",
@@ -132,7 +156,7 @@ equal(relations.ordered(), {
     id = "references",
     label = "Referenced across project",
     marker = "◆",
-    order = 50,
+    order = 51,
     source = "semantic",
     endpoint = "source",
     sort = "location",
@@ -185,7 +209,7 @@ local ordered = relations.ordered()
 ordered[1].marker = "mutated"
 table.remove(ordered, 2)
 equal(relations.ordered()[1].marker, "└", "ordered should return deep copies")
-equal(#relations.ordered(), 15, "mutating an ordered result must not mutate the registry")
+equal(#relations.ordered(), 17, "mutating an ordered result must not mutate the registry")
 
 local custom_input = {
   id = "dependencies",
@@ -235,6 +259,8 @@ equal(
     "module_imports",
     "owns",
     "module_importers",
+    "test_dependencies",
+    "test_dependents",
     "configuration_consumers",
     "test_references",
     "references",

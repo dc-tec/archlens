@@ -139,9 +139,9 @@ vim.fn.writefile({
   "#!/bin/sh",
   "printf x >> " .. vim.fn.shellescape(invocations),
   'if [ "$2" = "-m" ]; then',
-  "  exec /bin/cat " .. vim.fn.shellescape(module_output),
+  "  exec cat " .. vim.fn.shellescape(module_output),
   "fi",
-  "exec /bin/cat " .. vim.fn.shellescape(package_output),
+  "exec cat " .. vim.fn.shellescape(package_output),
 }, fake_go)
 assert(vim.uv.fs_chmod(fake_go, 493))
 

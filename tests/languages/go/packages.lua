@@ -273,7 +273,7 @@ local fake_go = vim.fs.joinpath(project, "fake-go")
 vim.fn.writefile({
   "#!/bin/sh",
   "printf x >> " .. vim.fn.shellescape(invocation_path),
-  "exec /bin/cat " .. vim.fn.shellescape(output_path),
+  "exec cat " .. vim.fn.shellescape(output_path),
 }, fake_go)
 assert(vim.uv.fs_chmod(fake_go, 493))
 
@@ -441,7 +441,7 @@ assert(
 
 local slow_go = vim.fs.joinpath(project, "slow-go")
 vim.fn.writefile(
-  { "#!/bin/sh", "sleep 1", "exec /bin/cat " .. vim.fn.shellescape(output_path) },
+  { "#!/bin/sh", "sleep 1", "exec cat " .. vim.fn.shellescape(output_path) },
   slow_go
 )
 assert(vim.uv.fs_chmod(slow_go, 493))

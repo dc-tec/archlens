@@ -1,8 +1,6 @@
 local ast_grep = require("archlens.ast_grep")
 local containers = require("archlens.containers")
 local graph = require("archlens.graph")
-local go_modules = require("archlens.go_modules")
-local go_packages = require("archlens.go_packages")
 local import_index = require("archlens.import_index")
 local imports = require("archlens.imports")
 local lsp = require("archlens.lsp")
@@ -411,43 +409,16 @@ M.register("lsp", {
   start = start_lsp,
 })
 
-local function go_provider_enabled(context, config)
-  local options = config.providers.go or {}
-  return (go_packages.supports(context) or go_modules.supports(context))
-    and options.enabled ~= false
-    and config.imports.enabled
-end
+local builtin_provider_modules = {
+  "archlens.providers.go",
+}
 
-M.register("go", {
-  order = 19,
-  label = "Go build",
-  replaces = function(context)
-    return go_packages.supports(context) and { "imports", "importers" } or {}
-  end,
-  enabled = function(context, _, config)
-    return go_provider_enabled(context, config)
-  end,
-  start = function(context, source_buffer, config, done)
-    local options = {
-      build = config.providers.go or {},
-      include_dependents = config.imports.inbound.enabled,
-      max_imports = config.imports.max_imports,
-      max_importers = config.imports.inbound.max_importers,
-    }
-    if go_modules.supports(context) then
-      return go_modules.relationships(context, source_buffer, options, done)
-    end
-    local import_options = provider_options(config.imports.inbound, config)
-    import_options.filetype = context.import_filetype
-    import_options.max_imports = config.imports.max_imports
-    options.imports = import_options
-    return go_packages.relationships(context, source_buffer, options, done)
-  end,
-  clear_cache = function(root)
-    go_packages.clear_cache(root)
-    go_modules.clear_cache(root)
-  end,
-})
+for _, module_name in ipairs(builtin_provider_modules) do
+  local builtin = require(module_name)
+  assert(type(builtin) == "table", module_name .. " must return a provider definition")
+  assert(nonempty_string(builtin.id), module_name .. " must define a provider id")
+  M.register(builtin.id, builtin.spec)
+end
 
 M.register("imports", {
   order = 20,

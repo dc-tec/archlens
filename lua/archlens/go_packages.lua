@@ -351,7 +351,7 @@ local function package_context(package, focus)
   if package.context then
     return vim.deepcopy(package.context)
   end
-  local path = package.files[1]
+  local path = package.files[1] or package.test_files[1]
   local module_root = package.Module and normalized(package.Module.Dir) or nil
   if not path or not module_root then
     return nil

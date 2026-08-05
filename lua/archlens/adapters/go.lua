@@ -105,7 +105,7 @@ local function module(path, root)
       local ok, lines = pcall(vim.fn.readfile, module_file, "", 32)
       if ok then
         for _, line in ipairs(lines) do
-          local name = line:match("^%s*module%s+([^%s]+)")
+          local name = unquote(line:match("^%s*module%s+([^%s]+)"))
           if name then
             cached = { name = name, root = module_root }
             break

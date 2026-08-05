@@ -145,6 +145,43 @@ equal(go_module.kind_name, "Go module")
 equal(go_module.name, "example.com/project")
 equal(go_module.representative_path, vim.fs.joinpath(fixture_root, "go.mod"))
 
+local quoted_module_root = vim.fn.tempname()
+vim.fn.mkdir(quoted_module_root, "p")
+vim.fn.writefile({ 'module "example.test/quoted"' }, vim.fs.joinpath(quoted_module_root, "go.mod"))
+local quoted_module_source = vim.fs.joinpath(quoted_module_root, "main.go")
+vim.fn.writefile({ "package quoted" }, quoted_module_source)
+local quoted_boundaries =
+  assert(adapters.resolve_boundaries("go", quoted_module_source, quoted_module_root, {}))
+equal(
+  quoted_boundaries[1].id,
+  "go-package:example.test/quoted",
+  "quoted go.mod module paths should form canonical package IDs"
+)
+equal(
+  quoted_boundaries[2].id,
+  "go-module:example.test/quoted",
+  "quoted go.mod module paths should form canonical module IDs"
+)
+local boundaries = require("archlens.boundaries")
+local quoted_contexts = boundaries.contexts({
+  language = "go",
+  root_dir = quoted_module_root,
+  path = quoted_module_source,
+}, quoted_boundaries)
+vim.fn.writefile(
+  { 'module "example.test/refreshed"' },
+  vim.fs.joinpath(quoted_module_root, "go.mod")
+)
+local refreshed_quoted_package
+boundaries.refresh(quoted_contexts[1], {}, function(value)
+  refreshed_quoted_package = value
+end)
+equal(
+  refreshed_quoted_package.boundary_id,
+  "go-package:example.test/refreshed",
+  "refresh should invalidate go.mod caches and replace a focused package identity"
+)
+
 local workspace_root = vim.fn.tempname()
 local workspace_module = vim.fs.joinpath(workspace_root, "app")
 vim.fn.mkdir(workspace_module, "p")
@@ -165,7 +202,7 @@ equal(go_workspace.kind_name, "Go workspace")
 equal(go_workspace.path, workspace_root)
 equal(go_workspace.representative_path, vim.fs.joinpath(workspace_root, "go.work"))
 equal(go_workspace.evidence.method, "go.work/use")
-local workspace_contexts = require("archlens.boundaries").contexts({
+local workspace_contexts = boundaries.contexts({
   language = "go",
   root_dir = workspace_module,
   path = workspace_source,

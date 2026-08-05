@@ -254,7 +254,6 @@ local packages = {
     ImportPath = test_dependent_import,
     Name = "test_dependent",
     Module = module,
-    GoFiles = { "base.go" },
     TestGoFiles = { "base_test.go" },
     XTestGoFiles = { "external_test.go" },
     Imports = {},

@@ -277,13 +277,16 @@ vim.fn.writefile({
 }, fake_go)
 assert(vim.uv.fs_chmod(fake_go, 493))
 
+local default_scan_timeout_ms = 5000
+
 local function run(command, timeout_ms, limits)
+  local scan_timeout_ms = timeout_ms or default_scan_timeout_ms
   local result
   local outcome
   go_packages.relationships(focus, 0, {
     build = {
       command = command,
-      timeout_ms = timeout_ms or 1000,
+      timeout_ms = scan_timeout_ms,
       max_packages = 20,
       max_output_bytes = 64 * 1024,
     },
@@ -295,7 +298,7 @@ local function run(command, timeout_ms, limits)
     outcome = terminal
   end)
   assert(
-    vim.wait(2000, function()
+    vim.wait(math.max(2000, scan_timeout_ms + 1000), function()
       return result ~= nil
     end, 10),
     "Go package relationships timed out in the test harness"

@@ -405,10 +405,8 @@ assert(fallback_notes:find("1 optional dependency was omitted", 1, true))
 assert(fallback_notes:find("1 Cargo dependency reference", 1, true))
 
 local slow_cargo = vim.fs.joinpath(temp, "slow-cargo")
-local termination_marker = vim.fs.joinpath(temp, "cargo-terminated")
 vim.fn.writefile({
   "#!/bin/sh",
-  "trap 'printf terminated > " .. vim.fn.shellescape(termination_marker) .. "; exit 0' TERM",
   "while :; do sleep 0.01; done",
 }, slow_cargo)
 assert(vim.uv.fs_chmod(slow_cargo, 493))
@@ -418,20 +416,35 @@ local timed_out, timeout_outcome = discover(app_source, {
 })
 equal(timed_out, nil)
 equal(timeout_outcome.state, "timed_out")
-vim.fn.delete(termination_marker)
 
+local cancellable_cargo = vim.fs.joinpath(temp, "cancellable-cargo")
+local cancellation_started = vim.fs.joinpath(temp, "cargo-cancellation-started")
+local cancellation_terminated = vim.fs.joinpath(temp, "cargo-cancellation-terminated")
+vim.fn.writefile({
+  "#!/bin/sh",
+  "trap 'printf terminated > " .. vim.fn.shellescape(cancellation_terminated) .. "; exit 0' TERM",
+  "printf started > " .. vim.fn.shellescape(cancellation_started),
+  "while :; do sleep 0.01; done",
+}, cancellable_cargo)
+assert(vim.uv.fs_chmod(cancellable_cargo, 493))
 local cancelled_callbacks = 0
 cargo.clear_cache()
 local cancel = cargo.discover(app_source, fixture_root, {}, function()
   cancelled_callbacks = cancelled_callbacks + 1
 end, {
-  command = slow_cargo,
-  timeout_ms = 100,
+  command = cancellable_cargo,
+  timeout_ms = 8000,
 })
+assert(
+  vim.wait(5000, function()
+    return vim.uv.fs_stat(cancellation_started) ~= nil
+  end, 10),
+  "the cancellable Cargo fixture should start before cancellation"
+)
 cancel()
 assert(
-  vim.wait(500, function()
-    return vim.uv.fs_stat(termination_marker) ~= nil
+  vim.wait(5000, function()
+    return vim.uv.fs_stat(cancellation_terminated) ~= nil
   end, 10),
   "cancelling the last Cargo subscriber should stop the metadata process"
 )

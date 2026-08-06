@@ -1286,6 +1286,21 @@ local function run()
       dismissed = dismissed + 1
     end,
   })
+  assert_equal(
+    vim.api.nvim_get_current_win(),
+    source_window,
+    "opening the view should preserve source-window focus"
+  )
+  assert_equal(#vim.api.nvim_get_autocmds({
+    group = "archlens_lifecycle",
+    event = "WinClosed",
+    pattern = tostring(session.window),
+  }), 1, "the view close hook should belong to the lifecycle group")
+  assert_equal(#vim.api.nvim_get_autocmds({
+    group = "archlens_lifecycle",
+    event = "BufWipeout",
+    buffer = session.buffer,
+  }), 1, "the view buffer hook should belong to the lifecycle group")
   view.render(session, mapped, { width = 56, max_items = 1 })
   assert_equal(vim.bo[session.buffer].buftype, "nofile", "the view should use a scratch buffer")
   assert_equal(vim.bo[session.buffer].modifiable, false, "the rendered view should be read-only")

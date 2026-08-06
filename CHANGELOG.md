@@ -10,6 +10,8 @@ Notable user-facing changes to ArchLens are recorded here.
   lightweight command registration and cold-language-server readiness tracking.
 - Configure ArchLens through `vim.g.archlens`; the deprecated `setup()`
   compatibility API now replaces earlier options instead of accumulating them.
+- Open the ArchLens split without moving focus away from the source window and
+  group pane lifecycle hooks for inspection and cleanup.
 
 ## [0.2.0] - 2026-08-06
 

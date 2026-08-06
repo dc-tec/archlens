@@ -475,7 +475,9 @@ function M.open(selection, model, opts)
     closed = false,
   }
 
+  local lifecycle_group = vim.api.nvim_create_augroup("archlens_lifecycle", { clear = false })
   vim.api.nvim_create_autocmd("WinClosed", {
+    group = lifecycle_group,
     pattern = tostring(window),
     once = true,
     callback = function()

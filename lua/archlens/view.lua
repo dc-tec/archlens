@@ -289,16 +289,19 @@ function M.ensure(session, options, actions)
   )
   configure_buffer(session, actions)
 
-  vim.cmd("botright vsplit")
-  session.window = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(session.window, session.buffer)
   local available = math.max(vim.o.columns - 20, 30)
-  vim.api.nvim_win_set_width(session.window, math.min(options.width, available))
+  session.window = vim.api.nvim_open_win(session.buffer, false, {
+    split = "right",
+    win = -1,
+    width = math.min(options.width, available),
+  })
   configure_window(session)
 
   local window = session.window
   local buffer = session.buffer
+  local lifecycle_group = vim.api.nvim_create_augroup("archlens_lifecycle", { clear = false })
   vim.api.nvim_create_autocmd("WinClosed", {
+    group = lifecycle_group,
     pattern = tostring(window),
     once = true,
     callback = function()
@@ -313,6 +316,7 @@ function M.ensure(session, options, actions)
     end,
   })
   vim.api.nvim_create_autocmd("BufWipeout", {
+    group = lifecycle_group,
     buffer = buffer,
     once = true,
     callback = function()

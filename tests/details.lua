@@ -509,6 +509,11 @@ inspect_mapping.callback()
 local detail_window = vim.api.nvim_get_current_win()
 local detail_buffer = vim.api.nvim_get_current_buf()
 assert(detail_window ~= main_window, "details should open in a separate float")
+equal(#vim.api.nvim_get_autocmds({
+  group = "archlens_lifecycle",
+  event = "WinClosed",
+  pattern = tostring(detail_window),
+}), 1, "the details close hook should belong to the lifecycle group")
 equal(vim.api.nvim_win_get_config(detail_window).relative, "editor")
 equal(vim.bo[detail_buffer].buftype, "nofile")
 equal(vim.bo[detail_buffer].modifiable, false)

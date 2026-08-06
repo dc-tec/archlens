@@ -75,9 +75,7 @@
                 ];
               };
 
-              extraConfigLua = ''
-                require("archlens").setup(${lib.generators.toLua { } archlensConfig})
-              '';
+              globals.archlens = archlensConfig;
             };
           };
           benchmark = pkgs.writeShellApplication {
@@ -119,6 +117,12 @@
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
                 -l ${./tests/config.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/config_global.lua}
+              ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
+                --cmd 'set runtimepath^=${./.}' \
+                -l ${./tests/startup.lua}
               ${lib.getExe pkgs.neovim-unwrapped} --headless -u NONE --noplugin -i NONE \
                 --cmd 'set runtimepath^=${./.}' \
                 -l ${./tests/progressive.lua}
@@ -210,7 +214,7 @@
                   mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
 
                   nvim --headless -i NONE \
-                    '+lua assert(require("archlens")); assert(vim.fn.exists(":ArchLensHere") == 2)' \
+                    '+lua assert(package.loaded.archlens == nil); assert(vim.fn.exists(":ArchLensHere") == 2); vim.cmd.ArchLensClose(); assert(package.loaded.archlens)' \
                     +qa
 
                   ARCHLENS_FIXTURE_ROOT=${./tests/fixtures/project} \

@@ -11,7 +11,7 @@ local view = require("archlens.view")
 
 local M = {}
 
-local config = config_module.new()
+local config
 
 ---@class ArchLensSession
 ---@field tabpage integer
@@ -54,6 +54,14 @@ local config = config_module.new()
 ---@type table<integer, ArchLensSession>
 local sessions = {}
 local lifecycle_initialized = false
+local ensure_lifecycle
+
+local function resolve_config()
+  if not config then
+    config = config_module.resolve(vim.g.archlens)
+  end
+  return config
+end
 
 local function valid_window(winid)
   return winid and vim.api.nvim_win_is_valid(winid)
@@ -395,6 +403,8 @@ local function invalidate_analysis(session, message)
 end
 
 function M.show_here(tabpage)
+  resolve_config()
+  ensure_lifecycle()
   local session = session_for(tabpage)
   if not capture_source(session) then
     vim.notify("ArchLens could not find a source window.", vim.log.levels.WARN)
@@ -895,8 +905,7 @@ function M.close(tabpage)
   end
 end
 
-function M.setup(options)
-  config = config_module.merge(config, options)
+ensure_lifecycle = function()
   if lifecycle_initialized then
     return
   end
@@ -911,14 +920,6 @@ function M.setup(options)
           cancel_requests(session)
           sessions[tabpage] = nil
         end
-      end
-    end,
-  })
-  vim.api.nvim_create_autocmd("LspAttach", {
-    group = group,
-    callback = function(event)
-      if event.data and event.data.client_id then
-        lsp.note_attach(event.data.client_id)
       end
     end,
   })
@@ -1000,8 +1001,15 @@ function M.setup(options)
   })
 end
 
+function M.setup(options)
+  local resolved = config_module.resolve(options)
+  vim.deprecate("require('archlens').setup()", "vim.g.archlens", "0.3.0", "archlens.nvim")
+  vim.g.archlens = options or {}
+  config = resolved
+end
+
 function M.get_config()
-  return vim.deepcopy(config)
+  return vim.deepcopy(resolve_config())
 end
 
 return M

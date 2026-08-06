@@ -2,6 +2,15 @@
 
 Notable user-facing changes to ArchLens are recorded here.
 
+## Unreleased
+
+### Changed
+
+- Defer ArchLens implementation loading until the first command while retaining
+  lightweight command registration and cold-language-server readiness tracking.
+- Configure ArchLens through `vim.g.archlens`; the deprecated `setup()`
+  compatibility API now replaces earlier options instead of accumulating them.
+
 ## [0.2.0] - 2026-08-06
 
 ### Added

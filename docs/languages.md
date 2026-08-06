@@ -52,7 +52,7 @@ syntax-derived relationships and reports the limitation.
 Configure build-aware analysis under `providers.go`:
 
 ```lua
-require("archlens").setup({
+vim.g.archlens = {
   providers = {
     go = {
       enabled = true,
@@ -63,7 +63,7 @@ require("archlens").setup({
       max_output_bytes = 2097152,
     },
   },
-})
+}
 ```
 
 The complete option reference remains available through
@@ -122,7 +122,7 @@ multiple targets.
 Configure Cargo under `providers.rust`:
 
 ```lua
-require("archlens").setup({
+vim.g.archlens = {
   providers = {
     rust = {
       enabled = true,
@@ -137,7 +137,7 @@ require("archlens").setup({
       filter_platform = nil,
     },
   },
-})
+}
 ```
 
 Set `offline = false` only when Cargo may fetch missing metadata. Package rows

@@ -203,11 +203,11 @@ local function run()
   }
   package.loaded["archlens"] = nil
 
-  local archlens = require("archlens")
-  archlens.setup({
+  vim.g.archlens = {
     cursor_follow = { debounce_ms = 5 },
     lsp = { resolve_timeout_ms = 60000 },
-  })
+  }
+  local archlens = require("archlens")
   local primary_tab = vim.api.nvim_get_current_tabpage()
   archlens.show_here()
   equal(#resolve_calls, 1, "ArchLensHere should resolve the initial cursor")
@@ -586,7 +586,10 @@ local function run()
   equal(#resolve_calls, before_close, "closing should cancel pending cursor work")
   equal(active_session.cursor_follow, false, "closing should disable cursor following")
 
+  local original_deprecate = vim.deprecate
+  vim.deprecate = function() end
   archlens.setup({ lsp = { resolve_timeout_ms = 5 } })
+  vim.deprecate = original_deprecate
   vim.api.nvim_set_current_win(replacement_window)
   archlens.show_here()
   local cancellations_after_start = cancellations

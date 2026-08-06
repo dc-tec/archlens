@@ -41,8 +41,8 @@ The flake publishes packages for `aarch64-darwin`, `aarch64-linux`, and
 extraSpecialArgs.archlens = inputs.archlens.packages.${system}.default;
 ```
 
-ArchLens does not provide a native Nixvim option module. Convert its regular
-Lua configuration from a Nix attribute set:
+ArchLens does not provide a native Nixvim option module. Set its global
+configuration directly through Nixvim:
 
 ```nix
 {
@@ -51,8 +51,8 @@ Lua configuration from a Nix attribute set:
   pkgs,
   ...
 }:
-let
-  archlensConfig = {
+{
+  globals.archlens = {
     width = 64;
     max_items = 8;
     include_external = false;
@@ -63,14 +63,9 @@ let
     ast_grep.command = lib.getExe pkgs.ast-grep;
     imports.inbound.command = lib.getExe pkgs.ripgrep;
   };
-in
-{
+
   extraPlugins = [ archlens ];
   extraPackages = [ pkgs.ast-grep pkgs.ripgrep ];
-
-  extraConfigLua = lib.mkAfter ''
-    require("archlens").setup(${lib.generators.toLua { } archlensConfig})
-  '';
 
   keymaps = [
     {

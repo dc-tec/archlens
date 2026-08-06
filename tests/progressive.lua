@@ -277,11 +277,11 @@ local function run()
   }
   package.loaded["archlens"] = nil
 
-  local archlens = require("archlens")
-  archlens.setup({
+  vim.g.archlens = {
     ast_grep = { enabled = true },
     lsp = { resolve_timeout_ms = 60000 },
-  })
+  }
+  local archlens = require("archlens")
   archlens.show_here()
 
   assert_equal(#resolve_callbacks, 1, "the first LSP resolution should start")

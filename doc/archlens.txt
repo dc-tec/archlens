@@ -176,13 +176,19 @@ relationships remain absent.
 ==============================================================================
 CONFIGURATION                                         *archlens-configuration*
 
-Call `setup()` without options to use the default configuration: >lua
+ArchLens uses its default configuration without any initialization call. Set
+`vim.g.archlens` before the first ArchLens command to override it: >lua
 
-    require("archlens").setup()
+    vim.g.archlens = {
+      width = 64,
+      max_items = 8,
+    }
 <
 
-The plugin calls `setup()` with defaults when it loads. A later `setup()` call
-merges its options into the active configuration.
+`require("archlens").setup(options)` is deprecated and will be removed in
+version 0.3.0. It remains available through the 0.2 release series for
+compatibility. Each call replaces the complete user configuration and missing
+options return to their defaults.
 
 Built-in configuration tables reject unknown keys. Counts, sizes, and row
 limits must be positive integers. Timeouts, delays, the minimum name length,

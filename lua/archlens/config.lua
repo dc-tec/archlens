@@ -387,6 +387,10 @@ function M.new()
   return vim.deepcopy(defaults)
 end
 
+function M.resolve(options)
+  return M.merge(M.new(), options)
+end
+
 function M.merge(current, options)
   validate(options)
   local merged = vim.tbl_deep_extend("force", current, options or {})

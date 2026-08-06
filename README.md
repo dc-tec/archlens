@@ -69,13 +69,14 @@ and limitations.
 ```lua
 {
   "dc-tec/archlens.nvim",
-  config = function()
-    require("archlens").setup()
-
-    vim.keymap.set("n", "<leader>cm", "<cmd>ArchLensHere<cr>", {
+  lazy = false,
+  keys = {
+    {
+      "<leader>cm",
+      "<cmd>ArchLensHere<cr>",
       desc = "Explore code relationships",
-    })
-  end,
+    },
+  },
 }
 ```
 
@@ -138,11 +139,12 @@ boundary focus, evidence interpretation, and the complete mapping reference.
 
 ## Configuration
 
-`require("archlens").setup()` uses the defaults. The configuration API is
+ArchLens uses its defaults without configuration. Set `vim.g.archlens` before
+the first ArchLens command to override them. The configuration API is
 experimental.
 
 ```lua
-require("archlens").setup({
+vim.g.archlens = {
   width = 64,
   max_items = 8,
   cursor_follow = {
@@ -158,8 +160,12 @@ require("archlens").setup({
     include_vendored = true,
     exclude = { "third_party/legacy" },
   },
-})
+}
 ```
+
+`require("archlens").setup(options)` remains as a deprecated compatibility
+API through the 0.2 release series. Each call replaces the complete user
+configuration instead of accumulating options.
 
 Run `:help archlens-configuration` for every option and default. Language tool
 settings are documented in [language support](docs/languages.md).
